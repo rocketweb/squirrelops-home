@@ -6,6 +6,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from squirrelops_home_sensor import __version__
+
 
 class TestHealthEndpoint:
     """GET /system/health -- no auth required."""
@@ -24,7 +26,7 @@ class TestHealthEndpoint:
     def test_health_version_matches_config(self, client, sensor_config):
         response = client.get("/system/health")
         data = response.json()
-        assert data["version"] == sensor_config["version"]
+        assert data["version"] == __version__
 
     def test_health_sensor_id_matches_config(self, client, sensor_config):
         response = client.get("/system/health")

@@ -1,7 +1,13 @@
-"""Connection baseline collection and anomaly detection."""
+"""Connection baseline collection and anomaly detection.
+
+The anomaly detector creates at most one alert per (device, dest_ip,
+dest_port) combination.  Subsequent scan cycles that observe the same
+non-baseline destination are silently ignored.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -52,6 +58,21 @@ class AnomalyDetector:
     def __init__(self, *, db: aiosqlite.Connection) -> None:
         self._db = db
 
+    async def _already_alerted(
+        self, device_id: int, dest_ip: str, dest_port: int
+    ) -> bool:
+        """Return True if we already created a BEHAVIORAL_ANOMALY alert for
+        this device reaching this exact destination."""
+        target = f"{dest_ip}:{dest_port}"
+        cursor = await self._db.execute(
+            """SELECT id FROM home_alerts
+               WHERE alert_type = ? AND device_id = ?
+                 AND title LIKE ?
+               LIMIT 1""",
+            (AlertType.BEHAVIORAL_ANOMALY.value, device_id, f"%{target}%"),
+        )
+        return await cursor.fetchone() is not None
+
     async def check_device(
         self,
         device_id: int,
@@ -70,6 +91,10 @@ class AnomalyDetector:
 
         for dest_ip, dest_port in destinations:
             if (dest_ip, dest_port) not in baseline:
+                # Deduplicate -- only one alert per device + destination.
+                if await self._already_alerted(device_id, dest_ip, dest_port):
+                    continue
+
                 now = datetime.now(timezone.utc).isoformat()
                 severity = severity_for_alert_type(AlertType.BEHAVIORAL_ANOMALY)
 

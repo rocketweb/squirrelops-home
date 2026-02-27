@@ -139,6 +139,7 @@ struct DeviceInventoryView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .frame(maxWidth: 180)
 
                 Spacer()

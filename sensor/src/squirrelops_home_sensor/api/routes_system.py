@@ -10,6 +10,7 @@ import aiosqlite
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, field_validator
 
+from squirrelops_home_sensor import __version__
 from squirrelops_home_sensor.api.deps import get_db, get_config, verify_client_cert
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -90,7 +91,7 @@ async def health(request: Request, config: dict = Depends(get_config)):
     start_time = getattr(request.app.state, "start_time", time.time())
     uptime = time.time() - start_time
     return HealthResponse(
-        version=config.get("version", "0.0.0"),
+        version=__version__,
         sensor_id=config.get("sensor_id", "unknown"),
         uptime_seconds=round(uptime, 2),
     )
@@ -229,7 +230,7 @@ async def check_updates(
     Compares current version against a remote manifest if configured.
     Returns gracefully if no manifest URL is set or URL is unreachable.
     """
-    current = config.get("version", "0.0.0")
+    current = __version__
     manifest_url = config.get("update_manifest_url", "")
 
     if not manifest_url:

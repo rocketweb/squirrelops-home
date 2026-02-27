@@ -155,6 +155,41 @@ async def test_detector_skips_device_without_baseline(db):
 
 
 @pytest.mark.asyncio
+async def test_detector_deduplicates_same_destination(db):
+    """Checking the same anomalous destination twice should only create one alert."""
+    collector = BaselineCollector(db=db)
+    await collector.record_connections(
+        device_id=1,
+        destinations=[("10.0.0.1", 443)],
+    )
+
+    detector = AnomalyDetector(db=db)
+
+    # First check -- anomaly detected, alert created
+    anomalies1 = await detector.check_device(
+        device_id=1,
+        destinations=[("10.0.0.99", 8080)],
+        source_ip="192.168.1.100",
+    )
+    assert len(anomalies1) == 1
+
+    # Second check -- same destination, should be suppressed
+    anomalies2 = await detector.check_device(
+        device_id=1,
+        destinations=[("10.0.0.99", 8080)],
+        source_ip="192.168.1.100",
+    )
+    assert anomalies2 == []
+
+    # Only one alert in DB
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM home_alerts WHERE device_id = 1 AND alert_type = 'behavioral.anomaly'"
+    )
+    row = await cursor.fetchone()
+    assert row[0] == 1
+
+
+@pytest.mark.asyncio
 async def test_detector_creates_alert_and_incident(db):
     """An anomaly creates both an alert and an incident in the DB."""
     collector = BaselineCollector(db=db)

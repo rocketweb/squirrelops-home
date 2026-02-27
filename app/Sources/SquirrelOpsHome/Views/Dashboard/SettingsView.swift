@@ -524,7 +524,6 @@ struct SettingsView: View {
             }
             if let info = appState.sensorInfo {
                 infoRow("Version", value: info.version)
-                infoRow("Sensor ID", value: info.sensorId)
                 infoRow("Uptime", value: formatUptime(info.uptimeSeconds))
             }
         }
@@ -553,10 +552,6 @@ struct SettingsView: View {
                 .font(Typography.caption)
                 .tracking(Typography.captionTracking)
                 .foregroundStyle(Theme.textTertiary(colorScheme))
-
-            if let info = appState.sensorInfo {
-                infoRow("Current Version", value: info.version)
-            }
 
             Button {
                 isCheckingUpdates = true

@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from squirrelops_home_sensor import __version__
 from squirrelops_home_sensor.app import create_app
 from squirrelops_home_sensor.api.deps import get_db, get_event_bus, get_config, verify_client_cert
 
@@ -21,7 +22,7 @@ class TestAppFactory:
     def test_app_has_title_and_version(self, sensor_config):
         app = create_app(sensor_config)
         assert app.title == "SquirrelOps Home Sensor"
-        assert app.version == sensor_config["version"]
+        assert app.version == __version__
 
     def test_app_includes_all_routers(self, sensor_config):
         app = create_app(sensor_config)

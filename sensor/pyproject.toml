@@ -1,6 +1,6 @@
 [project]
 name = "squirrelops-home-sensor"
-version = "0.1.0"  # Overwritten by release pipeline from /VERSION
+version = "1.0.0"  # Overwritten by release pipeline from /VERSION
 description = "SquirrelOps Home network security sensor"
 requires-python = ">=3.11"
 dependencies = [

@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
+from squirrelops_home_sensor import __version__
 from squirrelops_home_sensor.api.routes_system import router as system_router
 from squirrelops_home_sensor.api.routes_devices import router as devices_router
 from squirrelops_home_sensor.api.routes_alerts import router as alerts_router
@@ -42,7 +43,7 @@ def create_app(config: dict, ca_key=None, ca_cert=None) -> FastAPI:
 
     app = FastAPI(
         title="SquirrelOps Home Sensor",
-        version=config.get("version", "0.0.0"),
+        version=__version__,
         lifespan=lifespan,
     )
 

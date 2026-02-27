@@ -18,15 +18,15 @@
     "download_url": "https://get.squirrelops.io/signatures/latest.json",
     "checksum_sha256": ""
   },
-  "updated_at": "2026-02-26T00:00:00Z",
+  "updated_at": "2026-02-27T00:00:00Z",
   "sensor": {
-    "latest_version": "0.9.0",
-    "release_notes_url": "https://github.com/mattmacrocket/squirrelops-home/releases/tag/v0.9.0"
+    "latest_version": "1.0.0",
+    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.0.0"
   },
   "app": {
-    "latest_version": "0.9.0",
-    "download_url": "https://github.com/mattmacrocket/squirrelops-home/releases/download/v0.9.0/SquirrelOpsHome-0.9.0.pkg",
-    "release_notes_url": "https://github.com/mattmacrocket/squirrelops-home/releases/tag/v0.9.0",
-    "sha256": "68f8e761b44abbe1a26ff2d2a0c6ee8f1c0ef32398001f74a638d945073042dd"
+    "latest_version": "1.0.0",
+    "download_url": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.0.0/SquirrelOpsHome-1.0.0.pkg",
+    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.0.0",
+    "sha256": ""
   }
 }

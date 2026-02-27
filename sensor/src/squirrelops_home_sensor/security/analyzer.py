@@ -3,7 +3,8 @@
 Called after Phase 2 of each scan cycle. For each device with open ports,
 evaluates the port risk knowledge base and creates/updates alerts via the
 existing alert system. Deduplicates across scans so the same port/device
-combination doesn't produce repeated alerts.
+combination only ever produces a single alert -- even if the device goes
+offline and comes back.
 """
 
 from __future__ import annotations
@@ -66,14 +67,17 @@ class SecurityInsightAnalyzer:
             insight_key = f"risky_port:{finding.port}"
             active_keys.add(insight_key)
 
-            # Check deduplication
+            # Check deduplication -- once alerted, never re-alert for the
+            # same device+port even if the device goes offline and comes back.
             existing = await self._get_insight_state(device_id, insight_key)
-            if existing is not None and existing["resolved_at"] is None:
-                continue  # Already alerted and not resolved
-
-            # If previously resolved (port came back), allow re-alerting
-            if existing is not None and existing["resolved_at"] is not None:
-                await self._delete_insight_state(device_id, insight_key)
+            if existing is not None:
+                # Clear resolved_at so the insight is considered active again
+                # (device came back online) without creating a duplicate alert.
+                if existing["resolved_at"] is not None:
+                    await self._reactivate_insight_state(
+                        device_id, insight_key
+                    )
+                continue
 
             # Create alert
             alert_id = await self._create_alert(
@@ -149,11 +153,13 @@ class SecurityInsightAnalyzer:
         )
         await self._db.commit()
 
-    async def _delete_insight_state(
+    async def _reactivate_insight_state(
         self, device_id: int, insight_key: str
     ) -> None:
+        """Clear resolved_at so a returning port is tracked as active again
+        without creating a duplicate alert."""
         await self._db.execute(
-            "DELETE FROM security_insight_state "
+            "UPDATE security_insight_state SET resolved_at = NULL "
             "WHERE device_id = ? AND insight_key = ?",
             (device_id, insight_key),
         )

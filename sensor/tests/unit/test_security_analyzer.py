@@ -197,13 +197,15 @@ async def test_resolution_sets_resolved_at_when_port_closes(db, mock_event_bus):
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Re-alerting -- resolved insight gets new alert when port reopens
+# Test 4: No re-alerting -- resolved insight does NOT create a new alert
+# when port reappears (device went offline and came back).
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_re_alerting_after_resolution(db, mock_event_bus):
-    """A resolved insight should produce a new alert when the port reappears."""
+async def test_no_re_alerting_after_resolution(db, mock_event_bus):
+    """A resolved insight should NOT produce a second alert when the port
+    reappears -- one notification per device+port is enough."""
     await _insert_test_device(db, device_id=1, device_type="smart_speaker")
     analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
 
@@ -228,7 +230,7 @@ async def test_re_alerting_after_resolution(db, mock_event_bus):
         display_name="Living Room Speaker",
     )
 
-    # Scan 3: port 23 reopened -> new alert created
+    # Scan 3: port 23 reopened -> NO new alert (already notified once)
     count3 = await analyzer.analyze_device(
         device_id=1,
         ip_address="192.168.1.100",
@@ -237,14 +239,22 @@ async def test_re_alerting_after_resolution(db, mock_event_bus):
         open_ports=frozenset({23}),
         display_name="Living Room Speaker",
     )
-    assert count3 == 1
+    assert count3 == 0
 
-    # Verify two total alerts exist in home_alerts
+    # Still only one alert in home_alerts
     cursor = await db.execute(
         "SELECT COUNT(*) as cnt FROM home_alerts WHERE device_id = 1"
     )
     row = await cursor.fetchone()
-    assert row["cnt"] == 2
+    assert row["cnt"] == 1
+
+    # Insight state was reactivated (resolved_at cleared back to NULL)
+    cursor = await db.execute(
+        "SELECT resolved_at FROM security_insight_state "
+        "WHERE device_id = 1 AND insight_key = 'risky_port:23'"
+    )
+    row = await cursor.fetchone()
+    assert row["resolved_at"] is None
 
 
 # ---------------------------------------------------------------------------
