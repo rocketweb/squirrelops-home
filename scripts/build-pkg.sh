@@ -117,6 +117,56 @@ info "Building sensor venv..."
 bash "$SCRIPT_DIR/build-sensor-venv.sh" "$SENSOR_BUILD_DIR"
 
 # ===========================================================================
+# Step 3b: Sign sensor venv native binaries
+# ===========================================================================
+step "Step 3b: Sign Sensor Venv Binaries"
+
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
+    # Find all Mach-O binaries: .so, .dylib, and the Python interpreter
+    MACHO_FILES=()
+    while IFS= read -r -d '' f; do
+        MACHO_FILES+=("$f")
+    done < <(find "$SENSOR_BUILD_DIR/venv" -type f \( -name "*.so" -o -name "*.dylib" \) -print0)
+
+    # Also sign the Python interpreter itself
+    VENV_PYTHON="$SENSOR_BUILD_DIR/venv/bin/python3"
+    if [ -f "$VENV_PYTHON" ] && ! [ -L "$VENV_PYTHON" ]; then
+        MACHO_FILES+=("$VENV_PYTHON")
+    else
+        # Follow symlinks to find the real binary
+        REAL_PYTHON="$(readlink -f "$VENV_PYTHON" 2>/dev/null || python3 -c "import os; print(os.path.realpath('$VENV_PYTHON'))")"
+        if [ -f "$REAL_PYTHON" ]; then
+            MACHO_FILES+=("$REAL_PYTHON")
+        fi
+    fi
+
+    info "Found ${#MACHO_FILES[@]} Mach-O binaries to sign in sensor venv."
+
+    SIGN_FAIL=0
+    for macho in "${MACHO_FILES[@]}"; do
+        if codesign --force \
+            --options runtime \
+            --sign "$SIGNING_IDENTITY" \
+            --timestamp \
+            "$macho" 2>/dev/null; then
+            :
+        else
+            warn "Failed to sign: $(basename "$macho")"
+            SIGN_FAIL=$((SIGN_FAIL + 1))
+        fi
+    done
+
+    if [ "$SIGN_FAIL" -eq 0 ]; then
+        info "All sensor venv binaries signed successfully."
+    else
+        warn "$SIGN_FAIL binaries failed to sign (notarization may fail)."
+    fi
+else
+    warn "Signing identity '$SIGNING_IDENTITY' not found."
+    warn "Skipping sensor venv binary signing."
+fi
+
+# ===========================================================================
 # Step 4: Assemble payload roots
 # ===========================================================================
 step "Step 4: Assemble Payload"
