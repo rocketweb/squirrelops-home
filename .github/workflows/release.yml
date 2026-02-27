@@ -62,11 +62,13 @@ jobs:
   build-macos-pkg:
     name: Build macOS .pkg
     runs-on: macos-15
+    env:
+      HAS_CERTS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Import signing certificates
-        if: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+        if: ${{ env.HAS_CERTS == 'true' }}
         env:
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
