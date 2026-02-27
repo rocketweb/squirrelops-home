@@ -1,0 +1,28 @@
+{
+  "rewrites": [
+    { "source": "/install.sh", "destination": "/install.sh" },
+    { "source": "/install-macos.sh", "destination": "/install-macos.sh" },
+    { "source": "/manifest.json", "destination": "/manifest.json" }
+  ],
+  "headers": [
+    {
+      "source": "/install.sh",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/install-macos.sh",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" }
+      ]
+    },
+    {
+      "source": "/manifest.json",
+      "headers": [
+        { "key": "Content-Type", "value": "application/json" },
+        { "key": "Cache-Control", "value": "public, max-age=300" }
+      ]
+    }
+  ]
+}

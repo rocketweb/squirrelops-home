@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>SquirrelOps Home</title>
+    <organization>com.squirrelops</organization>
+
+    <!-- Minimum macOS 14.0 (Sonoma) -->
+    <allowed-os-versions>
+        <os-version min="14.0"/>
+    </allowed-os-versions>
+
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+
+    <pkg-ref id="com.squirrelops.home.app"/>
+    <pkg-ref id="com.squirrelops.home.sensor"/>
+
+    <choices-outline>
+        <line choice="default">
+            <line choice="com.squirrelops.home.app"/>
+            <line choice="com.squirrelops.home.sensor"/>
+        </line>
+    </choices-outline>
+
+    <choice id="default"/>
+
+    <choice id="com.squirrelops.home.app"
+            title="SquirrelOps Home App"
+            description="The macOS app — dashboard, alert center, and control plane.">
+        <pkg-ref id="com.squirrelops.home.app"/>
+    </choice>
+
+    <choice id="com.squirrelops.home.sensor"
+            title="SquirrelOps Sensor"
+            description="Network sensor daemon — monitoring, discovery, and deception engine.">
+        <pkg-ref id="com.squirrelops.home.sensor"/>
+    </choice>
+
+    <pkg-ref id="com.squirrelops.home.app"
+             version="__VERSION__"
+             installKBytes="__APP_SIZE__"
+             auth="root"
+             onConclusion="none">app.pkg</pkg-ref>
+
+    <pkg-ref id="com.squirrelops.home.sensor"
+             version="__VERSION__"
+             installKBytes="__SENSOR_SIZE__"
+             auth="root"
+             onConclusion="none">sensor.pkg</pkg-ref>
+
+</installer-gui-script>

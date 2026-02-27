@@ -1,0 +1,33 @@
+name: App CI
+
+on:
+  push:
+    paths:
+      - "app/**"
+      - ".github/workflows/app-ci.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/app-ci.yml"
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: macos-15
+
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16.2
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test

@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/push.ts": {
+      "runtime": "edge"
+    }
+  }
+}

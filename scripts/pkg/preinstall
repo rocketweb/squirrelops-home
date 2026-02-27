@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# SquirrelOps Home — .pkg Preinstall Script
+#
+# Runs before payload extraction. Stops any existing sensor service
+# and backs up the current config if present.
+#
+# This script runs as root during .pkg installation.
+#
+set -euo pipefail
+
+PLIST_NAME="com.squirrelops.sensor"
+PLIST_PATH="/Library/LaunchDaemons/${PLIST_NAME}.plist"
+INSTALL_DIR="/Library/SquirrelOps/sensor"
+CONFIG_FILE="$INSTALL_DIR/config.yaml"
+
+# ---------------------------------------------------------------------------
+# Step 1: Stop existing sensor service (ignore errors — may not be running)
+# ---------------------------------------------------------------------------
+if [ -f "$PLIST_PATH" ]; then
+    echo "[preinstall] Stopping existing sensor service..."
+    launchctl bootout system "$PLIST_PATH" 2>/dev/null || true
+    sleep 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2: Back up config if it exists
+# ---------------------------------------------------------------------------
+if [ -f "$CONFIG_FILE" ]; then
+    echo "[preinstall] Backing up config.yaml -> config.yaml.bak"
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+fi
+
+echo "[preinstall] Done."
+exit 0

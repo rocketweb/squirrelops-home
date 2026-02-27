@@ -1,0 +1,40 @@
+# Version control
+.git
+.gitignore
+
+# Development
+.worktrees/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Tests (not needed in production image)
+tests/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Build artifacts
+dist/
+build/
+.build/
+
+# OS files
+.DS_Store
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore

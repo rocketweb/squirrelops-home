@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+#
+# SquirrelOps Home — .pkg Postinstall Script
+#
+# Runs after payload extraction. Sets up data directories, config,
+# launchd plist, and starts the sensor service.
+#
+# This script runs as root during .pkg installation.
+#
+set -euo pipefail
+
+INSTALL_DIR="/Library/SquirrelOps/sensor"
+DATA_DIR="$INSTALL_DIR/data"
+LOG_DIR="$INSTALL_DIR/logs"
+CONFIG_FILE="$INSTALL_DIR/config.yaml"
+CONFIG_BACKUP="${CONFIG_FILE}.bak"
+VENV_DIR="$INSTALL_DIR/venv"
+PYTHON_PATH="$VENV_DIR/bin/python"
+
+PLIST_NAME="com.squirrelops.sensor"
+PLIST_TEMPLATE="$INSTALL_DIR/com.squirrelops.sensor.plist"
+PLIST_DEST="/Library/LaunchDaemons/${PLIST_NAME}.plist"
+
+# ---------------------------------------------------------------------------
+# Step 1: Create data directories
+# ---------------------------------------------------------------------------
+echo "[postinstall] Creating data directories..."
+mkdir -p "$DATA_DIR"
+mkdir -p "$LOG_DIR"
+
+# ---------------------------------------------------------------------------
+# Step 2: Handle config file
+# ---------------------------------------------------------------------------
+if [ -f "$CONFIG_BACKUP" ]; then
+    # Upgrade path: restore backed-up config
+    echo "[postinstall] Restoring config from backup..."
+    mv "$CONFIG_BACKUP" "$CONFIG_FILE"
+elif [ ! -f "$CONFIG_FILE" ]; then
+    # Fresh install: generate default config
+    echo "[postinstall] Generating default config.yaml..."
+    cat > "$CONFIG_FILE" << 'YAML'
+# SquirrelOps Home Sensor — Configuration
+# See documentation for all available options.
+
+profile: standard
+
+network:
+  interface: auto
+  scan_interval: 300
+
+api:
+  port: 8443
+  host: 0.0.0.0
+
+data:
+  retention_days: 90
+YAML
+fi
+
+# ---------------------------------------------------------------------------
+# Step 3: Install launchd plist from template
+# ---------------------------------------------------------------------------
+echo "[postinstall] Installing launchd plist..."
+
+if [ -f "$PLIST_TEMPLATE" ]; then
+    sed \
+        -e "s|__PYTHON_PATH__|${PYTHON_PATH}|g" \
+        -e "s|__CONFIG_PATH__|${CONFIG_FILE}|g" \
+        -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
+        -e "s|__DATA_DIR__|${DATA_DIR}|g" \
+        -e "s|__LOG_DIR__|${LOG_DIR}|g" \
+        "$PLIST_TEMPLATE" > "$PLIST_DEST"
+else
+    echo "[postinstall] WARNING: Plist template not found at $PLIST_TEMPLATE"
+    echo "[postinstall] Sensor service will not be started automatically."
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Step 4: Set permissions on plist
+# ---------------------------------------------------------------------------
+chown root:wheel "$PLIST_DEST"
+chmod 644 "$PLIST_DEST"
+
+# ---------------------------------------------------------------------------
+# Step 5: Load the sensor service
+# ---------------------------------------------------------------------------
+echo "[postinstall] Loading sensor service..."
+launchctl bootstrap system "$PLIST_DEST" 2>/dev/null || {
+    echo "[postinstall] WARNING: Failed to bootstrap sensor service."
+    echo "[postinstall] You may need to load it manually:"
+    echo "[postinstall]   sudo launchctl bootstrap system $PLIST_DEST"
+}
+
+# ---------------------------------------------------------------------------
+# Step 6: Health check (best effort — don't block installer)
+# ---------------------------------------------------------------------------
+echo "[postinstall] Waiting for sensor to start..."
+
+HEALTH_URL="https://localhost:8443/system/health"
+TIMEOUT=30
+INTERVAL=2
+ELAPSED=0
+
+while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+    # Use curl with --insecure since the sensor uses a self-signed cert
+    if curl -sf --insecure --max-time 3 "$HEALTH_URL" >/dev/null 2>&1; then
+        echo "[postinstall] Sensor is healthy."
+        break
+    fi
+    sleep "$INTERVAL"
+    ELAPSED=$((ELAPSED + INTERVAL))
+done
+
+if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+    echo "[postinstall] WARNING: Sensor did not respond within ${TIMEOUT}s."
+    echo "[postinstall] Check logs at: $LOG_DIR/squirrelops-sensor.log"
+fi
+
+echo "[postinstall] Done."
+exit 0

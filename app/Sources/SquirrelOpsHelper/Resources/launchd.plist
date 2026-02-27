@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.squirrelops.helper</string>
+    <key>Program</key>
+    <string>/Library/PrivilegedHelperTools/com.squirrelops.helper</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/com.squirrelops.helper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/com.squirrelops.helper.log</string>
+</dict>
+</plist>

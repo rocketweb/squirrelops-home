@@ -1,0 +1,37 @@
+# SquirrelOps Home Sensor -- Docker Compose deployment
+#
+# Usage:
+#   docker compose up -d          # start sensor
+#   docker compose logs -f        # view logs (pairing code is here)
+#   docker compose down           # stop sensor
+#
+# The sensor needs host networking for full network visibility (ARP
+# scanning, passive DNS monitoring). NET_RAW and NET_ADMIN capabilities
+# are required for raw socket operations.
+
+services:
+  sensor:
+    image: ghcr.io/rocketweb/squirrelops-sensor:latest
+    build: .
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    volumes:
+      - sensor_data:/app/data
+    environment:
+      SQUIRRELOPS_DATA_DIR: /app/data
+      SQUIRRELOPS_PORT: "8443"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  sensor_data:

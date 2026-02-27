@@ -1,0 +1,62 @@
+sensor:
+  name: "SquirrelOps Home Sensor"
+  data_dir: "./data"
+
+network:
+  scan_interval: 300
+  interface: "auto"
+  subnet: "auto"
+  learning_duration_hours: 48
+
+decoys:
+  max_decoys: 8
+  health_check_interval: 1800
+  restart_max_attempts: 3
+  restart_window_seconds: 300
+
+alerts:
+  retention_days: 90
+  incident_window_minutes: 15
+  incident_close_window_minutes: 30
+  methods:
+    notification: true
+    menubar: true
+    fullscreen: false
+    slack: false
+
+classifier:
+  mode: "local"
+  confidence_threshold: 0.70
+  llm_provider: null
+  llm_endpoint: null
+  llm_model: null
+
+fingerprint:
+  auto_approve_threshold: 0.75
+  verify_threshold: 0.50
+  signal_weights:
+    mdns: 0.30
+    dhcp: 0.25
+    connections: 0.25
+    mac: 0.10
+    ports: 0.10
+
+home_assistant:
+  enabled: false
+  url: ""
+  token: ""
+
+profiles:
+  default: "standard"
+  lite:
+    scan_interval: 900
+    max_decoys: 3
+    llm_mode: "none"
+  standard:
+    scan_interval: 300
+    max_decoys: 8
+    llm_mode: "cloud"
+  full:
+    scan_interval: 60
+    max_decoys: 16
+    llm_mode: "local"

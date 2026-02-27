@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SquirrelOps Home — Local-First Home Network Security</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: #0A0A0A;
+      color: #B5B5B5;
+      font-family: 'Space Grotesk', sans-serif;
+      line-height: 1.6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 80px 24px 48px;
+    }
+
+    .container {
+      max-width: 720px;
+      width: 100%;
+    }
+
+    .title-row {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      font-size: 2.369rem;
+      font-weight: 700;
+      color: #FFFFFF;
+      letter-spacing: -0.02em;
+    }
+
+    h1 .accent {
+      color: #B91C1C;
+    }
+
+    .version-badge {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #B91C1C;
+      border: 1px solid #B91C1C;
+      border-radius: 4px;
+      padding: 2px 8px;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .subtitle {
+      font-size: 1.125rem;
+      color: #B5B5B5;
+      margin-bottom: 56px;
+      max-width: 540px;
+    }
+
+    .install-block {
+      margin-bottom: 40px;
+    }
+
+    .install-block h2 {
+      font-size: 1.125rem;
+      font-weight: 600;
+      color: #FFFFFF;
+      margin-bottom: 8px;
+    }
+
+    .install-block .hint {
+      font-size: 0.875rem;
+      color: #737373;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 12px;
+    }
+
+    .code-block {
+      background: #141414;
+      border: 1px solid #262626;
+      border-radius: 8px;
+      padding: 16px 20px;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.875rem;
+      color: #E5E5E5;
+      user-select: all;
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+      overflow-x: auto;
+    }
+
+    .code-block:hover {
+      border-color: #B91C1C;
+    }
+
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #B91C1C;
+      color: #FFFFFF;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1rem;
+      font-weight: 600;
+      text-decoration: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      transition: opacity 0.15s ease;
+    }
+
+    .download-btn:hover {
+      opacity: 0.85;
+    }
+
+    .download-btn .arrow {
+      font-size: 1.125rem;
+    }
+
+    .download-link {
+      display: inline-block;
+      margin-top: 8px;
+      color: #B5B5B5;
+      font-weight: 500;
+      text-decoration: none;
+      font-size: 0.875rem;
+      transition: color 0.15s ease;
+    }
+
+    .download-link:hover {
+      color: #FFFFFF;
+    }
+
+    .download-link::after {
+      content: ' \2192';
+    }
+
+    .requirements {
+      margin-top: 56px;
+      margin-bottom: 40px;
+      padding: 20px 24px;
+      background: #141414;
+      border: 1px solid #262626;
+      border-radius: 8px;
+    }
+
+    .requirements h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #FFFFFF;
+      margin-bottom: 12px;
+    }
+
+    .requirements ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .requirements li {
+      font-size: 0.875rem;
+      color: #B5B5B5;
+      padding-left: 16px;
+      position: relative;
+    }
+
+    .requirements li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 9px;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #B91C1C;
+    }
+
+    .requirements .platform {
+      color: #FFFFFF;
+      font-weight: 600;
+    }
+
+    footer {
+      margin-top: 80px;
+      padding-top: 32px;
+      border-top: 1px solid #1A1A1A;
+      width: 100%;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 24px;
+      align-items: center;
+      font-size: 0.875rem;
+      color: #737373;
+      font-weight: 600;
+    }
+
+    footer a {
+      color: #737373;
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+
+    footer a:hover {
+      color: #B5B5B5;
+    }
+
+    .spacer {
+      flex: 1;
+    }
+
+    .no-telemetry {
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.75rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="title-row">
+      <h1>SquirrelOps <span class="accent">Home</span></h1>
+      <span class="version-badge" id="version-badge">v1.0.0</span>
+    </div>
+    <p class="subtitle">Local-first home network security with zero-false-positive deception.</p>
+
+    <div class="install-block">
+      <h2>macOS</h2>
+      <p class="hint">App + sensor in one package</p>
+      <a class="download-btn" id="pkg-download" href="https://github.com/rocketweb/squirrelops-home/releases/latest/download/SquirrelOpsHome-1.0.0.pkg">
+        Download .pkg installer <span class="arrow">&rarr;</span>
+      </a>
+      <br>
+      <a class="download-link" href="https://github.com/rocketweb/squirrelops-home/releases">View all releases</a>
+    </div>
+
+    <div class="install-block">
+      <h2>Linux / NAS (Docker)</h2>
+      <p class="hint">Sensor only</p>
+      <div class="code-block">curl -fsSL https://get.squirrelops.io/install.sh | sh</div>
+    </div>
+
+    <div class="requirements">
+      <h2>System Requirements</h2>
+      <ul>
+        <li><span class="platform">macOS:</span> macOS 14+ (Sonoma) on Apple Silicon or Intel</li>
+        <li><span class="platform">Linux:</span> Docker 24+ on x86_64 or ARM64</li>
+      </ul>
+    </div>
+
+    <footer>
+      <a href="https://github.com/rocketweb/squirrelops-home">GitHub</a>
+      <a href="/manifest.json">Manifest</a>
+      <span class="spacer"></span>
+      <span class="no-telemetry">Local data only. No telemetry.</span>
+    </footer>
+  </div>
+
+  <script>
+    (async function () {
+      try {
+        const resp = await fetch('/manifest.json');
+        if (!resp.ok) return;
+        const manifest = await resp.json();
+        if (manifest.schema_version < 2) return;
+
+        const version = manifest.latest && manifest.latest.app;
+        if (!version) return;
+
+        const badge = document.getElementById('version-badge');
+        if (badge) badge.textContent = 'v' + version;
+
+        const pkgUrl = manifest.downloads && manifest.downloads.macos_pkg;
+        if (pkgUrl) {
+          const btn = document.getElementById('pkg-download');
+          if (btn) btn.href = pkgUrl;
+        }
+      } catch (_) {
+        // Manifest fetch failed; keep static defaults
+      }
+    })();
+  </script>
+</body>
+</html>
