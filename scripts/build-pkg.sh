@@ -176,6 +176,16 @@ info "Assembling app payload..."
 mkdir -p "$APP_ROOT/Applications"
 cp -R "$APP_BUNDLE" "$APP_ROOT/Applications/SquirrelOps Home.app"
 
+# Fix SPM resource bundle lookup: the generated Bundle.module accessor looks for
+# the resource bundle at Bundle.main.bundleURL (the .app root), but swift build
+# places it in Contents/Resources/. Copy it to the .app root so the accessor
+# finds it when installed to /Applications.
+RESOURCE_BUNDLE="$APP_ROOT/Applications/SquirrelOps Home.app/Contents/Resources/SquirrelOpsHome_SquirrelOpsHome.bundle"
+if [ -d "$RESOURCE_BUNDLE" ]; then
+    info "Copying resource bundle to .app root for Bundle.module lookup..."
+    cp -R "$RESOURCE_BUNDLE" "$APP_ROOT/Applications/SquirrelOps Home.app/SquirrelOpsHome_SquirrelOpsHome.bundle"
+fi
+
 # Sensor payload: goes to /Library/SquirrelOps/sensor
 SENSOR_INSTALL="$SENSOR_ROOT/Library/SquirrelOps/sensor"
 mkdir -p "$SENSOR_INSTALL"
