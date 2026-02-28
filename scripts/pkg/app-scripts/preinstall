@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# SquirrelOps Home — App Package Preinstall Script
+#
+# Runs before app payload extraction. Clears any stale package receipt
+# so the installer places the app in /Applications instead of following
+# a receipt that points to a prior (possibly relocated) install location.
+#
+# This script runs as root during .pkg installation.
+#
+set -euo pipefail
+
+PKG_ID="com.squirrelops.home.app"
+
+# ---------------------------------------------------------------------------
+# Step 1: Forget stale package receipt
+# ---------------------------------------------------------------------------
+# If a previous install was relocated (e.g. macOS found an existing bundle
+# with the same ID in a dev build directory), the receipt will point there.
+# Clearing it forces the installer to use the distribution.xml install path
+# (/Applications) instead of the old receipt location.
+if pkgutil --pkg-info "$PKG_ID" &>/dev/null; then
+    echo "[app-preinstall] Clearing stale receipt for $PKG_ID"
+    pkgutil --forget "$PKG_ID" 2>/dev/null || true
+fi
+
+echo "[app-preinstall] Done."
+exit 0

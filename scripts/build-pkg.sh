@@ -202,13 +202,14 @@ SENSOR_SIZE=$(du -sk "$SENSOR_ROOT" | cut -f1)
 info "App size: ${APP_SIZE} KB"
 info "Sensor size: ${SENSOR_SIZE} KB"
 
-# Build app.pkg
+# Build app.pkg (with preinstall script to clear stale receipts)
 info "Building app.pkg..."
 pkgbuild \
     --root "$APP_ROOT" \
     --install-location / \
     --identifier com.squirrelops.home.app \
     --version "$VERSION" \
+    --scripts "$SCRIPT_DIR/pkg/app-scripts" \
     "$COMPONENTS_DIR/app.pkg"
 
 # Build sensor.pkg (with pre/post install scripts)

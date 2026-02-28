@@ -188,7 +188,7 @@ jobs:
 
           ### macOS (recommended)
 
-          **[Download SquirrelOpsHome-VERSION.pkg](PLACEHOLDER)** and double-click to install.
+          **[Download SquirrelOpsHome-VERSION.pkg](PLACEHOLDER)** — locate the installer in Finder. ⌃ Control-click, go to **Open With** and choose **Installer**. In the box that comes up, choose **Open Anyway**. This application has been submitted to Apple for notarization so this install issue should be resolved soon.
 
           The installer sets up everything — the app and the network sensor — in one step. No terminal required.
 
