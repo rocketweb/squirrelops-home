@@ -40,6 +40,15 @@
              auth="root"
              onConclusion="none">app.pkg</pkg-ref>
 
+    <pkg-ref id="com.squirrelops.home.app">
+        <bundle-version>
+            <bundle id="com.squirrelops.home"
+                    CFBundleShortVersionString="__VERSION__"
+                    path="Applications/SquirrelOps Home.app"
+                    BundleIsRelocatable="false"/>
+        </bundle-version>
+    </pkg-ref>
+
     <pkg-ref id="com.squirrelops.home.sensor"
              version="__VERSION__"
              installKBytes="__SENSOR_SIZE__"
