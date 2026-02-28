@@ -202,14 +202,23 @@ SENSOR_SIZE=$(du -sk "$SENSOR_ROOT" | cut -f1)
 info "App size: ${APP_SIZE} KB"
 info "Sensor size: ${SENSOR_SIZE} KB"
 
-# Build app.pkg (with preinstall script to clear stale receipts)
+# Build app.pkg — analyze first to disable bundle relocation, then build.
+# Without --component-plist, pkgbuild defaults to relocatable=true inside the
+# component PackageInfo, which causes macOS Installer to search the disk for
+# existing bundles with the same ID and install there instead of /Applications.
 info "Building app.pkg..."
+APP_COMPONENT_PLIST="$BUILD_DIR/app-component.plist"
+pkgbuild --analyze --root "$APP_ROOT" "$APP_COMPONENT_PLIST"
+# Set BundleIsRelocatable to false for every bundle found
+/usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$APP_COMPONENT_PLIST"
+
 pkgbuild \
     --root "$APP_ROOT" \
     --install-location / \
     --identifier com.squirrelops.home.app \
     --version "$VERSION" \
     --scripts "$SCRIPT_DIR/pkg/app-scripts" \
+    --component-plist "$APP_COMPONENT_PLIST" \
     "$COMPONENTS_DIR/app.pkg"
 
 # Build sensor.pkg (with pre/post install scripts)
@@ -329,3 +338,12 @@ echo "  Checksum:   $CHECKSUM_FILE"
 PKG_SIZE=$(du -sh "$OUTPUT_DIR/$PKG_NAME" | cut -f1)
 echo "  Size:       $PKG_SIZE"
 echo ""
+
+# ===========================================================================
+# Cleanup: Remove build staging directories
+# ===========================================================================
+# The app-root and sensor-root contain .app bundles with the same bundle ID
+# as the installed app. If left on disk, macOS Installer will find them via
+# Spotlight and relocate future installs there instead of /Applications.
+info "Cleaning up staging directories..."
+rm -rf "$APP_ROOT" "$SENSOR_ROOT" "$COMPONENTS_DIR" 2>/dev/null || true
