@@ -271,14 +271,14 @@ fi
 step "Step 8: Notarize"
 
 if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
-    info "Submitting for notarization..."
+    info "Submitting for notarization (15 minute timeout)..."
     NOTARY_OUTPUT="/tmp/notarytool-output.txt"
     xcrun notarytool submit \
         "$OUTPUT_DIR/$PKG_NAME" \
         --apple-id "$APPLE_ID" \
         --team-id "$APPLE_TEAM_ID" \
         --password "$APPLE_APP_PASSWORD" \
-        --wait 2>&1 | tee "$NOTARY_OUTPUT" || true
+        --wait --timeout 15m 2>&1 | tee "$NOTARY_OUTPUT" || true
 
     # Check if notarization was accepted
     if grep -q "status: Accepted" "$NOTARY_OUTPUT"; then
