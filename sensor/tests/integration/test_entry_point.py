@@ -73,6 +73,8 @@ def mock_subsystems() -> dict[str, Any]:
     # Event bus
     mock_event_bus = MagicMock()
     mock_event_bus.publish = AsyncMock(return_value=1)
+    mock_event_bus._log = MagicMock()
+    mock_event_bus._log.prune_orphaned_events = AsyncMock(return_value=0)
     mocks["event_bus"] = mock_event_bus
     mock_create_event_bus = MagicMock(return_value=mock_event_bus)
     mocks["create_event_bus"] = mock_create_event_bus

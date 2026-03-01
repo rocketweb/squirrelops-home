@@ -172,6 +172,30 @@ ADMIN_EXPECTED_DEVICES: frozenset[str] = frozenset({
 })
 
 
+def issue_key_for_port_risk(finding: PortRisk) -> str:
+    """Generate a canonical issue key for grouping alerts by issue type.
+
+    All unencrypted admin port findings (80, 8080, etc.) are grouped under one
+    key.  Other port risks get a per-service key.
+
+    Examples::
+
+        port_risk:ssh:22
+        port_risk:smb_file_sharing:445
+        port_risk:unencrypted_admin
+    """
+    service_slug = (
+        finding.service_name.lower()
+        .replace(" ", "_")
+        .replace("(", "")
+        .replace(")", "")
+    )
+    # All unencrypted admin ports group into a single alert
+    if "unencrypted" in service_slug:
+        return "port_risk:unencrypted_admin"
+    return f"port_risk:{service_slug}:{finding.port}"
+
+
 def evaluate_device_ports(
     open_ports: frozenset[int],
     device_type: str,

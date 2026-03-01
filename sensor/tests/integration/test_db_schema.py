@@ -106,7 +106,7 @@ class TestFreshDatabase:
         names = get_all_table_names()
         assert "events" in names
         assert "schema_version" in names
-        assert len(names) == 13
+        assert len(names) == 18
 
     @pytest.mark.asyncio
     async def test_idempotent_migration(self) -> None:

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from squirrelops_home_sensor.api.deps import get_config, verify_client_cert
+from squirrelops_home_sensor.config import _FLAT_KEY_MAP
 from squirrelops_home_sensor.integrations.home_assistant import HomeAssistantClient
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,18 @@ PROTECTED_FIELDS = {"sensor_id", "version"}
 
 # Keys that are runtime-only and should not be persisted
 RUNTIME_ONLY_FIELDS = {"sensor"}
+
+# Allowed top-level config keys (Settings model fields + legacy flat keys).
+# Any key not in this set is silently rejected to prevent injection of
+# arbitrary config entries that could affect business logic.
+ALLOWED_CONFIG_KEYS = {
+    # Settings model sections
+    "sensor", "network", "decoys", "alerts", "classifier",
+    "fingerprint", "profiles", "home_assistant", "scouts",
+    # Legacy flat keys (from config.yaml)
+    "sensor_name", "profile", "learning_mode", "scan_interval_seconds",
+    "max_decoys", "alert_methods", "subnet",
+}
 
 
 def _persist_config(config: dict[str, Any]) -> None:
@@ -71,10 +84,21 @@ async def update_config(
     Top-level keys are merged; nested dicts are replaced entirely.
     Changes are persisted to data_dir/config.yaml for restart survival.
     """
+    rejected = [k for k in body if k not in ALLOWED_CONFIG_KEYS]
+    if rejected:
+        logger.warning("Config update rejected unknown keys: %s", rejected)
+
     for key, value in body.items():
-        if key in PROTECTED_FIELDS:
+        if key in PROTECTED_FIELDS or key not in ALLOWED_CONFIG_KEYS:
             continue
-        config[key] = value
+        # Map legacy flat keys into the nested config structure so they
+        # actually take effect at runtime (the Settings model only reads
+        # nested keys like network.subnet, not top-level "subnet").
+        if key in _FLAT_KEY_MAP:
+            section, nested_key = _FLAT_KEY_MAP[key]
+            config.setdefault(section, {})[nested_key] = value
+        else:
+            config[key] = value
 
     _persist_config(config)
     return config

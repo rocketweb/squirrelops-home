@@ -8,7 +8,7 @@ observations, and event logging.
 from __future__ import annotations
 
 # Current schema version -- increment when adding migrations
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 # All table names managed by this schema (does NOT include Pingting's tables)
 _TABLE_NAMES: list[str] = [
@@ -141,6 +141,11 @@ CREATE TABLE IF NOT EXISTS home_alerts (
     actioned_at TEXT,
     action_note TEXT,
     event_seq INTEGER REFERENCES events(seq),
+    issue_key TEXT,
+    affected_devices TEXT,
+    device_count INTEGER DEFAULT 1,
+    risk_description TEXT,
+    remediation TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_severity ON home_alerts(severity);
@@ -148,6 +153,7 @@ CREATE INDEX IF NOT EXISTS idx_alerts_type ON home_alerts(alert_type);
 CREATE INDEX IF NOT EXISTS idx_alerts_created ON home_alerts(created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_incident ON home_alerts(incident_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_unread ON home_alerts(read_at) WHERE read_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_alerts_issue_key ON home_alerts(issue_key) WHERE issue_key IS NOT NULL;
 
 -- Active decoys
 CREATE TABLE IF NOT EXISTS decoys (

@@ -17,6 +17,7 @@ from squirrelops_home_sensor.config import (
     NetworkConfig,
     SensorConfig,
     Settings,
+    _normalize_flat_keys,
     load_settings,
 )
 
@@ -158,10 +159,17 @@ class TestMissingFileFallback:
         assert settings.sensor.name == "SquirrelOps Home Sensor"
         assert settings.network.scan_interval == 300
 
-    def test_none_path_returns_defaults(self) -> None:
-        settings = load_settings(config_path=None)
-        assert isinstance(settings, Settings)
-        assert settings.network.scan_interval == 300
+    def test_none_path_returns_defaults(self, tmp_path: pathlib.Path) -> None:
+        # Run from a tmp directory so we don't pick up the local
+        # data/config.yaml which would override defaults.
+        orig_cwd = pathlib.Path.cwd()
+        os.chdir(tmp_path)
+        try:
+            settings = load_settings(config_path=None)
+            assert isinstance(settings, Settings)
+            assert settings.network.scan_interval == 300
+        finally:
+            os.chdir(orig_cwd)
 
 
 class TestHomeAssistantConfig:
@@ -193,3 +201,53 @@ class TestHomeAssistantConfig:
         assert cfg.enabled is True
         assert cfg.url == ""
         assert cfg.token == ""
+
+
+class TestFlatKeyNormalization:
+    """Verify that legacy flat config keys are mapped to nested model paths."""
+
+    def test_subnet_maps_to_network(self) -> None:
+        data = {"subnet": "10.0.0.0/24"}
+        _normalize_flat_keys(data)
+        assert data["network"]["subnet"] == "10.0.0.0/24"
+        assert "subnet" not in data
+
+    def test_scan_interval_maps_to_network(self) -> None:
+        data = {"scan_interval_seconds": 120}
+        _normalize_flat_keys(data)
+        assert data["network"]["scan_interval"] == 120
+        assert "scan_interval_seconds" not in data
+
+    def test_max_decoys_maps_to_decoys(self) -> None:
+        data = {"max_decoys": 16}
+        _normalize_flat_keys(data)
+        assert data["decoys"]["max_decoys"] == 16
+        assert "max_decoys" not in data
+
+    def test_sensor_name_maps_to_sensor(self) -> None:
+        data = {"sensor_name": "TestSensor"}
+        _normalize_flat_keys(data)
+        assert data["sensor"]["name"] == "TestSensor"
+        assert "sensor_name" not in data
+
+    def test_preserves_existing_nested_keys(self) -> None:
+        data = {
+            "subnet": "10.0.0.0/24",
+            "network": {"interface": "en0"},
+        }
+        _normalize_flat_keys(data)
+        assert data["network"]["subnet"] == "10.0.0.0/24"
+        assert data["network"]["interface"] == "en0"
+
+    def test_no_flat_keys_is_noop(self) -> None:
+        data = {"network": {"subnet": "10.0.0.0/24"}}
+        original = dict(data)
+        _normalize_flat_keys(data)
+        assert data == original
+
+    def test_flat_key_applied_to_settings(self, tmp_path: pathlib.Path) -> None:
+        """Flat subnet key in a config file should reach Settings.network.subnet."""
+        config = tmp_path / "config.yaml"
+        config.write_text(yaml.dump({"subnet": "10.0.0.0/24"}))
+        settings = load_settings(config_path=config)
+        assert settings.network.subnet == "10.0.0.0/24"

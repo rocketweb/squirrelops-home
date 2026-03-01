@@ -175,6 +175,44 @@ class DeviceManager:
         )
         rows = await cursor.fetchall()
 
+        # Batch-load connection baselines and open ports to avoid N+1 queries
+        device_ids = [row[0] for row in rows]
+
+        # Build {device_id: frozenset("ip:port", ...)} lookup
+        baselines_by_device: dict[int, frozenset[str]] = {}
+        if device_ids:
+            placeholders = ",".join("?" * len(device_ids))
+            bl_cursor = await self._db.execute(
+                f"SELECT device_id, dest_ip, dest_port FROM connection_baselines "
+                f"WHERE device_id IN ({placeholders})",
+                device_ids,
+            )
+            for bl_row in await bl_cursor.fetchall():
+                did = bl_row[0]
+                entry = f"{bl_row[1]}:{bl_row[2]}"
+                baselines_by_device.setdefault(did, set()).add(entry)
+            # Freeze the sets
+            baselines_by_device = {
+                did: frozenset(dests)
+                for did, dests in baselines_by_device.items()
+            }
+
+        # Build {device_id: frozenset(port, ...)} lookup
+        ports_by_device: dict[int, frozenset[int]] = {}
+        if device_ids:
+            placeholders = ",".join("?" * len(device_ids))
+            port_cursor = await self._db.execute(
+                f"SELECT device_id, port FROM device_open_ports "
+                f"WHERE device_id IN ({placeholders})",
+                device_ids,
+            )
+            for port_row in await port_cursor.fetchall():
+                ports_by_device.setdefault(port_row[0], set()).add(port_row[1])
+            ports_by_device = {
+                did: frozenset(ports)
+                for did, ports in ports_by_device.items()
+            }
+
         loaded: list[TrackedDevice] = []
         for row in rows:
             device_id = row[0]
@@ -186,17 +224,6 @@ class DeviceManager:
                 dhcp_fingerprint_hash=row[10],
                 connection_pattern_hash=row[11],
                 open_ports_hash=row[12],
-            )
-
-            # Load connection baselines for Jaccard comparison
-            bl_cursor = await self._db.execute(
-                "SELECT dest_ip, dest_port FROM connection_baselines "
-                "WHERE device_id = ?",
-                (device_id,),
-            )
-            bl_rows = await bl_cursor.fetchall()
-            conn_dests = frozenset(
-                f"{r[0]}:{r[1]}" for r in bl_rows
             )
 
             # Parse timestamps
@@ -212,22 +239,12 @@ class DeviceManager:
                 device_type=row[5],
                 model_name=row[6],
                 fingerprint=fp,
-                connection_destinations=conn_dests,
-                open_ports=frozenset(),  # Will load from DB below
+                connection_destinations=baselines_by_device.get(device_id, frozenset()),
+                open_ports=ports_by_device.get(device_id, frozenset()),
                 first_seen=first_seen,
                 last_seen=last_seen,
                 area=row[13],
             ))
-
-        # Load persisted open ports for each device
-        for td in loaded:
-            port_cursor = await self._db.execute(
-                "SELECT port FROM device_open_ports WHERE device_id = ?",
-                (td.device_id,),
-            )
-            port_rows = await port_cursor.fetchall()
-            if port_rows:
-                td.open_ports = frozenset(r[0] for r in port_rows)
 
         self._known_devices = loaded
         logger.info("Loaded %d known devices from database", len(loaded))

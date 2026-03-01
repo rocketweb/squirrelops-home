@@ -27,6 +27,8 @@ class AlertSummary(BaseModel):
     actioned_at: Optional[str] = None
     created_at: str
     alert_count: Optional[int] = None  # present when this represents an incident
+    device_count: Optional[int] = None  # grouped alert: number of affected devices
+    issue_key: Optional[str] = None  # grouped alert: grouping key
 
 
 class PaginatedAlerts(BaseModel):
@@ -51,6 +53,11 @@ class AlertDetail(BaseModel):
     actioned_at: Optional[str] = None
     action_note: Optional[str] = None
     created_at: str
+    issue_key: Optional[str] = None
+    affected_devices: Optional[list] = None  # grouped alert: list of device dicts
+    device_count: Optional[int] = None
+    risk_description: Optional[str] = None
+    remediation: Optional[str] = None
 
 
 class IncidentDetail(BaseModel):
@@ -92,13 +99,27 @@ class ExportResponse(BaseModel):
 
 
 def _parse_alert_row(row: aiosqlite.Row) -> AlertDetail:
+    import json as _json
+
     detail = row["detail"]
     if isinstance(detail, str):
-        import json
         try:
-            detail = json.loads(detail)
-        except (json.JSONDecodeError, TypeError):
+            detail = _json.loads(detail)
+        except (_json.JSONDecodeError, TypeError):
             pass
+
+    keys = row.keys()
+
+    # Parse affected_devices JSON column
+    affected_devices = None
+    if "affected_devices" in keys and row["affected_devices"]:
+        raw = row["affected_devices"]
+        if isinstance(raw, str):
+            try:
+                parsed = _json.loads(raw)
+                affected_devices = parsed if isinstance(parsed, list) else None
+            except (_json.JSONDecodeError, TypeError):
+                pass
 
     return AlertDetail(
         id=row["id"],
@@ -113,8 +134,13 @@ def _parse_alert_row(row: aiosqlite.Row) -> AlertDetail:
         decoy_id=row["decoy_id"],
         read_at=row["read_at"],
         actioned_at=row["actioned_at"],
-        action_note=row["action_note"] if "action_note" in row.keys() else None,
+        action_note=row["action_note"] if "action_note" in keys else None,
         created_at=row["created_at"],
+        issue_key=row["issue_key"] if "issue_key" in keys else None,
+        affected_devices=affected_devices,
+        device_count=row["device_count"] if "device_count" in keys else None,
+        risk_description=row["risk_description"] if "risk_description" in keys else None,
+        remediation=row["remediation"] if "remediation" in keys else None,
     )
 
 
@@ -211,6 +237,7 @@ async def list_alerts(
 
     items = []
     for row in rows:
+        keys = row.keys()
         items.append(
             AlertSummary(
                 id=row["id"],
@@ -223,6 +250,8 @@ async def list_alerts(
                 actioned_at=row["actioned_at"],
                 created_at=row["created_at"],
                 alert_count=row["alert_count"],
+                device_count=row["device_count"] if "device_count" in keys else None,
+                issue_key=row["issue_key"] if "issue_key" in keys else None,
             )
         )
 

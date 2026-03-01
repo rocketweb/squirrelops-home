@@ -195,6 +195,71 @@ async def seed_incidents(db):
     return incident_id, alert_ids
 
 
+async def seed_grouped_alerts(db, count=2):
+    """Insert test grouped alerts (security.port_risk with issue_key) into the database.
+
+    Returns list of alert IDs.
+    """
+    ids = []
+    configs = [
+        {
+            "issue_key": "port_risk:ssh:22",
+            "title": "SSH open on 3 devices",
+            "severity": "medium",
+            "device_count": 3,
+            "affected_devices": json.dumps([
+                {"device_id": 1, "ip_address": "192.168.1.101",
+                 "mac_address": "AA:BB:CC:DD:EE:01", "display_name": "Speaker 1", "port": 22},
+                {"device_id": 2, "ip_address": "192.168.1.102",
+                 "mac_address": "AA:BB:CC:DD:EE:02", "display_name": "Camera 1", "port": 22},
+                {"device_id": 3, "ip_address": "192.168.1.103",
+                 "mac_address": "AA:BB:CC:DD:EE:03", "display_name": "Thermostat", "port": 22},
+            ]),
+            "risk_description": "SSH on IoT devices often uses default credentials.",
+            "remediation": "Disable SSH or change default password.",
+        },
+        {
+            "issue_key": "port_risk:telnet:23",
+            "title": "Telnet open on 2 devices",
+            "severity": "high",
+            "device_count": 2,
+            "affected_devices": json.dumps([
+                {"device_id": 4, "ip_address": "192.168.1.104",
+                 "mac_address": "AA:BB:CC:DD:EE:04", "display_name": "Printer", "port": 23},
+                {"device_id": 5, "ip_address": "192.168.1.105",
+                 "mac_address": "AA:BB:CC:DD:EE:05", "display_name": "Hub", "port": 23},
+            ]),
+            "risk_description": "Telnet transmits all data in plaintext.",
+            "remediation": "Disable Telnet and use SSH instead.",
+        },
+    ]
+    for i in range(min(count, len(configs))):
+        cfg = configs[i]
+        cursor = await db.execute(
+            """INSERT INTO home_alerts (alert_type, severity, title, detail,
+               issue_key, affected_devices, device_count,
+               risk_description, remediation, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "security.port_risk",
+                cfg["severity"],
+                cfg["title"],
+                json.dumps({"port": 22 if i == 0 else 23,
+                            "service_name": "SSH" if i == 0 else "Telnet",
+                            "issue_key": cfg["issue_key"]}),
+                cfg["issue_key"],
+                cfg["affected_devices"],
+                cfg["device_count"],
+                cfg["risk_description"],
+                cfg["remediation"],
+                f"2026-02-22T{i + 1:02d}:00:00Z",
+            ),
+        )
+        ids.append(cursor.lastrowid)
+    await db.commit()
+    return ids
+
+
 async def seed_pairing(db):
     """Insert a test pairing record. Returns pairing ID."""
     cursor = await db.execute(

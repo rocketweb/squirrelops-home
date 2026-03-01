@@ -9,7 +9,9 @@ struct AlertFeedView: View {
     @State private var searchText: String = ""
     @State private var severityFilter: String? = nil
     @State private var selectedIncident: IncidentDetail?
+    @State private var selectedAlertDetail: AlertDetail?
     @State private var isLoadingIncident = false
+    @State private var isLoadingAlertDetail = false
     @State private var incidentError: String?
     @State private var showExportPopover = false
     @State private var exportDateFrom: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date())!
@@ -20,6 +22,7 @@ struct AlertFeedView: View {
     @State private var filterDateTo: Date? = nil
     @State private var showDateFilter = false
     @State private var selectedAlertId: Int?
+    @State private var showDismissed = false
 
     // MARK: - Severity filter options
 
@@ -47,6 +50,10 @@ struct AlertFeedView: View {
 
         return appState.alerts
             .filter { alert in
+                // Active/dismissed filter: hide read alerts unless "Show History" is on
+                if !showDismissed && alert.readAt != nil {
+                    return false
+                }
                 // Severity filter
                 if let filter = severityFilter, alert.severity != filter {
                     return false
@@ -93,18 +100,20 @@ struct AlertFeedView: View {
                 emptyState
             } else {
                 List(filteredAlerts, selection: $selectedAlertId) { alert in
-                    AlertRow(alert: alert)
+                    AlertRow(alert: alert, onDismiss: alert.readAt == nil ? {
+                        dismissAlert(alert)
+                    } : nil)
                         .tag(alert.id)
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.visible)
                         .contextMenu {
                             if alert.readAt == nil {
-                                Button("Mark as Read") {
-                                    Task {
-                                        try? await appState.sensorClient?.request(.readAlert(id: alert.id))
-                                        appState.markAlertRead(alert.id)
-                                    }
+                                Button("Dismiss") {
+                                    dismissAlert(alert)
                                 }
+                            }
+                            Button(alert.issueKey != nil ? "View Details" : "Open") {
+                                selectedAlertId = alert.id
                             }
                         }
                 }
@@ -115,16 +124,10 @@ struct AlertFeedView: View {
                     else { return }
                     selectedAlertId = nil
 
-                    // Mark as read on click
-                    if alert.readAt == nil {
-                        appState.markAlertRead(alert.id)
-                        Task {
-                            try? await appState.sensorClient?.request(.readAlert(id: alert.id))
-                        }
-                    }
-
-                    // Open incident detail if available
-                    if alert.incidentId != nil {
+                    // Open detail view based on alert type
+                    if alert.issueKey != nil {
+                        openAlertDetail(alert)
+                    } else if alert.incidentId != nil {
                         openIncidentForAlert(alert)
                     }
                 }
@@ -134,9 +137,12 @@ struct AlertFeedView: View {
         .sheet(item: $selectedIncident) { incident in
             IncidentDetailView(incident: incident, appState: appState)
         }
+        .sheet(item: $selectedAlertDetail) { alertDetail in
+            AlertDetailView(alertDetail: alertDetail, appState: appState)
+        }
         .overlay {
-            if isLoadingIncident {
-                ProgressView("Loading incident...")
+            if isLoadingIncident || isLoadingAlertDetail {
+                ProgressView(isLoadingAlertDetail ? "Loading alert..." : "Loading incident...")
                     .padding()
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
@@ -155,13 +161,47 @@ struct AlertFeedView: View {
 
                 Spacer()
 
+                // Show History toggle
+                Button {
+                    showDismissed.toggle()
+                } label: {
+                    HStack(spacing: Spacing.xs) {
+                        Image(systemName: showDismissed ? "clock.arrow.circlepath" : "clock")
+                        Text(showDismissed ? "Active Only" : "History")
+                            .font(Typography.bodySmall)
+                    }
+                    .foregroundStyle(
+                        showDismissed
+                            ? Theme.textPrimary(colorScheme)
+                            : Theme.textSecondary(colorScheme)
+                    )
+                    .padding(.horizontal, Spacing.s12)
+                    .padding(.vertical, Spacing.xs)
+                    .background(
+                        showDismissed
+                            ? Theme.backgroundTertiary(colorScheme)
+                            : Color.clear
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Spacing.radiusFull)
+                            .stroke(
+                                showDismissed
+                                    ? Theme.borderDefault(colorScheme)
+                                    : Theme.borderSubtle(colorScheme),
+                                lineWidth: 1
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+
                 if appState.alerts.contains(where: { $0.readAt == nil }) {
                     Button {
-                        markAllRead()
+                        dismissAll()
                     } label: {
                         HStack(spacing: Spacing.xs) {
                             Image(systemName: "checkmark.circle")
-                            Text("Mark All Read")
+                            Text("Dismiss All")
                                 .font(Typography.bodySmall)
                         }
                         .foregroundStyle(Theme.textSecondary(colorScheme))
@@ -376,13 +416,23 @@ struct AlertFeedView: View {
 
     private var emptyState: some View {
         VStack(spacing: Spacing.md) {
-            Image(systemName: "bell.slash")
+            Image(systemName: !showDismissed && appState.alerts.contains(where: { $0.readAt != nil })
+                  ? "checkmark.circle" : "bell.slash")
                 .font(.system(size: 40))
                 .foregroundStyle(Theme.textTertiary(colorScheme))
 
             Text(emptyStateMessage)
                 .font(Typography.body)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
+
+            if !showDismissed && appState.alerts.contains(where: { $0.readAt != nil }) {
+                Button("Show History") {
+                    showDismissed = true
+                }
+                .buttonStyle(.plain)
+                .font(Typography.bodySmall)
+                .foregroundStyle(Theme.accentDefault(colorScheme))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -392,6 +442,8 @@ struct AlertFeedView: View {
             return "No alerts match \"\(searchText)\""
         } else if severityFilter != nil || typeFilter != nil || showDateFilter {
             return "No alerts match the current filters"
+        } else if !showDismissed && appState.alerts.contains(where: { $0.readAt != nil }) {
+            return "All alerts dismissed"
         } else {
             return "No alerts yet"
         }
@@ -457,7 +509,14 @@ struct AlertFeedView: View {
 
     // MARK: - Actions
 
-    private func markAllRead() {
+    private func dismissAlert(_ alert: AlertSummary) {
+        appState.markAlertRead(alert.id)
+        Task {
+            try? await appState.sensorClient?.request(.readAlert(id: alert.id))
+        }
+    }
+
+    private func dismissAll() {
         let unread = appState.alerts.filter { $0.readAt == nil }
         for alert in unread {
             appState.markAlertRead(alert.id)
@@ -470,6 +529,23 @@ struct AlertFeedView: View {
     }
 
     // MARK: - Navigation
+
+    private func openAlertDetail(_ alert: AlertSummary) {
+        isLoadingAlertDetail = true
+        Task {
+            do {
+                let detail: AlertDetail = try await appState.sensorClient!.request(.alert(id: alert.id))
+                await MainActor.run {
+                    selectedAlertDetail = detail
+                    isLoadingAlertDetail = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingAlertDetail = false
+                }
+            }
+        }
+    }
 
     private func openIncidentForAlert(_ alert: AlertSummary) {
         guard let incidentId = alert.incidentId else { return }

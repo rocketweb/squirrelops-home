@@ -178,6 +178,43 @@ def _collect_env_overrides() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Flat → nested key migration
+# ---------------------------------------------------------------------------
+
+# Maps legacy flat config keys (from data/config.yaml written by PUT /config)
+# to their nested equivalents in the Settings model.  Without this mapping
+# the flat keys are silently ignored by Pydantic, so e.g. a top-level
+# ``subnet: 192.168.1.0/24`` never reaches ``NetworkConfig.subnet``.
+_FLAT_KEY_MAP: dict[str, tuple[str, str]] = {
+    "subnet": ("network", "subnet"),
+    "scan_interval_seconds": ("network", "scan_interval"),
+    "max_decoys": ("decoys", "max_decoys"),
+    "sensor_name": ("sensor", "name"),
+}
+
+
+def _normalize_flat_keys(data: dict[str, Any]) -> dict[str, Any]:
+    """Migrate known flat config keys into their nested model paths.
+
+    Flat keys take precedence over existing nested defaults when present,
+    because the persisted config represents explicit user overrides.
+    After migration the flat key is removed from the top level.
+    """
+    for flat_key, (section, nested_key) in _FLAT_KEY_MAP.items():
+        if flat_key not in data:
+            continue
+        value = data.pop(flat_key)
+        # Only apply if the nested section doesn't already have an explicit
+        # user-provided value (i.e. it's still at the default).  If the user
+        # provided BOTH flat and nested, the nested value wins.
+        section_dict = data.setdefault(section, {})
+        if isinstance(section_dict, dict):
+            # Set the nested value — this overrides the default
+            section_dict[nested_key] = value
+    return data
+
+
+# ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
 
@@ -217,6 +254,10 @@ def load_settings(
                 persisted_data = yaml.safe_load(fh)
             if isinstance(persisted_data, dict):
                 base = _deep_merge(base, persisted_data)
+
+    # Migrate flat keys written by older versions of PUT /config into
+    # the nested structure expected by the Settings model.
+    _normalize_flat_keys(base)
 
     # Layer 4: environment variable overrides
     env_overrides = _collect_env_overrides()

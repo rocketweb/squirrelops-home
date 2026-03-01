@@ -45,8 +45,12 @@ struct CriticalAlertModal: View {
                         .foregroundStyle(Theme.textPrimary(colorScheme))
                         .multilineTextAlignment(.center)
 
-                    // Source IP
-                    if let sourceIp = alert.sourceIp {
+                    // Source info: device count for grouped, IP for single
+                    if alert.issueKey != nil, let count = alert.deviceCount, count > 0 {
+                        Text("Affecting \(count) device\(count == 1 ? "" : "s")")
+                            .font(Typography.body)
+                            .foregroundStyle(Theme.textSecondary(colorScheme))
+                    } else if let sourceIp = alert.sourceIp {
                         Text(sourceIp)
                             .font(Typography.mono)
                             .tracking(Typography.monoTracking)
@@ -74,7 +78,7 @@ struct CriticalAlertModal: View {
                         Button {
                             acknowledgeAll()
                         } label: {
-                            Text(remaining > 1 ? "Dismiss All (\(remaining))" : "Acknowledge")
+                            Text(remaining > 1 ? "Dismiss All (\(remaining))" : "Dismiss")
                                 .font(Typography.body)
                                 .foregroundStyle(.white)
                                 .frame(minWidth: 200)

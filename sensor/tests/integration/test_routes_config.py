@@ -53,7 +53,8 @@ class TestUpdateConfig:
         client.put("/config", json={"subnet": "10.0.0.0/24"})
         response = client.get("/config")
         data = response.json()
-        assert data["subnet"] == "10.0.0.0/24"
+        # Flat "subnet" key gets mapped to nested network.subnet
+        assert data["network"]["subnet"] == "10.0.0.0/24"
 
     def test_update_preserves_unspecified_fields(self, client, sensor_config):
         client.put("/config", json={"subnet": "10.0.0.0/24"})
@@ -69,8 +70,9 @@ class TestUpdateConfig:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["subnet"] == "10.0.0.0/24"
-        assert data["scan_interval_seconds"] == 120
+        # Flat keys get mapped to their nested model paths
+        assert data["network"]["subnet"] == "10.0.0.0/24"
+        assert data["network"]["scan_interval"] == 120
 
     def test_update_nested_field(self, client):
         response = client.put(

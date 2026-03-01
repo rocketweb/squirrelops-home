@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import platform
 import socket
 import subprocess
 import sys
@@ -123,6 +124,30 @@ def _get_local_ip() -> str:
         return "127.0.0.1"
 
 
+def _get_mdns_hostname() -> str:
+    """Return the machine's mDNS hostname (e.g. ``matts-Mac-Studio.local.``).
+
+    On macOS, uses ``scutil --get LocalHostName`` which returns the Bonjour
+    name.  On Linux, falls back to the short hostname.  The result always
+    ends with ``.local.`` so it can be used as the SRV target in DNS-SD.
+    """
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["scutil", "--get", "LocalHostName"],
+                capture_output=True, text=True, timeout=5,
+            )
+            name = result.stdout.strip()
+            if name:
+                return f"{name}.local."
+        except Exception:
+            pass
+
+    # Fallback: short hostname
+    name = socket.gethostname().split(".")[0]
+    return f"{name}.local."
+
+
 class ServiceAdvertiser:
     """Advertise the sensor over mDNS/DNS-SD.
 
@@ -145,9 +170,11 @@ class ServiceAdvertiser:
     async def start(self) -> None:
         """Register the service on the local network."""
         ip = _get_local_ip()
+        server = _get_mdns_hostname()
         self._info = ServiceInfo(
             type_=self.service_type,
             name=f"{self.name}.{self.service_type}",
+            server=server,
             addresses=[socket.inet_aton(ip)],
             port=self.port,
             properties={"name": self.name},
@@ -155,7 +182,7 @@ class ServiceAdvertiser:
         self._zeroconf = AsyncZeroconf()
         try:
             await self._zeroconf.async_register_service(self._info)
-            logger.info("mDNS: advertising %s on %s:%d", self.name, ip, self.port)
+            logger.info("mDNS: advertising %s on %s:%d (server=%s)", self.name, ip, self.port, server)
         except Exception as exc:
             logger.warning("mDNS: failed to register service (%s) — sensor will run without mDNS discovery", exc)
             await self._zeroconf.async_close()

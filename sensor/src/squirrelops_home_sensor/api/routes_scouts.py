@@ -233,12 +233,20 @@ async def deploy_mimics(
     _auth: dict = Depends(verify_client_cert),
 ):
     """Manually trigger evaluate_and_deploy."""
+    from squirrelops_home_sensor.scouts.orchestrator import HelperUnavailableError
+
     if orchestrator is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Mimic orchestrator not enabled",
         )
-    count = await orchestrator.evaluate_and_deploy()
+    try:
+        count = await orchestrator.evaluate_and_deploy()
+    except HelperUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
     return {"deployed": count}
 
 

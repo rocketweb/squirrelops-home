@@ -134,9 +134,9 @@ async def list_decoys(
     db: aiosqlite.Connection = Depends(get_db),
     _auth: dict = Depends(verify_client_cert),
 ):
-    """List all decoys with status and connection counts."""
+    """List all decoys (including mimics) with status and connection counts."""
     cursor = await db.execute(
-        "SELECT * FROM decoys WHERE decoy_type != 'mimic' ORDER BY created_at"
+        "SELECT * FROM decoys ORDER BY created_at"
     )
     rows = await cursor.fetchall()
 

@@ -131,6 +131,10 @@ class VirtualIPManager:
         """Currently active virtual IPs (for scan loop exclusion)."""
         return set(self._active)
 
+    async def is_available(self) -> bool:
+        """Check if the privileged backend is available for IP alias operations."""
+        return await self._ops.is_available()
+
     async def add_alias(self, ip: str) -> bool:
         """Add a virtual IP alias and persist to database."""
         ok = await self._ops.add_ip_alias(ip, interface=self._interface)

@@ -32,6 +32,10 @@ from squirrelops_home_sensor.scouts.templates import MimicTemplate, MimicTemplat
 logger = logging.getLogger("squirrelops_home_sensor.scouts")
 
 
+class HelperUnavailableError(Exception):
+    """Raised when the privileged helper is not available for virtual IP operations."""
+
+
 class MimicOrchestrator:
     """Manages the full mimic lifecycle: scout -> template -> deploy.
 
@@ -86,19 +90,31 @@ class MimicOrchestrator:
         """After scouting, pick best candidates and deploy mimics.
 
         Returns the number of new mimics deployed.
+
+        Raises
+        ------
+        HelperUnavailableError:
+            If the privileged helper is not available for virtual IP operations.
         """
         if self._max_mimics <= 0:
             return 0
 
+        # Check helper availability before attempting any deployment
+        if not await self._ip_manager.is_available():
+            raise HelperUnavailableError(
+                "Privileged helper is not running — cannot create virtual IPs for "
+                "mimic decoys. Install and start the SquirrelOps Helper."
+            )
+
         slots = self._max_mimics - len(self._active_mimics)
         if slots <= 0:
-            logger.debug("Max mimics reached (%d), skipping deploy", self._max_mimics)
+            logger.info("Max mimics reached (%d), skipping deploy", self._max_mimics)
             return 0
 
         # Get best candidates from scout data
         candidates = await self._engine.get_mimic_candidates(count=slots)
         if not candidates:
-            logger.debug("No mimic candidates available")
+            logger.info("No mimic candidates — run scouts first to discover services")
             return 0
 
         # Group profiles by device
@@ -115,8 +131,13 @@ class MimicOrchestrator:
         }
 
         if not new_devices:
-            logger.debug("All candidate devices already mimicked")
+            logger.info("All %d candidate devices already have active mimics", len(device_profiles))
             return 0
+
+        logger.info(
+            "Deploying mimics for %d devices (%d candidates, %d already mimicked)",
+            len(new_devices), len(device_profiles), len(mimicked_devices),
+        )
 
         deployed = 0
         for device_id, profiles in new_devices.items():
@@ -132,6 +153,11 @@ class MimicOrchestrator:
 
         if deployed > 0:
             logger.info("Deployed %d new mimic decoys", deployed)
+        else:
+            logger.warning(
+                "Attempted to deploy mimics for %d devices but all failed",
+                len(new_devices),
+            )
         return deployed
 
     async def _deploy_mimic_for_device(
@@ -145,6 +171,7 @@ class MimicOrchestrator:
         )
         device_row = await cursor.fetchone()
         if not device_row:
+            logger.warning("Device %d not found in database, skipping mimic deploy", device_id)
             return False
 
         device_type = device_row["device_type"]
@@ -153,7 +180,7 @@ class MimicOrchestrator:
         # Generate template
         template = self._template_gen.generate(profiles, device_type, hostname)
         if not template.routes and not any(p.protocol_version for p in profiles):
-            logger.debug("No HTTP routes or banners for device %d, skipping", device_id)
+            logger.info("No HTTP routes or banners for device %d, skipping mimic", device_id)
             return False
 
         # Allocate virtual IP
@@ -167,6 +194,10 @@ class MimicOrchestrator:
         ok = await self._ip_manager.add_alias(virtual_ip)
         if not ok:
             self._ip_manager._allocator.release(virtual_ip)
+            logger.warning(
+                "Failed to create virtual IP %s for device %d — helper may be unavailable",
+                virtual_ip, device_id,
+            )
             return False
 
         # Generate credentials
@@ -370,7 +401,7 @@ class MimicOrchestrator:
         cursor = await self._db.execute(
             """SELECT DISTINCT mt.source_device_id
                FROM mimic_templates mt
-               JOIN decoys d ON d.config LIKE '%' || mt.id || '%'
+               JOIN decoys d ON CAST(json_extract(d.config, '$.template_id') AS INTEGER) = mt.id
                WHERE d.status = 'active' AND d.decoy_type = 'mimic'"""
         )
         rows = await cursor.fetchall()
@@ -410,6 +441,9 @@ class MimicOrchestrator:
                 await self._ip_manager.remove_alias(bind_address)
 
             # Delete related records
+            config = json.loads(row["config"]) if row["config"] else {}
+            template_id = config.get("template_id")
+
             await self._db.execute(
                 "DELETE FROM planted_credentials WHERE decoy_id = ?", (decoy_id,),
             )
@@ -418,6 +452,17 @@ class MimicOrchestrator:
             )
             await self._db.execute(
                 "DELETE FROM decoys WHERE id = ?", (decoy_id,),
+            )
+            # Clean up the orphaned mimic template
+            if template_id is not None:
+                await self._db.execute(
+                    "DELETE FROM mimic_templates WHERE id = ?", (template_id,),
+                )
+            # Clean up stale events for this decoy from the replay log
+            await self._db.execute(
+                "DELETE FROM events WHERE event_type = 'decoy.status_changed' "
+                "AND json_extract(payload, '$.id') = ?",
+                (decoy_id,),
             )
             await self._db.commit()
 
@@ -594,7 +639,11 @@ class MimicOrchestrator:
                 return
 
     async def resume_active(self) -> int:
-        """Resume mimic decoys from DB on startup."""
+        """Resume mimic decoys from DB on startup.
+
+        Ensures virtual IP aliases exist before starting each mimic.
+        Mimics whose virtual IPs cannot be restored are marked as stopped.
+        """
         cursor = await self._db.execute(
             "SELECT * FROM decoys WHERE status = 'active' AND decoy_type = 'mimic'"
         )
@@ -602,11 +651,33 @@ class MimicOrchestrator:
         if not rows:
             return 0
 
+        logger.info("Found %d mimic decoys to resume", len(rows))
+
         resumed = 0
         for row in rows:
             try:
                 decoy_id = row["id"]
                 bind_address = row["bind_address"]
+
+                # Ensure virtual IP alias is active before starting the mimic.
+                # The alias may have been released during a non-graceful shutdown
+                # even though the decoy record persisted.
+                if bind_address not in self._ip_manager.active_ips:
+                    ok = await self._ip_manager.add_alias(bind_address)
+                    if not ok:
+                        logger.warning(
+                            "Cannot restore virtual IP %s for mimic '%s' (id=%d) — "
+                            "marking as stopped",
+                            bind_address, row["name"], decoy_id,
+                        )
+                        now = datetime.now(timezone.utc).isoformat()
+                        await self._db.execute(
+                            "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
+                            (now, decoy_id),
+                        )
+                        await self._db.commit()
+                        continue
+                    self._ip_manager._allocator.mark_allocated(bind_address)
 
                 # Load template
                 config = json.loads(row["config"]) if row["config"] else {}
@@ -726,6 +797,12 @@ class MimicOrchestrator:
 
         if resumed:
             logger.info("Resumed %d mimic decoys", resumed)
+        elif rows:
+            logger.warning(
+                "Found %d mimic decoys in DB but could not resume any — "
+                "check helper status and virtual IP availability",
+                len(rows),
+            )
         return resumed
 
     async def stop_all(self) -> None:

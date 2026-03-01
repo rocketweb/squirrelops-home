@@ -43,6 +43,22 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         self._request_id = 0
         self._rpc_timeout = rpc_timeout
 
+    async def is_available(self) -> bool:
+        """Check whether the macOS helper socket exists and is connectable."""
+        import os
+
+        if not os.path.exists(self._socket_path):
+            return False
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(self._socket_path), timeout=2.0,
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except Exception:
+            return False
+
     async def _call(self, method: str, params: dict[str, Any] | None = None) -> Any:
         """Send a JSON-RPC request to the helper and return the result.
 

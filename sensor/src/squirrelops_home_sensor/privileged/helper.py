@@ -15,7 +15,7 @@ import asyncio
 import sys
 import logging
 import socket
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,6 +48,13 @@ class PrivilegedOperations(ABC):
     Implementations provide either direct access (Linux/Docker) or
     delegation to a privileged helper process (macOS).
     """
+
+    async def is_available(self) -> bool:
+        """Check whether privileged operations are available.
+
+        Returns True by default. macOS implementation checks the helper socket.
+        """
+        return True
 
     @abstractmethod
     async def arp_scan(self, subnet: str) -> list[tuple[str, str]]:

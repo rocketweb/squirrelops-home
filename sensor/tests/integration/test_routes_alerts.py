@@ -5,7 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.integration.conftest import seed_alerts, seed_incidents
+from tests.integration.conftest import seed_alerts, seed_grouped_alerts, seed_incidents
 
 
 class TestListAlerts:
@@ -265,3 +265,109 @@ class TestExportAlerts:
         response = client.get("/alerts/export")
         data = response.json()
         assert data["alerts"] == []
+
+
+class TestGroupedAlerts:
+    """Tests for grouped alerts (security.port_risk with issue_key)."""
+
+    def test_list_returns_device_count_on_grouped_alerts(self, client, db):
+        """GET /alerts should include device_count for grouped alerts."""
+        asyncio.get_event_loop().run_until_complete(seed_grouped_alerts(db, count=1))
+        response = client.get("/alerts")
+        data = response.json()
+        assert data["total"] == 1
+        item = data["items"][0]
+        assert item["device_count"] == 3
+        assert item["issue_key"] == "port_risk:ssh:22"
+
+    def test_list_returns_issue_key_on_grouped_alerts(self, client, db):
+        """GET /alerts should include issue_key for grouped alerts."""
+        asyncio.get_event_loop().run_until_complete(seed_grouped_alerts(db, count=2))
+        response = client.get("/alerts")
+        data = response.json()
+        issue_keys = {item["issue_key"] for item in data["items"] if item.get("issue_key")}
+        assert "port_risk:ssh:22" in issue_keys
+        assert "port_risk:telnet:23" in issue_keys
+
+    def test_list_non_grouped_alerts_have_null_issue_key(self, client, db):
+        """Non-grouped alerts should have issue_key = None (device_count defaults to 1)."""
+        asyncio.get_event_loop().run_until_complete(seed_alerts(db, count=1))
+        response = client.get("/alerts")
+        data = response.json()
+        item = data["items"][0]
+        assert item.get("issue_key") is None
+
+    def test_get_grouped_alert_returns_full_detail(self, client, db):
+        """GET /alerts/{id} for a grouped alert should return all grouped fields."""
+        alert_ids = asyncio.get_event_loop().run_until_complete(
+            seed_grouped_alerts(db, count=1)
+        )
+        response = client.get(f"/alerts/{alert_ids[0]}")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Core grouped fields
+        assert data["issue_key"] == "port_risk:ssh:22"
+        assert data["device_count"] == 3
+        assert data["risk_description"] is not None
+        assert "default credentials" in data["risk_description"]
+        assert data["remediation"] is not None
+        assert "Disable SSH" in data["remediation"]
+
+        # Affected devices list
+        assert data["affected_devices"] is not None
+        assert len(data["affected_devices"]) == 3
+        device_ids = {d["device_id"] for d in data["affected_devices"]}
+        assert device_ids == {1, 2, 3}
+        # Verify device fields
+        first_device = data["affected_devices"][0]
+        assert "ip_address" in first_device
+        assert "mac_address" in first_device
+        assert "display_name" in first_device
+        assert "port" in first_device
+
+    def test_get_non_grouped_alert_has_null_grouped_fields(self, client, db):
+        """GET /alerts/{id} for a non-grouped alert should have null grouped fields."""
+        alert_ids = asyncio.get_event_loop().run_until_complete(seed_alerts(db, count=1))
+        response = client.get(f"/alerts/{alert_ids[0]}")
+        data = response.json()
+        assert data.get("issue_key") is None
+        assert data.get("affected_devices") is None
+        assert data.get("risk_description") is None
+        assert data.get("remediation") is None
+
+    def test_mark_grouped_alert_read(self, client, db):
+        """PUT /alerts/{id}/read should work on grouped alerts."""
+        alert_ids = asyncio.get_event_loop().run_until_complete(
+            seed_grouped_alerts(db, count=1)
+        )
+        response = client.put(f"/alerts/{alert_ids[0]}/read")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["read_at"] is not None
+
+    def test_mark_grouped_alert_actioned(self, client, db):
+        """PUT /alerts/{id}/action should work on grouped alerts."""
+        alert_ids = asyncio.get_event_loop().run_until_complete(
+            seed_grouped_alerts(db, count=1)
+        )
+        response = client.put(
+            f"/alerts/{alert_ids[0]}/action",
+            json={"note": "SSH is intentional on these devices"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["actioned_at"] is not None
+        assert data["action_note"] == "SSH is intentional on these devices"
+
+    def test_mixed_grouped_and_regular_alerts_in_list(self, client, db):
+        """GET /alerts should correctly handle a mix of grouped and regular alerts."""
+        asyncio.get_event_loop().run_until_complete(seed_grouped_alerts(db, count=2))
+        asyncio.get_event_loop().run_until_complete(seed_alerts(db, count=2))
+        response = client.get("/alerts")
+        data = response.json()
+        assert data["total"] == 4
+        grouped = [i for i in data["items"] if i.get("issue_key") is not None]
+        regular = [i for i in data["items"] if i.get("issue_key") is None]
+        assert len(grouped) == 2
+        assert len(regular) == 2

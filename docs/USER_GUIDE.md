@@ -107,28 +107,87 @@ The sensor starts automatically on login and restarts if it crashes.
 | Python venv | `~/.squirrelops/sensor/venv/` |
 | launchd plist | `~/Library/LaunchAgents/com.squirrelops.sensor.plist` |
 
+### Privileged Helper (required for macOS)
+
+On macOS, ARP network scanning, virtual IP aliases, and port forwarding require root privileges. Rather than running the entire sensor as root, these operations are handled by a lightweight privileged helper daemon (`com.squirrelops.helper`) that runs in the background.
+
+**If you install via the .pkg installer (recommended):** The helper is bundled inside the macOS app. On first launch, the app prompts for your admin password and installs the helper automatically via macOS system services. It persists across reboots.
+
+**If you install the sensor standalone (Path B):** You also need the macOS app (Path C below) to install the helper. Without it, the sensor can start but cannot perform ARP scans (no device discovery), deploy mimic decoys, or set up port forwarding.
+
+**Helper file locations:**
+
+| Item | Path |
+|------|------|
+| Binary | `/Library/PrivilegedHelperTools/com.squirrelops.helper` |
+| Launchd plist | `/Library/LaunchDaemons/com.squirrelops.helper.plist` |
+| Socket | `/var/run/squirrelops-helper.sock` |
+| Logs | `/var/log/com.squirrelops.helper.log` |
+
 ### Path C: macOS App (control plane)
 
-Download the macOS app from [GitHub Releases](https://github.com/rocketweb/squirrelops-home/releases). On first launch, the app will guide you through setup.
+Download the macOS app from [GitHub Releases](https://github.com/rocketweb/squirrelops-home/releases). On first launch, the app will:
 
-If you installed the sensor locally on the same Mac (Path B), the app connects via localhost automatically — no pairing required.
+1. Prompt for your admin password to install the privileged helper
+2. Guide you through sensor pairing (see [Finding Your Pairing Code](#finding-your-pairing-code) below)
 
 ---
 
 ## Initial Setup
 
-### Pairing with a Remote Sensor
+### Pairing Your Sensor
 
-When you run the sensor on a separate device (Path A), you need to pair it with the macOS app:
+Every sensor — whether on a remote device (Path A) or the same Mac (Path B) — must be paired with the macOS app before use. Pairing establishes a mutual TLS connection so all communication is encrypted and authenticated. You only need to do this once per sensor.
 
-1. Start the sensor on your Linux/NAS device using the install script
-2. Open the macOS app — it will show the setup flow
-3. Select **"Set up remote sensor"**
-4. The app discovers the sensor automatically via mDNS (`_squirrelops._tcp`)
-5. The sensor displays a **6-digit pairing code** in its terminal/logs
-6. Enter this code in the macOS app
+**The pairing flow:**
 
-After successful pairing, the app and sensor exchange TLS certificates. All subsequent communication is encrypted and authenticated — you won't need the pairing code again.
+1. Open the macOS app — it automatically discovers the sensor via mDNS on your local network
+2. The app shows the setup screen and asks for a **6-digit pairing code**
+3. Enter the code (see [Finding Your Pairing Code](#finding-your-pairing-code) below)
+4. The app and sensor exchange TLS certificates
+5. You're connected — you won't need the pairing code again
+
+### Finding Your Pairing Code
+
+When the sensor starts, it generates a 6-digit pairing code and displays it prominently. The code expires after **10 minutes** or **5 failed attempts**, then a new code is generated automatically.
+
+**Docker sensor (Path A):**
+
+The pairing code appears in the container logs as a large banner. View it with:
+
+```bash
+docker compose -f /opt/squirrelops/docker-compose.yml logs | grep "Pairing Code"
+```
+
+Or view the full banner by scrolling through recent logs:
+
+```bash
+docker compose -f /opt/squirrelops/docker-compose.yml logs --tail 50
+```
+
+**macOS native sensor (Path B):**
+
+The simplest way to retrieve the pairing code is to read it from a well-known file that the sensor writes at startup:
+
+```bash
+cat /tmp/squirrelops-pairing-code
+```
+
+Alternatively, use the built-in CLI command:
+
+```bash
+~/.squirrelops/sensor/venv/bin/python -m squirrelops_home_sensor --show-pairing-code
+```
+
+The code also appears in the sensor log file:
+
+```bash
+grep "Pairing Code" ~/.squirrelops/sensor/logs/squirrelops-sensor.log
+```
+
+**If the code has expired:** Simply restart the sensor to generate a new code. For Docker, use `docker compose restart`. For macOS, use `launchctl kickstart gui/$(id -u)/com.squirrelops.sensor`.
+
+After successful pairing, the app stores the sensor's TLS certificate in your macOS Keychain. All subsequent connections are authenticated automatically.
 
 ### Learning Mode (48 hours)
 
@@ -240,7 +299,7 @@ Click **Edit** in the device detail view to change:
 
 ### Decoy Grid
 
-The **Decoys** tab shows a card grid of all deployed decoys. Each card displays:
+The **Decoys** tab shows a card grid of **all** deployed deception — both traditional honeypot decoys and mimic decoys from Squirrel Scouts. Each card displays:
 
 - Decoy name and type icon
 - Bind address and port
@@ -255,8 +314,9 @@ The **Decoys** tab shows a card grid of all deployed decoys. Each card displays:
 | Dev Server | `</>` | Fake development server (Express, Next.js, Flask) |
 | Home Assistant | House | Fake Home Assistant login page and API |
 | File Share | Folder | Fake SMB/AFP share with planted credentials |
+| Mimic | Device-specific | Cloned from a real device via Squirrel Scouts — responds with realistic service fingerprints on a virtual IP |
 
-Decoys are automatically selected based on what real services exist on your network. The sensor deploys complementary decoys — it won't duplicate services already present.
+Traditional honeypot decoys are automatically selected based on what real services exist on your network. The sensor deploys complementary decoys — it won't duplicate services already present. Mimic decoys are deployed by the Squirrel Scouts subsystem and appear in the grid alongside honeypots, giving you a single view of all deception deployed on your network.
 
 ### Decoy Status
 
@@ -353,7 +413,7 @@ The mimic system generates device-appropriate planted credentials:
 
 ### Alert Feed
 
-The **Alerts** tab shows a chronological feed of all alerts within the 90-day retention window.
+The **Alerts** tab shows a chronological feed of alerts within the 90-day retention window. By default, only **active (undismissed) alerts** are shown. Click the **History** toggle in the toolbar to include previously dismissed alerts.
 
 **Alert types:**
 
@@ -363,8 +423,21 @@ The **Alerts** tab shows a chronological feed of all alerts within the 90-day re
 | Rejected Device Reappearance | Critical | A device you flagged as unauthorized has returned |
 | Decoy Trip | High | Something connected to a decoy service |
 | New Device | High | An unknown device joined your network |
+| Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
 | Device Verification | Medium | A device reconnected with a different MAC but partial fingerprint match |
 | System (sensor offline, learning complete) | Medium/Low | Sensor status changes |
+
+### Grouped Security Alerts
+
+Security insight alerts are **grouped by issue type** rather than per-device. For example, if four devices on your network have SSH open, you'll see a single alert titled "SSH open on 4 devices" instead of four separate alerts. Each grouped alert includes:
+
+- **Risk description** — an explanation of why this is a security concern
+- **Remediation steps** — actionable guidance on how to fix the issue
+- **Affected devices list** — every device with the issue, showing name, IP address, port, and MAC address
+
+Grouped alerts update automatically: if a new device appears with the same issue, the existing alert's device count increases and the alert becomes active again (even if previously dismissed). If a device resolves the issue (port closed), it is removed from the group.
+
+Click any grouped alert to open its **Alert Detail View**, which shows the full risk description, remediation guidance, and a table of all affected devices.
 
 ### Filtering Alerts
 
@@ -374,12 +447,13 @@ The toolbar provides multiple filtering dimensions:
 - **Type chips** — All Types, Decoy Trip, New Device, MAC Changed, System
 - **Date Range** — Click the calendar button to filter by date range (From/To)
 - **Search** — Free-text search across alert titles, source IPs, and alert types
+- **History toggle** — Show or hide previously dismissed alerts
 
 All filters combine (AND logic). Active filters appear highlighted.
 
 ### Incidents
 
-Related alerts from the same source are grouped into **incidents**. Click any alert in the feed to open the incident detail view, which shows:
+Related alerts from the same source are grouped into **incidents**. Click any incident-type alert in the feed to open the incident detail view, which shows:
 
 - Incident ID, severity, and status (Active or Closed)
 - Source IP and MAC address
@@ -387,7 +461,7 @@ Related alerts from the same source are grouped into **incidents**. Click any al
 - Summary description
 - **Child alerts** — Expandable list of all alerts in the incident. Click any alert row to expand it and see full details: alert type, source IP/MAC, device ID, decoy ID, read/actioned timestamps, and any additional detail metadata
 
-Use **Mark All Read** to acknowledge all alerts in an incident at once.
+Use **Dismiss All** to acknowledge all alerts in an incident at once.
 
 ### Exporting Alerts
 
@@ -399,9 +473,18 @@ Click **Export** in the alert feed toolbar to save alerts as JSON:
 
 This is useful for preserving alert history beyond the 90-day retention window.
 
-### Acknowledging Alerts
+### Dismissing Alerts
 
-Right-click any alert in the feed to **Mark as Read**. The unread count badge on the Alerts sidebar item updates automatically.
+There are several ways to dismiss alerts:
+
+- **Hover dismiss** — Hover over any alert in the feed to reveal a dismiss button (×) on the right side
+- **Context menu** — Right-click any alert and select **Dismiss**
+- **Detail view** — Open a grouped alert's detail view and click the **Dismiss** button
+- **Bulk dismiss** — Click **Dismiss All** in the toolbar to dismiss all visible alerts at once
+
+Dismissed alerts are hidden from the default feed view but remain accessible via the **History** toggle. The unread count badge on the Alerts sidebar item updates automatically.
+
+Dismissing a grouped security alert is like saying "I've seen this, I know about it." If the situation changes — for example, a new device appears with the same risky port — the alert automatically becomes active again so you don't miss the change.
 
 ---
 
@@ -498,6 +581,28 @@ docker compose -f /opt/squirrelops/docker-compose.yml logs -f
 tail -f ~/.squirrelops/sensor/logs/squirrelops-sensor.log
 ```
 
+### Can't Find the Pairing Code
+
+**Symptoms:** The app is asking for a 6-digit code but you don't know where to find it.
+
+See [Finding Your Pairing Code](#finding-your-pairing-code) for detailed instructions. The quickest methods:
+
+- **Docker:** `docker compose -f /opt/squirrelops/docker-compose.yml logs | grep "Pairing Code"`
+- **macOS:** `cat /tmp/squirrelops-pairing-code`
+
+If neither works, the sensor may not be running. Check the sensor status first.
+
+### Pairing Code Expired
+
+**Symptoms:** The code was rejected even though you entered it correctly.
+
+The pairing code expires after 10 minutes or 5 failed attempts, then a new one is generated automatically. Restart the sensor to generate a fresh code:
+
+- **Docker:** `docker compose -f /opt/squirrelops/docker-compose.yml restart`
+- **macOS:** `launchctl kickstart gui/$(id -u)/com.squirrelops.sensor`
+
+Then retrieve the new code using the methods above.
+
 ### App Shows "Disconnected" (Gray Dot)
 
 **Symptoms:** Menu bar icon is gray, dashboard shows "Disconnected."
@@ -549,11 +654,24 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 2. If it degrades again, check the sensor logs for the underlying error
 3. The sensor also retries degraded decoys automatically every 30 minutes during health checks
 
+### Sensor Shows 0 Devices (macOS)
+
+**Symptoms:** Dashboard shows 0 devices, sensor logs show no ARP scan results.
+
+**Cause:** The privileged helper (`com.squirrelops.helper`) isn't running. On macOS, ARP scanning requires the helper daemon for raw socket access.
+
+**What to do:**
+1. Open the macOS app — it installs the helper automatically on first launch (prompts for admin password)
+2. Verify the helper is running: `sudo launchctl print system/com.squirrelops.helper`
+3. Check helper logs: `tail -f /var/log/com.squirrelops.helper.log`
+4. Restart the sensor after the helper is running
+
 ### Mimic Decoys Not Deploying
 
-**Symptoms:** The Virtual Network section in Squirrel Scouts is empty.
+**Symptoms:** The Virtual Network section in Squirrel Scouts is empty, or Deploy returns an error.
 
 **Possible causes:**
+- **Helper not running (macOS)** — Deploy returns a "Privileged helper is not running" error. The helper is required for creating virtual IP aliases. Open the macOS app to install it, or see the [helper documentation](#privileged-helper-required-for-macos) above.
 - **Scouts haven't run yet** — Click **Run Scout** to trigger a manual scout cycle, then click **Deploy**
 - **Profile is Lite** — Mimic decoys require Standard or Full profile. Switch profiles in Settings.
 - **No suitable candidates** — The scout engine needs devices with open HTTP ports or protocol banners to generate mimic templates. If all devices only have encrypted services, fewer mimics will be available.

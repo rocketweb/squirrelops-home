@@ -7,8 +7,12 @@ import logging
 import os
 import time
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Same well-known path used by __main__._display_pairing_code
+_PAIRING_CODE_FILE = Path("/tmp/squirrelops-pairing-code")
 
 import aiosqlite
 from cryptography import x509
@@ -68,6 +72,15 @@ class UnpairResponse(BaseModel):
 def _generate_code() -> str:
     """Generate a cryptographically random 6-digit code."""
     return f"{int.from_bytes(os.urandom(4), 'big') % 1000000:06d}"
+
+
+def _update_code_file(code: str) -> None:
+    """Write the current pairing code to the well-known file."""
+    try:
+        _PAIRING_CODE_FILE.write_text(code + "\n")
+        _PAIRING_CODE_FILE.chmod(0o600)
+    except OSError:
+        pass  # Non-critical; code is still in logs
 
 
 def _generate_ca(sensor_name: str) -> tuple[EllipticCurvePrivateKey, x509.Certificate]:
@@ -156,6 +169,7 @@ def _maybe_regenerate_code(ps: dict) -> None:
         ps["verified"] = False
         ps["shared_key"] = None
         logger.info("Pairing code regenerated: %s", ps["code"])
+        _update_code_file(ps["code"])
 
 
 # ---------- Routes (no auth except DELETE) ----------

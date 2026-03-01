@@ -15,6 +15,7 @@ public enum WSEventProcessor {
     private static var pendingDeviceUpdates: [DeviceSummary] = []
     private static var pendingOnlineChanges: [(id: Int, online: Bool)] = []
     private static var pendingAlerts: [AlertSummary] = []
+    private static var pendingAlertUpdates: [AlertSummary] = []
     private static var pendingDecoys: [DecoySummary] = []
     private static var pendingSystemStatus: StatusResponse?
     private static var flushTask: Task<Void, Never>?
@@ -45,6 +46,12 @@ public enum WSEventProcessor {
         case "alert.new":
             if let alert = decodeAlert(from: payload) {
                 pendingAlerts.append(alert)
+                scheduleFlush(into: state)
+            }
+
+        case "alert.updated":
+            if let alert = decodeAlert(from: payload) {
+                pendingAlertUpdates.append(alert)
                 scheduleFlush(into: state)
             }
 
@@ -88,18 +95,21 @@ public enum WSEventProcessor {
         let deviceUpdates = pendingDeviceUpdates
         let onlineChanges = pendingOnlineChanges
         let alerts = pendingAlerts
+        let alertUpdates = pendingAlertUpdates
         let decoys = pendingDecoys
         let systemStatus = pendingSystemStatus
 
         pendingDeviceUpdates.removeAll()
         pendingOnlineChanges.removeAll()
         pendingAlerts.removeAll()
+        pendingAlertUpdates.removeAll()
         pendingDecoys.removeAll()
         pendingSystemStatus = nil
         flushTask = nil
 
         let hasDeviceChanges = !deviceUpdates.isEmpty || !onlineChanges.isEmpty
-        let hasAny = hasDeviceChanges || !alerts.isEmpty || !decoys.isEmpty || systemStatus != nil
+        let hasAlertChanges = !alerts.isEmpty || !alertUpdates.isEmpty
+        let hasAny = hasDeviceChanges || hasAlertChanges || !decoys.isEmpty || systemStatus != nil
         guard hasAny else { return }
 
         // -- Devices --
@@ -131,11 +141,28 @@ public enum WSEventProcessor {
         }
 
         // -- Alerts --
-        if !alerts.isEmpty {
+        if hasAlertChanges {
             var current = state.alerts
-            for alert in alerts {
-                current.insert(alert, at: 0)
+
+            // Apply updates (in-place replacement of existing alerts)
+            for update in alertUpdates {
+                if let index = current.firstIndex(where: { $0.id == update.id }) {
+                    current[index] = update
+                } else {
+                    // Updated alert we haven't seen — insert at top
+                    current.insert(update, at: 0)
+                }
             }
+
+            // Insert new alerts at top (de-duplicate: if ID already exists, update in place)
+            for alert in alerts {
+                if let index = current.firstIndex(where: { $0.id == alert.id }) {
+                    current[index] = alert
+                } else {
+                    current.insert(alert, at: 0)
+                }
+            }
+
             state.alerts = current
         }
 
@@ -143,7 +170,10 @@ public enum WSEventProcessor {
         if !decoys.isEmpty {
             var current = state.decoys
             for decoy in decoys {
-                if let index = current.firstIndex(where: { $0.id == decoy.id }) {
+                if decoy.status == "removed" {
+                    // Decoy was deleted — remove from state
+                    current.removeAll(where: { $0.id == decoy.id })
+                } else if let index = current.firstIndex(where: { $0.id == decoy.id }) {
                     current[index] = decoy
                 } else {
                     current.append(decoy)

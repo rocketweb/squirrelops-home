@@ -110,13 +110,14 @@ Requires Swift 6.0 and macOS 14+ (Sonoma).
 
 ## Pairing
 
-The app discovers the sensor via mDNS (`_squirrelops._tcp`) and pairs using a 6-digit code displayed on the sensor. The pairing flow:
+The app discovers the sensor via mDNS (`_squirrelops._tcp`) and pairs using a 6-digit code. The pairing flow:
 
 1. App discovers sensor on the local network
-2. Sensor displays a pairing code
-3. App and sensor perform HKDF key derivation with challenge-response
-4. App generates a CSR, sensor issues a client certificate signed by its CA
-5. All subsequent communication uses mutual TLS
+2. Sensor generates a pairing code at startup — visible in logs and written to `/tmp/squirrelops-pairing-code` (use `--show-pairing-code` to retrieve)
+3. User enters the code in the app
+4. App and sensor perform HMAC-SHA256 challenge-response, then HKDF key derivation
+5. App generates a CSR, sensor issues a client certificate signed by its CA
+6. All subsequent communication uses mutual TLS — the code is never needed again
 
 ## Development
 
@@ -125,10 +126,10 @@ The app discovers the sensor via mDNS (`_squirrelops._tcp`) and pairs using a 6-
 ```bash
 # App (Swift 6, macOS 14+)
 cd app && swift build
-cd app && swift test           # 245 tests
+cd app && swift test
 
 # Sensor (Python 3.11+)
-cd sensor && uv run pytest     # 730 tests
+cd sensor && uv run pytest     # ~1258 tests
 
 # Docker
 docker compose -f sensor/docker-compose.yml build
@@ -137,8 +138,8 @@ docker compose -f sensor/docker-compose.yml build
 ### Project Structure
 
 ```
-app/          SwiftUI macOS app + privileged helper (53 Swift files)
-sensor/       Python sensor (86 source files, 40 test files)
+app/          SwiftUI macOS app + privileged helper (54 Swift files)
+sensor/       Python sensor (92 source files, 69 test files)
 relay/        APNs push notification relay (Vercel Edge Function)
 site/         Distribution site (get.squirrelops.io)
 scripts/      Install scripts and tooling
@@ -152,7 +153,7 @@ sensor/src/squirrelops_home_sensor/
 ├── alerts/        Alert dispatch, incident tracking, retention
 ├── api/           FastAPI routers (8 routers), WebSocket, DI
 ├── config/        YAML config with env var overrides
-├── db/            SQLite schema (v6, 18 tables), migrations
+├── db/            SQLite schema (v8, 19 tables), migrations
 ├── decoys/        Decoy orchestrator + types (dev_server, home_assistant, file_share, mimic)
 ├── devices/       Device manager, classifier, signatures, OUI
 ├── events/        Pub/sub event bus with audit log

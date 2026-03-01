@@ -6,11 +6,14 @@ migrations in order. Version 0 means no schema exists yet.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 import aiosqlite
 
 from squirrelops_home_sensor.db.schema import SCHEMA_V1_SQL, SCHEMA_VERSION
+
+logger = logging.getLogger(__name__)
 
 
 async def _get_current_version(db: aiosqlite.Connection) -> int:
@@ -196,6 +199,226 @@ async def _apply_v6(db: aiosqlite.Connection) -> None:
     await db.commit()
 
 
+async def _apply_v7(db: aiosqlite.Connection) -> None:
+    """V7: Deduplicate historical security alerts.
+
+    Before the security_insight_state dedup table was introduced (V4), the
+    analyzer created a new alert for every scan cycle that found the same open
+    port on the same device.  This migration removes those historical duplicates,
+    keeping only the latest alert per unique (device_id, alert_type, title)
+    combination.  Insight state entries already point to the latest alert so
+    they remain valid after the cleanup.
+    """
+    # Step 1: Count duplicates so we can log useful info
+    cursor = await db.execute("""
+        SELECT COUNT(*) FROM home_alerts
+        WHERE incident_id IS NULL
+        AND id NOT IN (
+            SELECT MAX(id) FROM home_alerts
+            WHERE incident_id IS NULL
+            GROUP BY device_id, alert_type, title
+        )
+    """)
+    row = await cursor.fetchone()
+    dup_count = row[0] if row else 0
+
+    if dup_count > 0:
+        # Step 2: Delete duplicate standalone alerts, keeping only the latest
+        await db.execute("""
+            DELETE FROM home_alerts
+            WHERE incident_id IS NULL
+            AND id NOT IN (
+                SELECT MAX(id) FROM home_alerts
+                WHERE incident_id IS NULL
+                GROUP BY device_id, alert_type, title
+            )
+        """)
+
+        # Step 3: Clean up any orphaned insight_state entries that may reference
+        # deleted alerts (shouldn't happen since we keep the MAX id, but be safe)
+        await db.execute("""
+            DELETE FROM security_insight_state
+            WHERE alert_id IS NOT NULL
+            AND alert_id NOT IN (SELECT id FROM home_alerts)
+        """)
+
+        logger.info(
+            "V7 migration: removed %d duplicate alerts, keeping latest per condition",
+            dup_count,
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+        (7, now),
+    )
+    await db.commit()
+
+
+async def _apply_v8(db: aiosqlite.Connection) -> None:
+    """V8: Alert grouping by issue type.
+
+    Adds columns for grouped alerts (issue_key, affected_devices, device_count,
+    risk_description, remediation) and consolidates existing per-device
+    security.port_risk alerts into one grouped alert per issue type.
+    """
+    import json
+
+    # -- Schema additions --
+    if not await _column_exists(db, "home_alerts", "issue_key"):
+        await db.execute("ALTER TABLE home_alerts ADD COLUMN issue_key TEXT")
+    if not await _column_exists(db, "home_alerts", "affected_devices"):
+        await db.execute("ALTER TABLE home_alerts ADD COLUMN affected_devices TEXT")
+    if not await _column_exists(db, "home_alerts", "device_count"):
+        await db.execute(
+            "ALTER TABLE home_alerts ADD COLUMN device_count INTEGER DEFAULT 1"
+        )
+    if not await _column_exists(db, "home_alerts", "risk_description"):
+        await db.execute("ALTER TABLE home_alerts ADD COLUMN risk_description TEXT")
+    if not await _column_exists(db, "home_alerts", "remediation"):
+        await db.execute("ALTER TABLE home_alerts ADD COLUMN remediation TEXT")
+
+    # Index for fast issue_key lookups
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alerts_issue_key "
+        "ON home_alerts(issue_key) WHERE issue_key IS NOT NULL"
+    )
+    await db.commit()
+
+    # -- Data migration: consolidate per-device alerts into grouped alerts --
+    cursor = await db.execute(
+        "SELECT * FROM home_alerts WHERE alert_type = 'security.port_risk' "
+        "AND issue_key IS NULL ORDER BY created_at DESC"
+    )
+    rows = await cursor.fetchall()
+
+    if rows:
+        # Group alerts by (port, service_name) extracted from detail JSON
+        groups: dict[str, list[dict]] = {}
+        for row in rows:
+            detail = row["detail"]
+            if isinstance(detail, str):
+                try:
+                    detail = json.loads(detail)
+                except (json.JSONDecodeError, TypeError):
+                    detail = {}
+            if not isinstance(detail, dict):
+                detail = {}
+
+            port = detail.get("port")
+            service_name = detail.get("service_name", "")
+
+            # Build issue key matching the new logic
+            service_slug = service_name.lower().replace(" ", "_")
+            if "unencrypted" in service_slug:
+                issue_key = "port_risk:unencrypted_admin"
+            elif port is not None:
+                issue_key = f"port_risk:{service_slug}:{port}"
+            else:
+                continue
+
+            groups.setdefault(issue_key, []).append(dict(row))
+
+        for issue_key, alert_rows in groups.items():
+            # First row is the latest (ORDER BY created_at DESC)
+            winner = alert_rows[0]
+            winner_id = winner["id"]
+
+            # Build affected_devices from all alerts in this group
+            affected = []
+            seen_device_ids: set[int] = set()
+            for a in alert_rows:
+                detail = a["detail"]
+                if isinstance(detail, str):
+                    try:
+                        detail = json.loads(detail)
+                    except (json.JSONDecodeError, TypeError):
+                        detail = {}
+                did = a.get("device_id") or detail.get("device_id")
+                if did and did not in seen_device_ids:
+                    seen_device_ids.add(did)
+                    svc = detail.get("service_name", "")
+                    title_str = a.get("title", "")
+                    display = title_str.replace(f"{svc} open on ", "") if svc else title_str
+                    affected.append({
+                        "device_id": did,
+                        "ip_address": a.get("source_ip", ""),
+                        "mac_address": a.get("source_mac"),
+                        "display_name": display,
+                        "port": detail.get("port", 0),
+                    })
+
+            # Extract risk info from winner's detail
+            winner_detail = winner["detail"]
+            if isinstance(winner_detail, str):
+                try:
+                    winner_detail = json.loads(winner_detail)
+                except (json.JSONDecodeError, TypeError):
+                    winner_detail = {}
+            risk_desc = winner_detail.get("risk_description", "")
+            remediation_text = winner_detail.get("remediation_steps", "")
+
+            # Compute new title
+            service_name = winner_detail.get("service_name", "Unknown")
+            n = len(affected)
+            new_title = f"{service_name} open on {n} device{'s' if n > 1 else ''}"
+
+            # Update the winner alert with grouped data
+            await db.execute(
+                "UPDATE home_alerts SET "
+                "issue_key = ?, affected_devices = ?, device_count = ?, "
+                "risk_description = ?, remediation = ?, title = ?, "
+                "source_ip = NULL, source_mac = NULL, device_id = NULL "
+                "WHERE id = ?",
+                (
+                    issue_key,
+                    json.dumps(affected),
+                    n,
+                    risk_desc,
+                    remediation_text,
+                    new_title,
+                    winner_id,
+                ),
+            )
+
+            # Delete non-winner alerts and update insight_state references
+            non_winner_ids = [a["id"] for a in alert_rows if a["id"] != winner_id]
+            if non_winner_ids:
+                placeholders = ",".join("?" * len(non_winner_ids))
+                await db.execute(
+                    f"DELETE FROM home_alerts WHERE id IN ({placeholders})",
+                    non_winner_ids,
+                )
+                await db.execute(
+                    f"UPDATE security_insight_state SET alert_id = ? "
+                    f"WHERE alert_id IN ({placeholders})",
+                    [winner_id] + non_winner_ids,
+                )
+
+        await db.commit()
+        logger.info(
+            "V8 migration: consolidated %d per-device alerts into %d grouped alerts",
+            len(rows),
+            len(groups),
+        )
+
+    # -- Clean stale alert events from the events replay table --
+    # Old alert.new/alert.updated events referencing deleted alerts would
+    # cause the app to re-add per-device alerts during WebSocket replay.
+    await db.execute(
+        "DELETE FROM events WHERE event_type IN ('alert.new', 'alert.updated') "
+        "AND json_extract(payload, '$.id') NOT IN (SELECT id FROM home_alerts)"
+    )
+    await db.commit()
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+        (8, now),
+    )
+    await db.commit()
+
+
 # Ordered list of migration functions. Index 0 = migration to version 1.
 _MIGRATIONS: list[tuple[int, callable]] = [
     (1, _apply_v1),
@@ -204,6 +427,8 @@ _MIGRATIONS: list[tuple[int, callable]] = [
     (4, _apply_v4),
     (5, _apply_v5),
     (6, _apply_v6),
+    (7, _apply_v7),
+    (8, _apply_v8),
 ]
 
 

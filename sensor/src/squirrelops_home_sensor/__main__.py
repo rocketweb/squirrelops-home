@@ -400,7 +400,63 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Disable TLS (development only)",
     )
+    parser.add_argument(
+        "--show-pairing-code",
+        action="store_true",
+        default=False,
+        help="Print the current pairing code from a running sensor and exit",
+    )
     return parser.parse_args(argv)
+
+
+# ---------------------------------------------------------------------------
+# Pairing code display
+# ---------------------------------------------------------------------------
+
+# Well-known file path for the pairing code (readable by the local user).
+# The macOS app can read this for same-machine pairing without manual entry.
+PAIRING_CODE_FILE = Path("/tmp/squirrelops-pairing-code")
+
+
+def _display_pairing_code(code: str, config: dict[str, Any]) -> None:
+    """Print the pairing code prominently and write it to a well-known file.
+
+    The code is displayed as a startup banner so users can easily find it
+    in terminal output or service logs.  It is also written to
+    ``/tmp/squirrelops-pairing-code`` so the macOS app (or the user) can
+    retrieve it on the same machine.
+    """
+    sensor_name = config.get("sensor_name", "SquirrelOps")
+
+    banner = (
+        "\n"
+        "╔══════════════════════════════════════════════╗\n"
+        "║                                              ║\n"
+        f"║   🐿️  {sensor_name} Sensor — Pairing Code   ║\n"
+        "║                                              ║\n"
+        f"║              [ {code} ]              ║\n"
+        "║                                              ║\n"
+        "║   Enter this code in the SquirrelOps Home    ║\n"
+        "║   app to pair with this sensor.              ║\n"
+        "║                                              ║\n"
+        "║   Code expires after 10 minutes or 5 failed  ║\n"
+        "║   attempts, then a new code is generated.    ║\n"
+        "║                                              ║\n"
+        "╚══════════════════════════════════════════════╝\n"
+    )
+    # Print directly to stdout (bypasses log formatting)
+    print(banner, flush=True)
+
+    # Also log it so it appears in structured logs / journald
+    logger.info("Pairing code for %s: %s", sensor_name, code)
+
+    # Write to well-known file for same-machine retrieval
+    try:
+        PAIRING_CODE_FILE.write_text(code + "\n")
+        PAIRING_CODE_FILE.chmod(0o600)
+        logger.info("Pairing code written to %s", PAIRING_CODE_FILE)
+    except OSError as exc:
+        logger.warning("Could not write pairing code file: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +509,12 @@ async def run_sensor(
 
     # 4. Init event bus
     event_bus = create_event_bus(db)
+
+    # 4b. Prune orphaned events from the replay log to prevent phantom
+    # decoys/alerts from appearing in the app after WebSocket replay.
+    pruned = await event_bus._log.prune_orphaned_events()
+    if pruned:
+        logger.info("Pruned %d orphaned events at startup", pruned)
 
     # 5. Init scan loop
     scan_loop = create_scan_loop(config=config, db=db, event_bus=event_bus)
@@ -579,6 +641,11 @@ async def run_sensor(
     from squirrelops_home_sensor.api.routes_pairing import _init_pairing_state
     _init_pairing_state(app.state, config)
 
+    # Display the pairing code prominently and write to file
+    pairing_code = getattr(app.state, "pairing_code", None)
+    if isinstance(pairing_code, str) and pairing_code:
+        _display_pairing_code(pairing_code, config)
+
     try:
         await server.serve()
     except asyncio.CancelledError:
@@ -615,6 +682,12 @@ async def run_sensor(
         logger.info("Closing database...")
         await db.close()
 
+        # Clean up pairing code file
+        try:
+            PAIRING_CODE_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+
         logger.info("Sensor shutdown complete")
 
 
@@ -631,6 +704,14 @@ def main() -> None:
     )
 
     args = parse_args()
+
+    if args.show_pairing_code:
+        if PAIRING_CODE_FILE.exists():
+            code = PAIRING_CODE_FILE.read_text().strip()
+            print(f"Current pairing code: {code}")
+        else:
+            print("No pairing code found. Is the sensor running?")
+        sys.exit(0)
 
     try:
         asyncio.run(

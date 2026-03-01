@@ -364,6 +364,8 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
     public let actionedAt: String?
     public let createdAt: String
     public let alertCount: Int?
+    public let deviceCount: Int?
+    public let issueKey: String?
 
     public init(
         id: Int,
@@ -375,7 +377,9 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
         readAt: String? = nil,
         actionedAt: String? = nil,
         createdAt: String,
-        alertCount: Int? = nil
+        alertCount: Int? = nil,
+        deviceCount: Int? = nil,
+        issueKey: String? = nil
     ) {
         self.id = id
         self.incidentId = incidentId
@@ -387,6 +391,8 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
         self.actionedAt = actionedAt
         self.createdAt = createdAt
         self.alertCount = alertCount
+        self.deviceCount = deviceCount
+        self.issueKey = issueKey
     }
 
     enum CodingKeys: String, CodingKey {
@@ -400,6 +406,8 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
         case actionedAt = "actioned_at"
         case createdAt = "created_at"
         case alertCount = "alert_count"
+        case deviceCount = "device_count"
+        case issueKey = "issue_key"
     }
 }
 
@@ -562,6 +570,24 @@ extension PaginatedAlerts: PaginatedResponse {
     public var pageTotal: Int { total }
 }
 
+public struct AffectedDevice: Codable, Sendable, Identifiable, Equatable, Hashable {
+    public let deviceId: Int
+    public let ipAddress: String
+    public let macAddress: String?
+    public let displayName: String
+    public let port: Int
+
+    public var id: Int { deviceId }
+
+    enum CodingKeys: String, CodingKey {
+        case deviceId = "device_id"
+        case ipAddress = "ip_address"
+        case macAddress = "mac_address"
+        case displayName = "display_name"
+        case port
+    }
+}
+
 public struct AlertDetail: Codable, Sendable, Identifiable, Equatable, Hashable {
     public let id: Int
     public let incidentId: Int?
@@ -577,6 +603,11 @@ public struct AlertDetail: Codable, Sendable, Identifiable, Equatable, Hashable 
     public let actionedAt: String?
     public let actionNote: String?
     public let createdAt: String
+    public let issueKey: String?
+    public let affectedDevices: [AffectedDevice]?
+    public let deviceCount: Int?
+    public let riskDescription: String?
+    public let remediation: String?
 
     public init(
         id: Int,
@@ -592,7 +623,12 @@ public struct AlertDetail: Codable, Sendable, Identifiable, Equatable, Hashable 
         readAt: String?,
         actionedAt: String?,
         actionNote: String?,
-        createdAt: String
+        createdAt: String,
+        issueKey: String? = nil,
+        affectedDevices: [AffectedDevice]? = nil,
+        deviceCount: Int? = nil,
+        riskDescription: String? = nil,
+        remediation: String? = nil
     ) {
         self.id = id
         self.incidentId = incidentId
@@ -608,6 +644,11 @@ public struct AlertDetail: Codable, Sendable, Identifiable, Equatable, Hashable 
         self.actionedAt = actionedAt
         self.actionNote = actionNote
         self.createdAt = createdAt
+        self.issueKey = issueKey
+        self.affectedDevices = affectedDevices
+        self.deviceCount = deviceCount
+        self.riskDescription = riskDescription
+        self.remediation = remediation
     }
 
     public func hash(into hasher: inout Hasher) {
@@ -629,6 +670,11 @@ public struct AlertDetail: Codable, Sendable, Identifiable, Equatable, Hashable 
         case actionedAt = "actioned_at"
         case actionNote = "action_note"
         case createdAt = "created_at"
+        case issueKey = "issue_key"
+        case affectedDevices = "affected_devices"
+        case deviceCount = "device_count"
+        case riskDescription = "risk_description"
+        case remediation
     }
 }
 

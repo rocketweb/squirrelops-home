@@ -129,8 +129,19 @@ public final class AppState {
                 severity: old.severity, title: old.title, sourceIp: old.sourceIp,
                 readAt: AppState.iso8601.string(from: Date()),
                 actionedAt: old.actionedAt, createdAt: old.createdAt,
-                alertCount: old.alertCount
+                alertCount: old.alertCount,
+                deviceCount: old.deviceCount, issueKey: old.issueKey
             )
+        }
+    }
+
+    /// Replace an existing alert in-place (used for grouped alert updates via WebSocket).
+    public func updateAlert(_ alert: AlertSummary) {
+        if let index = alerts.firstIndex(where: { $0.id == alert.id }) {
+            alerts[index] = alert
+        } else {
+            // New alert we haven't seen — insert at top
+            alerts.insert(alert, at: 0)
         }
     }
 

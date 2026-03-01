@@ -72,3 +72,37 @@ class EventLog:
         cursor = await self._db.execute("SELECT MAX(seq) FROM events")
         row = await cursor.fetchone()
         return row[0] if row and row[0] is not None else 0
+
+    async def prune_orphaned_events(self) -> int:
+        """Remove events that reference entities no longer in the database.
+
+        This prevents WebSocket replay from delivering phantom events for
+        alerts or decoys that have been deleted. Returns the number of
+        events pruned.
+        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        # Stale alert events (alert.new / alert.updated for deleted alerts)
+        cursor = await self._db.execute(
+            "DELETE FROM events WHERE event_type IN ('alert.new', 'alert.updated') "
+            "AND json_extract(payload, '$.id') NOT IN (SELECT id FROM home_alerts)"
+        )
+        alert_pruned = cursor.rowcount
+
+        # Stale decoy events (decoy.status_changed for deleted decoys)
+        cursor = await self._db.execute(
+            "DELETE FROM events WHERE event_type = 'decoy.status_changed' "
+            "AND json_extract(payload, '$.id') NOT IN (SELECT id FROM decoys)"
+        )
+        decoy_pruned = cursor.rowcount
+
+        total = alert_pruned + decoy_pruned
+        if total > 0:
+            await self._db.commit()
+            logger.info(
+                "Pruned %d orphaned events (%d alert, %d decoy)",
+                total, alert_pruned, decoy_pruned,
+            )
+        return total
