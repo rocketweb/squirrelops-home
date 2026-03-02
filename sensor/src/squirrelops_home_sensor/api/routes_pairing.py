@@ -175,6 +175,31 @@ def _maybe_regenerate_code(ps: dict) -> None:
 # ---------- Routes (no auth except DELETE) ----------
 
 
+class LocalCodeResponse(BaseModel):
+    code: str
+
+
+@router.get("/local/code", response_model=LocalCodeResponse)
+async def get_local_code(
+    request: Request,
+    config: dict = Depends(get_config),
+):
+    """Return the pairing code, but ONLY to localhost clients.
+
+    This allows the co-installed macOS app to auto-pair without the user
+    having to manually read a 6-digit code from the sensor logs.
+    """
+    client_host = request.client.host if request.client else None
+    if client_host not in ("127.0.0.1", "::1", "localhost"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This endpoint is only available from localhost.",
+        )
+    ps = _init_pairing_state(request.app.state, config)
+    _maybe_regenerate_code(ps)
+    return LocalCodeResponse(code=ps["code"])
+
+
 @router.get("/code/challenge", response_model=ChallengeResponse)
 async def get_challenge(
     request: Request,
@@ -291,12 +316,14 @@ async def complete_pairing(
     client_cert = _sign_client_cert(csr, ps["ca_key"], ps["ca_cert"])
     fingerprint = _get_cert_fingerprint(client_cert)
 
-    # Store pairing record
+    # Store pairing record — mark as local if the request came from localhost
     now = datetime.now(timezone.utc).isoformat()
+    client_host = request.client.host if request.client else None
+    is_local = 1 if client_host in ("127.0.0.1", "::1", "localhost") else 0
     await db.execute(
         """INSERT INTO pairing (client_name, client_cert_fingerprint, is_local, paired_at)
-           VALUES (?, ?, 0, ?)""",
-        (ps["client_name"], fingerprint, now),
+           VALUES (?, ?, ?, ?)""",
+        (ps["client_name"], fingerprint, is_local, now),
     )
     await db.commit()
 

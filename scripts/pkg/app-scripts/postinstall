@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+#
+# SquirrelOps Home — App Package Postinstall Script
+#
+# Runs after app payload extraction. Installs the privileged helper daemon
+# that provides root-level network operations (ARP scanning, port binding,
+# DNS sniffing) to the unprivileged sensor process.
+#
+# This script runs as root during .pkg installation.
+#
+set -euo pipefail
+
+APP_PATH="/Applications/SquirrelOps Home.app"
+HELPER_BUNDLE_ID="com.squirrelops.helper"
+HELPER_SRC="$APP_PATH/Contents/Library/LaunchServices/$HELPER_BUNDLE_ID"
+HELPER_DEST="/Library/PrivilegedHelperTools/$HELPER_BUNDLE_ID"
+PLIST_DEST="/Library/LaunchDaemons/${HELPER_BUNDLE_ID}.plist"
+
+# ---------------------------------------------------------------------------
+# Step 1: Install helper binary
+# ---------------------------------------------------------------------------
+if [ ! -f "$HELPER_SRC" ]; then
+    echo "[app-postinstall] WARNING: Helper binary not found in app bundle."
+    echo "[app-postinstall] ARP scanning will not be available."
+    echo "[app-postinstall] Done."
+    exit 0
+fi
+
+echo "[app-postinstall] Installing privileged helper daemon..."
+mkdir -p /Library/PrivilegedHelperTools
+cp "$HELPER_SRC" "$HELPER_DEST"
+chown root:wheel "$HELPER_DEST"
+chmod 755 "$HELPER_DEST"
+
+# ---------------------------------------------------------------------------
+# Step 2: Install launchd plist
+# ---------------------------------------------------------------------------
+echo "[app-postinstall] Installing helper launchd plist..."
+cat > "$PLIST_DEST" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.squirrelops.helper</string>
+    <key>Program</key>
+    <string>/Library/PrivilegedHelperTools/com.squirrelops.helper</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/com.squirrelops.helper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/com.squirrelops.helper.log</string>
+</dict>
+</plist>
+PLIST
+
+chown root:wheel "$PLIST_DEST"
+chmod 644 "$PLIST_DEST"
+
+# ---------------------------------------------------------------------------
+# Step 3: Load the helper daemon
+# ---------------------------------------------------------------------------
+echo "[app-postinstall] Starting helper daemon..."
+launchctl bootstrap system "$PLIST_DEST" 2>/dev/null || {
+    echo "[app-postinstall] WARNING: Failed to bootstrap helper daemon."
+    echo "[app-postinstall] You may need to load it manually:"
+    echo "[app-postinstall]   sudo launchctl bootstrap system $PLIST_DEST"
+}
+
+# ---------------------------------------------------------------------------
+# Step 4: Verify helper socket appears
+# ---------------------------------------------------------------------------
+SOCKET_PATH="/var/run/squirrelops-helper.sock"
+TIMEOUT=5
+ELAPSED=0
+
+while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+    if [ -S "$SOCKET_PATH" ]; then
+        echo "[app-postinstall] Helper daemon is running (socket: $SOCKET_PATH)."
+        break
+    fi
+    sleep 1
+    ELAPSED=$((ELAPSED + 1))
+done
+
+if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+    echo "[app-postinstall] WARNING: Helper socket not found after ${TIMEOUT}s."
+    echo "[app-postinstall] Check logs at: /var/log/com.squirrelops.helper.log"
+fi
+
+echo "[app-postinstall] Done."
+exit 0

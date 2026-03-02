@@ -234,6 +234,84 @@ public final class PairingManager: @unchecked Sendable {
         self.client = client
     }
 
+    // MARK: - Local Sensor Detection
+
+    /// Default port for the local sensor installed by the .pkg postinstall script.
+    private static let localSensorPort: UInt16 = 8443
+
+    /// Check if a sensor is running on localhost (installed by the .pkg).
+    /// Returns a DiscoveredSensor pointing at localhost if the health endpoint responds.
+    public func detectLocalSensor() async -> DiscoveredSensor? {
+        let port = PairingManager.localSensorPort
+        guard let url = URL(string: "https://localhost:\(port)/system/health") else {
+            return nil
+        }
+
+        // Use a TOFU session to accept the sensor's self-signed cert
+        let delegate = TLSPinningDelegate(caCertData: nil)
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 5
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+
+        do {
+            let (_, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                return nil
+            }
+            let name = "Local Sensor"
+            let endpoint = NWEndpoint.hostPort(
+                host: NWEndpoint.Host("127.0.0.1"),
+                port: NWEndpoint.Port(integerLiteral: port)
+            )
+            return DiscoveredSensor(
+                name: name,
+                endpoint: endpoint,
+                host: "127.0.0.1",
+                port: port
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    /// Check if the local sensor LaunchDaemon is installed (system-level .pkg install).
+    public static var isLocalSensorInstalled: Bool {
+        FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/com.squirrelops.sensor.plist")
+    }
+
+    /// Auto-pair with a local sensor by fetching the pairing code from the
+    /// localhost-only endpoint and running the full challenge-response flow.
+    public func autoLocalPair(sensor: DiscoveredSensor) async throws -> PairedSensor {
+        let port = PairingManager.localSensorPort
+        guard let url = URL(string: "https://localhost:\(port)/pairing/local/code") else {
+            throw PairingError.noHostResolved
+        }
+
+        // Fetch the code from the localhost-only endpoint
+        let delegate = TLSPinningDelegate(caCertData: nil)
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 5
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+
+        struct LocalCodeResponse: Decodable {
+            let code: String
+        }
+
+        let (data, response) = try await session.data(from: url)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            throw PairingError.noHostResolved
+        }
+
+        let localCode = try JSONDecoder().decode(LocalCodeResponse.self, from: data)
+
+        // Run the full pairing protocol with the fetched code
+        return try await pair(sensor: sensor, code: localCode.code)
+    }
+
     // MARK: - Discovery
 
     /// Start mDNS discovery for SquirrelOps sensors on the local network.

@@ -14,8 +14,15 @@ DATA_DIR="$INSTALL_DIR/data"
 LOG_DIR="$INSTALL_DIR/logs"
 CONFIG_FILE="$INSTALL_DIR/config.yaml"
 CONFIG_BACKUP="${CONFIG_FILE}.bak"
-VENV_DIR="$INSTALL_DIR/venv"
-PYTHON_PATH="$VENV_DIR/bin/python"
+
+# Detect Python environment mode (standalone or venv).
+# The build writes a .python-mode marker file to indicate which was used.
+PYTHON_MODE_FILE="$INSTALL_DIR/.python-mode"
+if [ -f "$PYTHON_MODE_FILE" ] && [ "$(cat "$PYTHON_MODE_FILE")" = "standalone" ]; then
+    PYTHON_PATH="$INSTALL_DIR/python/bin/python3"
+else
+    PYTHON_PATH="$INSTALL_DIR/venv/bin/python"
+fi
 
 PLIST_NAME="com.squirrelops.sensor"
 PLIST_TEMPLATE="$INSTALL_DIR/com.squirrelops.sensor.plist"

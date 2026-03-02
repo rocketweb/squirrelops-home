@@ -2,18 +2,48 @@
 #
 # SquirrelOps Home — App Package Preinstall Script
 #
-# Runs before app payload extraction. Clears any stale package receipt
-# so the installer places the app in /Applications instead of following
-# a receipt that points to a prior (possibly relocated) install location.
+# Runs before app payload extraction. Removes the existing app bundle and
+# clears any stale package receipt so the installer places a fresh copy
+# in /Applications.
 #
 # This script runs as root during .pkg installation.
 #
 set -euo pipefail
 
 PKG_ID="com.squirrelops.home.app"
+APP_PATH="/Applications/SquirrelOps Home.app"
 
 # ---------------------------------------------------------------------------
-# Step 1: Forget stale package receipt
+# Step 1: Stop the privileged helper daemon (if running)
+# ---------------------------------------------------------------------------
+HELPER_PLIST="/Library/LaunchDaemons/com.squirrelops.helper.plist"
+if [ -f "$HELPER_PLIST" ]; then
+    echo "[app-preinstall] Stopping helper daemon..."
+    launchctl bootout system "$HELPER_PLIST" 2>/dev/null || true
+    sleep 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2: Quit the app if it's running
+# ---------------------------------------------------------------------------
+if pgrep -x SquirrelOpsHome >/dev/null 2>&1; then
+    echo "[app-preinstall] Stopping running SquirrelOps Home..."
+    killall SquirrelOpsHome 2>/dev/null || true
+    sleep 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 3: Remove existing app bundle
+# ---------------------------------------------------------------------------
+# macOS Installer may skip overwriting an existing .app with the same bundle
+# version. Force-removing it ensures the new payload is always written.
+if [ -d "$APP_PATH" ]; then
+    echo "[app-preinstall] Removing existing app at $APP_PATH"
+    rm -rf "$APP_PATH"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 4: Forget stale package receipt
 # ---------------------------------------------------------------------------
 # If a previous install was relocated (e.g. macOS found an existing bundle
 # with the same ID in a dev build directory), the receipt will point there.

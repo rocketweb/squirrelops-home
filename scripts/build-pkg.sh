@@ -117,30 +117,40 @@ info "Building sensor venv..."
 bash "$SCRIPT_DIR/build-sensor-venv.sh" "$SENSOR_BUILD_DIR"
 
 # ===========================================================================
-# Step 3b: Sign sensor venv native binaries
+# Step 3b: Sign sensor Python native binaries
 # ===========================================================================
-step "Step 3b: Sign Sensor Venv Binaries"
+step "Step 3b: Sign Sensor Python Binaries"
+
+# Determine which Python environment was built (venv or standalone)
+SENSOR_PYTHON_MODE=$(cat "$SENSOR_BUILD_DIR/.python-mode" 2>/dev/null || echo "venv")
+info "Sensor Python mode: $SENSOR_PYTHON_MODE"
+
+if [ "$SENSOR_PYTHON_MODE" = "standalone" ]; then
+    SENSOR_PYTHON_DIR="$SENSOR_BUILD_DIR/python"
+else
+    SENSOR_PYTHON_DIR="$SENSOR_BUILD_DIR/venv"
+fi
 
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
     # Find all Mach-O binaries: .so, .dylib, and the Python interpreter
     MACHO_FILES=()
     while IFS= read -r -d '' f; do
         MACHO_FILES+=("$f")
-    done < <(find "$SENSOR_BUILD_DIR/venv" -type f \( -name "*.so" -o -name "*.dylib" \) -print0)
+    done < <(find "$SENSOR_PYTHON_DIR" -type f \( -name "*.so" -o -name "*.dylib" \) -print0)
 
     # Also sign the Python interpreter itself
-    VENV_PYTHON="$SENSOR_BUILD_DIR/venv/bin/python3"
-    if [ -f "$VENV_PYTHON" ] && ! [ -L "$VENV_PYTHON" ]; then
-        MACHO_FILES+=("$VENV_PYTHON")
+    PYTHON_BIN="$SENSOR_PYTHON_DIR/bin/python3"
+    if [ -f "$PYTHON_BIN" ] && ! [ -L "$PYTHON_BIN" ]; then
+        MACHO_FILES+=("$PYTHON_BIN")
     else
         # Follow symlinks to find the real binary
-        REAL_PYTHON="$(readlink -f "$VENV_PYTHON" 2>/dev/null || python3 -c "import os; print(os.path.realpath('$VENV_PYTHON'))")"
-        if [ -f "$REAL_PYTHON" ]; then
+        REAL_PYTHON="$(readlink -f "$PYTHON_BIN" 2>/dev/null || "$PYTHON_BIN" -c "import os,sys; print(os.path.realpath(sys.executable))" 2>/dev/null || true)"
+        if [ -n "$REAL_PYTHON" ] && [ -f "$REAL_PYTHON" ]; then
             MACHO_FILES+=("$REAL_PYTHON")
         fi
     fi
 
-    info "Found ${#MACHO_FILES[@]} Mach-O binaries to sign in sensor venv."
+    info "Found ${#MACHO_FILES[@]} Mach-O binaries to sign."
 
     SIGN_FAIL=0
     for macho in "${MACHO_FILES[@]}"; do
@@ -157,13 +167,13 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
     done
 
     if [ "$SIGN_FAIL" -eq 0 ]; then
-        info "All sensor venv binaries signed successfully."
+        info "All sensor Python binaries signed successfully."
     else
         warn "$SIGN_FAIL binaries failed to sign (notarization may fail)."
     fi
 else
     warn "Signing identity '$SIGNING_IDENTITY' not found."
-    warn "Skipping sensor venv binary signing."
+    warn "Skipping sensor Python binary signing."
 fi
 
 # ===========================================================================
@@ -190,8 +200,16 @@ fi
 SENSOR_INSTALL="$SENSOR_ROOT/Library/SquirrelOps/sensor"
 mkdir -p "$SENSOR_INSTALL"
 
-info "Copying sensor venv..."
-cp -R "$SENSOR_BUILD_DIR/venv" "$SENSOR_INSTALL/venv"
+info "Copying sensor Python environment ($SENSOR_PYTHON_MODE)..."
+if [ "$SENSOR_PYTHON_MODE" = "standalone" ]; then
+    cp -R "$SENSOR_BUILD_DIR/python" "$SENSOR_INSTALL/python"
+else
+    cp -R "$SENSOR_BUILD_DIR/venv" "$SENSOR_INSTALL/venv"
+fi
+
+# Write the mode marker into the install payload so postinstall knows which
+# Python path to use in the LaunchDaemon plist.
+echo "$SENSOR_PYTHON_MODE" > "$SENSOR_INSTALL/.python-mode"
 
 info "Copying launchd plist template..."
 cp "$SENSOR_BUILD_DIR/com.squirrelops.sensor.plist" "$SENSOR_INSTALL/"
