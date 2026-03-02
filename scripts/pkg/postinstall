@@ -36,6 +36,59 @@ mkdir -p "$DATA_DIR"
 mkdir -p "$LOG_DIR"
 
 # ---------------------------------------------------------------------------
+# Step 1b: Repair venv Python symlinks
+# ---------------------------------------------------------------------------
+# The venv's python symlink may point to the build machine's Python, which
+# might not exist on the target system (e.g., built with 3.13 but target has
+# 3.14). Re-link to whatever python3 is available on this system.
+if [ "$PYTHON_PATH" = "$INSTALL_DIR/venv/bin/python" ]; then
+    VENV_BIN="$INSTALL_DIR/venv/bin"
+    # Find the system Python 3
+    SYSTEM_PYTHON=""
+    for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
+        if [ -x "$candidate" ]; then
+            SYSTEM_PYTHON="$candidate"
+            break
+        fi
+    done
+
+    if [ -n "$SYSTEM_PYTHON" ]; then
+        SYSTEM_PY_VERSION=$("$SYSTEM_PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
+        SYSTEM_PY_REAL=$(readlink -f "$SYSTEM_PYTHON" 2>/dev/null || "$SYSTEM_PYTHON" -c "import os,sys; print(os.path.realpath(sys.executable))" 2>/dev/null || true)
+
+        if [ -n "$SYSTEM_PY_VERSION" ] && [ -n "$SYSTEM_PY_REAL" ]; then
+            echo "[postinstall] System Python: $SYSTEM_PY_REAL (${SYSTEM_PY_VERSION})"
+
+            # Check if the venv's python actually works
+            if ! "$VENV_BIN/python" --version >/dev/null 2>&1; then
+                echo "[postinstall] Venv Python is broken — repairing symlinks..."
+
+                # Remove stale symlinks
+                rm -f "$VENV_BIN/python" "$VENV_BIN/python3"
+                # Remove old versioned symlink (e.g. python3.13)
+                find "$VENV_BIN" -maxdepth 1 -name "python3.*" -type l -delete 2>/dev/null || true
+
+                # Create fresh symlinks pointing to system Python
+                ln -s "$SYSTEM_PY_REAL" "$VENV_BIN/python3.${SYSTEM_PY_VERSION#*.}"
+                ln -s "python3.${SYSTEM_PY_VERSION#*.}" "$VENV_BIN/python3"
+                ln -s "python3" "$VENV_BIN/python"
+
+                # Verify the repair worked
+                if "$VENV_BIN/python" --version >/dev/null 2>&1; then
+                    echo "[postinstall] Venv Python repaired successfully."
+                else
+                    echo "[postinstall] WARNING: Venv Python repair failed."
+                fi
+            else
+                echo "[postinstall] Venv Python is working."
+            fi
+        fi
+    else
+        echo "[postinstall] WARNING: No system Python 3 found."
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Step 2: Handle config file
 # ---------------------------------------------------------------------------
 if [ -f "$CONFIG_BACKUP" ]; then
