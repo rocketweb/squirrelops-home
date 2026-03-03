@@ -127,10 +127,13 @@ class ScoutEngine:
         results = await asyncio.gather(*all_tasks, return_exceptions=True)
         for r in results:
             if isinstance(r, ServiceProfile):
-                await self._persist_profile(r)
+                await self._persist_profile(r, commit=False)
                 count += 1
             elif isinstance(r, Exception):
                 logger.debug("Scout probe failed: %s", r)
+        # Single commit for the entire batch instead of per-profile
+        if count > 0:
+            await self._db.commit()
         return count
 
     async def get_profiles_for_device(self, device_id: int) -> list[ServiceProfile]:
@@ -364,8 +367,17 @@ class ScoutEngine:
     # Persistence
     # ------------------------------------------------------------------
 
-    async def _persist_profile(self, profile: ServiceProfile) -> None:
-        """Upsert a service profile into the database."""
+    async def _persist_profile(
+        self, profile: ServiceProfile, *, commit: bool = True,
+    ) -> None:
+        """Upsert a service profile into the database.
+
+        Parameters
+        ----------
+        commit:
+            When ``False``, the caller is responsible for committing.
+            Used by ``scout_all()`` to batch all writes into a single commit.
+        """
         headers_json = json.dumps(profile.http_headers) if profile.http_headers else None
 
         await self._db.execute(
@@ -397,4 +409,5 @@ class ScoutEngine:
                 profile.protocol_version, profile.scouted_at,
             ),
         )
-        await self._db.commit()
+        if commit:
+            await self._db.commit()

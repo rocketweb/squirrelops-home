@@ -13,6 +13,9 @@ decoys:
   health_check_interval: 1800
   restart_max_attempts: 3
   restart_window_seconds: 300
+  dns_canaries:
+    enabled: false
+    domain: "canary.local"
 
 alerts:
   retention_days: 90

@@ -7,6 +7,7 @@ friendly names, manufacturers, and model information.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import socket
 from dataclasses import dataclass
@@ -213,8 +214,41 @@ class SSDPScanner:
         logger.info("SSDP collected %d responses", len(responses))
         return responses
 
+    @staticmethod
+    def _is_safe_location_url(url: str) -> bool:
+        """Validate that an SSDP LOCATION URL is safe to fetch.
+
+        Only allows http/https URLs pointing to private/link-local IPs
+        or ``.local`` hostnames, preventing SSRF against public endpoints.
+        """
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False
+
+        if parsed.scheme not in ("http", "https"):
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        try:
+            addr = ipaddress.ip_address(hostname)
+            return addr.is_private or addr.is_link_local
+        except ValueError:
+            # Non-IP hostname — only allow .local mDNS names
+            return hostname.endswith(".local")
+
     async def _fetch_xml(self, client: httpx.AsyncClient, url: str) -> dict | None:
-        """Fetch and parse a UPnP device description XML."""
+        """Fetch and parse a UPnP device description XML.
+
+        Validates the URL against SSRF before fetching.
+        """
+        if not self._is_safe_location_url(url):
+            logger.warning("Blocked SSDP LOCATION fetch to non-local URL: %s", url)
+            return None
+
         try:
             resp = await client.get(url)
             resp.raise_for_status()

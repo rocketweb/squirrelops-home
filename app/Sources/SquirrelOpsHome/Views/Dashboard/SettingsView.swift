@@ -33,6 +33,7 @@ struct SettingsView: View {
     @State private var slackIncludeDeviceInfo = false
     @State private var credentialFilename: String = "passwords.txt"
     @State private var updateStatus: String = ""
+    @State private var updateURL: URL?
     @State private var isCheckingUpdates = false
 
     // Home Assistant
@@ -511,6 +512,10 @@ struct SettingsView: View {
         .cornerRadius(Spacing.radiusLg)
     }
 
+    private static let appVersion: String = {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+    }()
+
     private var sensorSection: some View {
         VStack(alignment: .leading, spacing: Spacing.s12) {
             Text("SENSOR")
@@ -518,12 +523,13 @@ struct SettingsView: View {
                 .tracking(Typography.captionTracking)
                 .foregroundStyle(Theme.textTertiary(colorScheme))
 
+            infoRow("App Version", value: Self.appVersion)
             if let sensor = appState.pairedSensor {
                 infoRow("Name", value: sensor.name)
                 infoRow("URL", value: sensor.baseURL.absoluteString)
             }
             if let info = appState.sensorInfo {
-                infoRow("Version", value: info.version)
+                infoRow("Sensor Version", value: info.version)
                 infoRow("Uptime", value: formatUptime(info.uptimeSeconds))
             }
         }
@@ -556,13 +562,9 @@ struct SettingsView: View {
             Button {
                 isCheckingUpdates = true
                 updateStatus = ""
+                updateURL = nil
                 Task {
-                    do {
-                        let result: UpdateCheckResponse = try await appState.sensorClient!.request(.checkUpdates)
-                        updateStatus = result.message
-                    } catch {
-                        updateStatus = "Check failed: \(error.localizedDescription)"
-                    }
+                    await checkForGitHubUpdates()
                     isCheckingUpdates = false
                 }
             } label: {
@@ -574,17 +576,83 @@ struct SettingsView: View {
                     Text("Check for Updates")
                 }
             }
-            .disabled(isCheckingUpdates || isLoading)
+            .disabled(isCheckingUpdates)
 
             if !updateStatus.isEmpty {
-                Text(updateStatus)
-                    .font(Typography.bodySmall)
-                    .foregroundStyle(Theme.textSecondary(colorScheme))
+                if let url = updateURL {
+                    VStack(alignment: .leading, spacing: Spacing.sm) {
+                        Text(updateStatus)
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.statusWarning(colorScheme))
+
+                        Link(destination: url) {
+                            HStack(spacing: Spacing.xs) {
+                                Image(systemName: "arrow.down.circle")
+                                Text("Download from GitHub")
+                            }
+                            .font(Typography.bodySmall)
+                        }
+                    }
+                } else {
+                    Text(updateStatus)
+                        .font(Typography.bodySmall)
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
+                }
             }
         }
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
+    }
+
+    private func checkForGitHubUpdates() async {
+        let currentVersion = Self.appVersion
+        let apiURL = URL(string: "https://api.github.com/repos/rocketweb/squirrelops-home/releases/latest")!
+
+        var request = URLRequest(url: apiURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 15
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                updateStatus = "Could not reach GitHub. Try again later."
+                return
+            }
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tagName = json["tag_name"] as? String,
+                  let htmlURL = json["html_url"] as? String else {
+                updateStatus = "Unexpected response from GitHub."
+                return
+            }
+
+            // Strip leading "v" from tag (e.g. "v1.2.0" -> "1.2.0")
+            let latestVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+
+            if isNewerVersion(latestVersion, than: currentVersion) {
+                updateStatus = "Update available: v\(latestVersion) (you have v\(currentVersion))"
+                updateURL = URL(string: htmlURL)
+            } else {
+                updateStatus = "You're up to date (v\(currentVersion))."
+                updateURL = nil
+            }
+        } catch {
+            updateStatus = "Check failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Compare two semver version strings. Returns true if `a` is newer than `b`.
+    private func isNewerVersion(_ a: String, than b: String) -> Bool {
+        let partsA = a.split(separator: ".").compactMap { Int($0) }
+        let partsB = b.split(separator: ".").compactMap { Int($0) }
+        for i in 0..<max(partsA.count, partsB.count) {
+            let va = i < partsA.count ? partsA[i] : 0
+            let vb = i < partsB.count ? partsB[i] : 0
+            if va > vb { return true }
+            if va < vb { return false }
+        }
+        return false
     }
 
     private func infoRow(_ label: String, value: String) -> some View {

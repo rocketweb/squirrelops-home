@@ -10,9 +10,23 @@ struct AlertRow: View {
         alert.readAt == nil
     }
 
-    /// Whether this is a grouped alert (has issue_key and multiple devices).
     private var isGrouped: Bool {
-        alert.issueKey != nil
+        alert.alertCount != nil && (alert.alertCount ?? 0) > 1
+    }
+
+    private var friendlyType: String {
+        switch alert.alertType {
+        case "decoy.trip": return "Port scan detected"
+        case "decoy.credential_trip": return "Credential accessed"
+        case "device.new": return "New device"
+        case "device.verification_needed": return "Device verification"
+        case "device.mac_changed": return "MAC changed"
+        case "security.port_risk": return "Port risk"
+        case "security.vendor_advisory": return "Vendor advisory"
+        case "system.sensor_offline": return "Sensor offline"
+        case "system.learning_complete": return "Learning complete"
+        default: return alert.alertType
+        }
     }
 
     var body: some View {
@@ -50,9 +64,8 @@ struct AlertRow: View {
                             .lineLimit(1)
                     }
 
-                    Text(alert.alertType)
-                        .font(Typography.mono)
-                        .tracking(Typography.monoTracking)
+                    Text(friendlyType)
+                        .font(Typography.bodySmall)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
                         .lineLimit(1)
                 }

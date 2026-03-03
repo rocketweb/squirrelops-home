@@ -7,7 +7,7 @@
 - **Zero false positives** — legitimate devices never touch decoys, so every alert means something
 - **Device fingerprinting** — identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional LLM-powered classification
 - **Behavioral baselines** — learns normal connection patterns during a 48-hour training period, then alerts on anomalies
-- **Credential canaries** — plants realistic-looking credentials (AWS keys, SSH keys, .env files, database configs) that trigger alerts when accessed
+- **Credential canaries** — plants realistic-looking credentials (AWS keys, SSH keys, .env files, database URIs, GitHub PATs, Home Assistant tokens) that trigger critical alerts when accessed. Optional DNS canary hostnames can be embedded in select credential types for out-of-band detection.
 - **Completely local** — all data stays in a local SQLite database. No cloud. No telemetry. No accounts.
 - **Push notifications** — optional APNs alerts to your iPhone/Mac when a decoy is tripped
 - **Home Assistant integration** — enriches device data with names, areas, and types from your HA instance
@@ -48,14 +48,28 @@ Communication between the app and sensor uses mutual TLS with certificates excha
 
 ### Decoy Types
 
-| Type | What It Mimics |
-|------|---------------|
-| File Share | SMB/NFS share with enticing filenames |
-| Home Assistant | Fake HA instance with realistic API responses |
-| Dev Server | Node.js/Python dev server with debug endpoints |
-| **Mimic** | **Cloned from real devices — same HTTP responses, headers, TLS certs, protocol banners, mDNS hostnames** |
-| DNS Canary | Internal DNS records that resolve to monitored IPs |
-| Credential Artifacts | AWS keys, SSH keys, .env files, kubeconfig, database URIs, GitHub tokens, Docker registry creds |
+| Type | What It Mimics | Planted Credentials |
+|------|---------------|---------------------|
+| File Share | nginx-served directory with sensitive-looking files | `passwords.txt` (username:password pairs), SSH private key |
+| Dev Server | Express/Next.js dev server with debug endpoints | `.env` file with API keys, DB URLs, tokens |
+| Home Assistant | HA login page and API with realistic error responses | Long-lived access token |
+| **Mimic** | **Cloned from real devices — same HTTP responses, headers, TLS certs, protocol banners, mDNS hostnames** | Category-appropriate credentials injected into realistic locations |
+
+### Credential Types
+
+Seven credential types are generated and planted across decoy services:
+
+| Credential | Format | DNS Canary Support |
+|------------|--------|-------------------|
+| Password pairs | `username:AdjNoun1234!` (8-12 per decoy) | No |
+| AWS Access Key | `AKIA` + 16 alphanumeric chars | Yes (opt-in) |
+| Database URI | `postgresql://user:pass@host:5432/db` | No |
+| SSH Private Key | PEM-formatted RSA key (~1600 bytes) | No |
+| HA Token | 183-char base64-like string | Yes (opt-in) |
+| .env File | Multi-line config with mixed secrets | No |
+| GitHub PAT | `ghp_` + 36 alphanumeric chars | Yes (opt-in) |
+
+DNS canary hostnames are disabled by default. When enabled, they are embedded in credential values so that if an intruder uses a stolen credential, the resulting DNS lookup is detected by the sensor's local DNS monitor. See the [User Guide](docs/USER_GUIDE.md#dns-canary-setup) for setup instructions.
 
 ### Squirrel Scouts
 
@@ -73,11 +87,11 @@ The result: a network scan from an intruder's perspective reveals more devices t
 
 The sensor adapts to available resources:
 
-| Profile | Scan Interval | Max Decoys | Max Mimics | Scout Interval | Classification |
-|---------|--------------|------------|------------|----------------|----------------|
-| **Lite** | 15 min | 3 | 0 | Disabled | Local signature DB only |
-| **Standard** | 5 min | 8 | 10 | 60 min | Cloud LLM (your API key) |
-| **Full** | 1 min | 16 | 30 | 30 min | Local LLM (LM Studio/Ollama) |
+| Profile | Scan Interval | Max Decoys | Max Mimics | Classification |
+|---------|--------------|------------|------------|----------------|
+| **Lite** | 15 min | 3 | Disabled | Local signature DB only |
+| **Standard** | 5 min | 8 | 10 | Cloud LLM (your API key) |
+| **Full** | 1 min | 16 | 10+ | Local LLM (LM Studio/Ollama) |
 
 ## Installation
 
@@ -150,7 +164,7 @@ docs/         User guide and documentation
 
 ```
 sensor/src/squirrelops_home_sensor/
-├── alerts/        Alert dispatch, incident tracking, retention
+├── alerts/        Alert dispatch, decoy/device handlers, incident grouping, retention
 ├── api/           FastAPI routers (8 routers), WebSocket, DI
 ├── config/        YAML config with env var overrides
 ├── db/            SQLite schema (v8, 19 tables), migrations
@@ -174,6 +188,7 @@ sensor/src/squirrelops_home_sensor/
 - **Decoys never collide** — decoy services avoid real ports and don't respond to broadcast discovery
 - **Virtual IPs avoid conflicts** — allocated from high end of subnet, excluded from scan loop, evacuated if a real device claims the IP
 - **48-hour learning** — behavioral anomaly alerts are suppressed during learning; decoy trip alerts fire immediately
+- **Canaries off by default** — DNS canary hostnames are opt-in; no external server dependency unless you configure one
 
 ## License
 

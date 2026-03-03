@@ -362,6 +362,8 @@ async def _set_trust(
 @router.get("/{device_id}/fingerprints", response_model=PaginatedFingerprints)
 async def get_fingerprint_history(
     device_id: int,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: aiosqlite.Connection = Depends(get_db),
     _auth: dict = Depends(verify_client_cert),
 ):
@@ -371,8 +373,9 @@ async def get_fingerprint_history(
     cursor = await db.execute(
         """SELECT * FROM device_fingerprints
            WHERE device_id = ?
-           ORDER BY last_seen DESC""",
-        (device_id,),
+           ORDER BY last_seen DESC
+           LIMIT ? OFFSET ?""",
+        (device_id, limit, offset),
     )
     rows = await cursor.fetchall()
 
@@ -415,6 +418,8 @@ class DeviceOpenPortsResponse(BaseModel):
 @router.get("/{device_id}/ports", response_model=DeviceOpenPortsResponse)
 async def get_device_ports(
     device_id: int,
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     db: aiosqlite.Connection = Depends(get_db),
     _auth: dict = Depends(verify_client_cert),
 ):
@@ -422,8 +427,9 @@ async def get_device_ports(
     await _get_device_or_404(db, device_id)
     cursor = await db.execute(
         "SELECT port, protocol, service_name, banner, first_seen, last_seen "
-        "FROM device_open_ports WHERE device_id = ? ORDER BY port",
-        (device_id,),
+        "FROM device_open_ports WHERE device_id = ? ORDER BY port "
+        "LIMIT ? OFFSET ?",
+        (device_id, limit, offset),
     )
     rows = await cursor.fetchall()
     items = [

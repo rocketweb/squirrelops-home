@@ -151,11 +151,17 @@ class TestAWSKey:
         suffix = cred.credential_value[4:]
         assert re.match(r"^[A-Z0-9]{16}$", suffix)
 
-    def test_has_canary_hostname(self, generator):
-        """AWS keys should get a canary hostname (DNS-detectable)."""
+    def test_no_canary_when_disabled(self, generator):
+        """With canary_enabled=False (default), canary_hostname is None."""
         cred = generator.generate_aws_key()
+        assert cred.canary_hostname is None
+
+    def test_has_canary_when_enabled(self):
+        """With canary_enabled=True, AWS keys get a canary hostname."""
+        gen = CredentialGenerator(canary_enabled=True, canary_domain="canary.test")
+        cred = gen.generate_aws_key()
         assert cred.canary_hostname is not None
-        assert cred.canary_hostname.endswith(".canary.squirrelops.io")
+        assert cred.canary_hostname.endswith(".canary.test")
 
     def test_planted_location(self, generator):
         cred = generator.generate_aws_key()
@@ -278,11 +284,17 @@ class TestHAToken:
         cred = generator.generate_ha_token()
         assert re.match(r"^[A-Za-z0-9._-]+$", cred.credential_value)
 
-    def test_has_canary_hostname(self, generator):
-        """HA tokens should get a canary hostname (DNS-detectable)."""
+    def test_no_canary_when_disabled(self, generator):
+        """With canary_enabled=False (default), canary_hostname is None."""
         cred = generator.generate_ha_token()
+        assert cred.canary_hostname is None
+
+    def test_has_canary_when_enabled(self):
+        """With canary_enabled=True, HA tokens get a canary hostname."""
+        gen = CredentialGenerator(canary_enabled=True, canary_domain="canary.test")
+        cred = gen.generate_ha_token()
         assert cred.canary_hostname is not None
-        assert cred.canary_hostname.endswith(".canary.squirrelops.io")
+        assert cred.canary_hostname.endswith(".canary.test")
 
     def test_planted_location(self, generator):
         cred = generator.generate_ha_token()
@@ -365,11 +377,17 @@ class TestGitHubPAT:
         suffix = cred.credential_value[4:]
         assert re.match(r"^[A-Za-z0-9]{36}$", suffix)
 
-    def test_has_canary_hostname(self, generator):
-        """GitHub PATs should get a canary hostname (DNS-detectable)."""
+    def test_no_canary_when_disabled(self, generator):
+        """With canary_enabled=False (default), canary_hostname is None."""
         cred = generator.generate_github_pat()
+        assert cred.canary_hostname is None
+
+    def test_has_canary_when_enabled(self):
+        """With canary_enabled=True, GitHub PATs get a canary hostname."""
+        gen = CredentialGenerator(canary_enabled=True, canary_domain="canary.test")
+        cred = gen.generate_github_pat()
         assert cred.canary_hostname is not None
-        assert cred.canary_hostname.endswith(".canary.squirrelops.io")
+        assert cred.canary_hostname.endswith(".canary.test")
 
     def test_planted_location(self, generator):
         cred = generator.generate_github_pat()
@@ -381,24 +399,35 @@ class TestGitHubPAT:
 # ---------------------------------------------------------------------------
 
 class TestCanaryHostname:
-    """generate_canary_hostname() produces unique .canary.squirrelops.io hostnames."""
+    """generate_canary_hostname() respects enabled/disabled config and custom domains."""
 
-    @pytest.fixture
-    def generator(self):
-        return CredentialGenerator()
+    def test_returns_none_when_disabled(self):
+        """With canary_enabled=False (default), returns None."""
+        gen = CredentialGenerator()
+        assert gen.generate_canary_hostname() is None
 
-    def test_format(self, generator):
-        """Hostname should be {hex}.canary.squirrelops.io."""
-        hostname = generator.generate_canary_hostname()
-        assert hostname.endswith(".canary.squirrelops.io")
-        subdomain = hostname.replace(".canary.squirrelops.io", "")
+    def test_format_with_default_domain(self):
+        """With canary_enabled=True, hostname is {hex}.canary.local."""
+        gen = CredentialGenerator(canary_enabled=True)
+        hostname = gen.generate_canary_hostname()
+        assert hostname is not None
+        assert hostname.endswith(".canary.local")
+        subdomain = hostname.replace(".canary.local", "")
         assert re.match(r"^[0-9a-f]{32}$", subdomain), (
             f"Subdomain should be 32 hex chars, got: {subdomain}"
         )
 
-    def test_uniqueness(self, generator):
+    def test_custom_domain(self):
+        """Custom canary_domain is used in hostname suffix."""
+        gen = CredentialGenerator(canary_enabled=True, canary_domain="trap.example.com")
+        hostname = gen.generate_canary_hostname()
+        assert hostname is not None
+        assert hostname.endswith(".trap.example.com")
+
+    def test_uniqueness(self):
         """Multiple calls should produce unique hostnames."""
-        hostnames = {generator.generate_canary_hostname() for _ in range(50)}
+        gen = CredentialGenerator(canary_enabled=True, canary_domain="canary.test")
+        hostnames = {gen.generate_canary_hostname() for _ in range(50)}
         assert len(hostnames) == 50
 
 
@@ -430,23 +459,30 @@ class TestUniqueness:
             assert cred.credential_value not in values, f"Duplicate: {cred.credential_value}"
             values.add(cred.credential_value)
 
-    def test_canary_hostnames_unique(self):
-        """All credentials with canary hostnames should have unique hostnames."""
-        generator = CredentialGenerator()
+    def test_canary_hostnames_unique_when_enabled(self):
+        """With canaries enabled, all canary hostnames should be unique."""
+        generator = CredentialGenerator(canary_enabled=True, canary_domain="canary.test")
         hostnames = set()
 
         aws = generator.generate_aws_key()
-        if aws.canary_hostname:
-            hostnames.add(aws.canary_hostname)
+        assert aws.canary_hostname is not None
+        hostnames.add(aws.canary_hostname)
 
         ha = generator.generate_ha_token()
-        if ha.canary_hostname:
-            assert ha.canary_hostname not in hostnames
-            hostnames.add(ha.canary_hostname)
+        assert ha.canary_hostname is not None
+        assert ha.canary_hostname not in hostnames
+        hostnames.add(ha.canary_hostname)
 
         gh = generator.generate_github_pat()
-        if gh.canary_hostname:
-            assert gh.canary_hostname not in hostnames
-            hostnames.add(gh.canary_hostname)
+        assert gh.canary_hostname is not None
+        assert gh.canary_hostname not in hostnames
+        hostnames.add(gh.canary_hostname)
 
         assert len(hostnames) == 3
+
+    def test_no_canary_hostnames_when_disabled(self):
+        """With canaries disabled (default), all canary hostnames should be None."""
+        generator = CredentialGenerator()
+        assert generator.generate_aws_key().canary_hostname is None
+        assert generator.generate_ha_token().canary_hostname is None
+        assert generator.generate_github_pat().canary_hostname is None

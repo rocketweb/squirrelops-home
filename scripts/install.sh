@@ -21,7 +21,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------
 # Version pinning — update this for each release
 # -----------------------------------------------------------------------
-SQUIRRELOPS_VERSION="1.0.0"
+SQUIRRELOPS_VERSION="1.1.2"
 
 INSTALL_DIR="/opt/squirrelops"
 IMAGE="ghcr.io/rocketweb/squirrelops-sensor"

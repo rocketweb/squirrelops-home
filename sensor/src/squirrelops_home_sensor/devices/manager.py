@@ -162,6 +162,8 @@ class DeviceManager:
         Populates ``_known_devices`` so the fingerprint matcher can
         recognise returning devices across sensor restarts. Should be
         called once at startup before the first scan.
+
+        Uses bulk queries instead of per-device lookups to avoid N+1.
         """
         cursor = await self._db.execute(
             "SELECT d.id, d.ip_address, d.mac_address, d.hostname, "

@@ -43,8 +43,9 @@ guard bindResult == 0 else {
     exit(1)
 }
 
-// Allow sensor process to connect (owner + group read/write)
-chmod(socketPath, 0o666)
+// Restrict socket access: owner (root) + group only, no world access.
+// On macOS, real user accounts (UID >= 500) in the "staff" group can connect.
+chmod(socketPath, 0o660)
 
 guard listen(serverFd, 5) == 0 else {
     logger.error("Failed to listen: \(String(cString: strerror(errno)))")
@@ -64,6 +65,20 @@ while true {
     let clientFd = accept(serverFd, nil, nil)
     guard clientFd >= 0 else {
         logger.warning("accept() failed: \(String(cString: strerror(errno)))")
+        continue
+    }
+
+    // Verify peer credentials: only allow root (UID 0) and real user accounts (UID >= 500)
+    var peerUID: uid_t = 0
+    var peerGID: gid_t = 0
+    guard getpeereid(clientFd, &peerUID, &peerGID) == 0 else {
+        logger.warning("getpeereid() failed for client fd \(clientFd): \(String(cString: strerror(errno)))")
+        close(clientFd)
+        continue
+    }
+    guard peerUID == 0 || peerUID >= 500 else {
+        logger.warning("Rejected RPC connection from unauthorized UID \(peerUID)")
+        close(clientFd)
         continue
     }
 

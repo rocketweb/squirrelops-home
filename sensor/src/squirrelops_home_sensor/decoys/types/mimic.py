@@ -96,6 +96,7 @@ class _MimicEndpoint:
         peername = writer.get_extra_info("peername")
         source_ip = peername[0] if peername else "0.0.0.0"
         source_port = peername[1] if peername else 0
+        notified = False
 
         try:
             # Read request line
@@ -155,9 +156,20 @@ class _MimicEndpoint:
                     credential_used=credential_used,
                 )
                 self.connection_callback(event)
+                notified = True
 
         except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
-            pass
+            # TCP connect without completing HTTP exchange (e.g. nmap scan).
+            # Still record the connection attempt.
+            if not notified and self.connection_callback:
+                event = DecoyConnectionEvent(
+                    source_ip=source_ip,
+                    source_port=source_port,
+                    dest_port=self.port,
+                    protocol="tcp",
+                    timestamp=datetime.now(timezone.utc),
+                )
+                self.connection_callback(event)
         except Exception:
             logger.debug("Mimic HTTP handler error on %s:%d", self.bind_ip, self.port, exc_info=True)
         finally:
@@ -174,6 +186,7 @@ class _MimicEndpoint:
         peername = writer.get_extra_info("peername")
         source_ip = peername[0] if peername else "0.0.0.0"
         source_port = peername[1] if peername else 0
+        notified = False
 
         try:
             # Send banner
@@ -202,9 +215,19 @@ class _MimicEndpoint:
                     credential_used=credential_used,
                 )
                 self.connection_callback(event)
+                notified = True
 
         except (ConnectionResetError, BrokenPipeError):
-            pass
+            # TCP connect without completing banner exchange (e.g. nmap scan).
+            if not notified and self.connection_callback:
+                event = DecoyConnectionEvent(
+                    source_ip=source_ip,
+                    source_port=source_port,
+                    dest_port=self.port,
+                    protocol="tcp",
+                    timestamp=datetime.now(timezone.utc),
+                )
+                self.connection_callback(event)
         except Exception:
             logger.debug("Mimic banner handler error", exc_info=True)
         finally:
