@@ -260,12 +260,14 @@ async def list_alerts(
 
 @router.get("/alerts/export", response_model=ExportResponse)
 async def export_alerts(
+    limit: int = Query(10000, ge=1, le=50000),
+    offset: int = Query(0, ge=0),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     db: aiosqlite.Connection = Depends(get_db),
     _auth: dict = Depends(verify_client_cert),
 ):
-    """Export all alerts and incidents as JSON, optionally filtered by date range."""
+    """Export alerts and incidents as JSON with pagination and optional date range."""
     where_clauses: list[str] = []
     params: list = []
 
@@ -280,21 +282,34 @@ async def export_alerts(
     if where_clauses:
         where_sql = "WHERE " + " AND ".join(where_clauses)
 
-    cursor = await db.execute(f"SELECT * FROM home_alerts {where_sql} ORDER BY created_at", params)
+    cursor = await db.execute(
+        f"SELECT * FROM home_alerts {where_sql} ORDER BY created_at LIMIT ? OFFSET ?",
+        params + [limit, offset],
+    )
     rows = await cursor.fetchall()
     alerts = [_parse_alert_row(row) for row in rows]
 
-    # Fetch incidents that have alerts in the date range
-    incident_ids = {a.incident_id for a in alerts if a.incident_id is not None}
+    # Bulk-fetch all referenced incidents in a single query (eliminates N+1)
+    incident_ids = list({a.incident_id for a in alerts if a.incident_id is not None})
     incidents = []
-    for iid in incident_ids:
-        cursor = await db.execute("SELECT * FROM incidents WHERE id = ?", (iid,))
-        inc_row = await cursor.fetchone()
-        if inc_row:
-            child_alerts = [a for a in alerts if a.incident_id == iid]
+    if incident_ids:
+        placeholders = ",".join("?" for _ in incident_ids)
+        cursor = await db.execute(
+            f"SELECT * FROM incidents WHERE id IN ({placeholders})",
+            incident_ids,
+        )
+        inc_rows = await cursor.fetchall()
+        # Build a lookup so we can attach child alerts
+        alerts_by_incident: dict[int, list[AlertDetail]] = {}
+        for a in alerts:
+            if a.incident_id is not None:
+                alerts_by_incident.setdefault(a.incident_id, []).append(a)
+
+        for inc_row in inc_rows:
+            iid = inc_row["id"]
             incidents.append(
                 IncidentDetail(
-                    id=inc_row["id"],
+                    id=iid,
                     source_ip=inc_row["source_ip"],
                     source_mac=inc_row["source_mac"],
                     status=inc_row["status"],
@@ -304,7 +319,7 @@ async def export_alerts(
                     last_alert_at=inc_row["last_alert_at"],
                     closed_at=inc_row["closed_at"],
                     summary=inc_row["summary"],
-                    alerts=child_alerts,
+                    alerts=alerts_by_incident.get(iid, []),
                 )
             )
 

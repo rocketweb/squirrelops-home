@@ -65,6 +65,8 @@ class MimicOrchestrator:
         max_mimics: int = 10,
         mdns_advertiser: MimicMDNSAdvertiser | None = None,
         port_forward_manager: PortForwardManager | None = None,
+        canary_enabled: bool = False,
+        canary_domain: str = "canary.local",
     ) -> None:
         self._engine = scout_engine
         self._template_gen = template_generator
@@ -73,7 +75,10 @@ class MimicOrchestrator:
         self._db = db
         self._max_mimics = max_mimics
         self._active_mimics: dict[int, MimicDecoy] = {}  # decoy_id -> MimicDecoy
-        self._cred_gen = CredentialGenerator()
+        self._cred_gen = CredentialGenerator(
+            canary_enabled=canary_enabled,
+            canary_domain=canary_domain,
+        )
         self._mdns = mdns_advertiser
         self._port_fwd = port_forward_manager
 
@@ -282,7 +287,7 @@ class MimicOrchestrator:
             planted_credentials=credentials,
             port_remaps=port_remaps,
         )
-        mimic.on_connection = self._handle_connection
+        mimic.on_connection = lambda event, _did=decoy_id, _dname=mimic_name: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
 
         try:
             await mimic.start()
@@ -574,7 +579,7 @@ class MimicOrchestrator:
                 planted_credentials=credentials,
                 port_remaps=port_remaps,
             )
-            mimic.on_connection = self._handle_connection
+            mimic.on_connection = lambda event, _did=decoy_id, _dname=row["name"]: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
             await mimic.start()
             self._active_mimics[decoy_id] = mimic
 
@@ -748,7 +753,7 @@ class MimicOrchestrator:
                     planted_credentials=credentials,
                     port_remaps=port_remaps,
                 )
-                mimic.on_connection = self._handle_connection
+                mimic.on_connection = lambda event, _did=decoy_id, _dname=row["name"]: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
                 await mimic.start()
                 self._active_mimics[decoy_id] = mimic
 
@@ -814,11 +819,11 @@ class MimicOrchestrator:
         if self._port_fwd is not None:
             await self._port_fwd.clear_all()
 
-    def _handle_connection(self, event: DecoyConnectionEvent) -> None:
+    def _handle_connection(self, event: DecoyConnectionEvent, *, decoy_id: int | None = None, decoy_name: str | None = None) -> None:
         """Connection callback for mimic decoys."""
-        asyncio.get_event_loop().create_task(self._async_handle_connection(event))
+        asyncio.get_event_loop().create_task(self._async_handle_connection(event, decoy_id=decoy_id, decoy_name=decoy_name))
 
-    async def _async_handle_connection(self, event: DecoyConnectionEvent) -> None:
+    async def _async_handle_connection(self, event: DecoyConnectionEvent, *, decoy_id: int | None = None, decoy_name: str | None = None) -> None:
         """Async handler for connection events from mimic decoys."""
         await self._event_bus.publish(
             "decoy.trip",
@@ -829,6 +834,8 @@ class MimicOrchestrator:
                 "protocol": event.protocol,
                 "request_path": event.request_path,
                 "timestamp": event.timestamp.isoformat(),
+                "decoy_id": decoy_id,
+                "decoy_name": decoy_name,
             },
         )
 
@@ -843,5 +850,7 @@ class MimicOrchestrator:
                     "request_path": event.request_path,
                     "timestamp": event.timestamp.isoformat(),
                     "detection_method": "mimic_decoy",
+                    "decoy_id": decoy_id,
+                    "decoy_name": decoy_name,
                 },
             )

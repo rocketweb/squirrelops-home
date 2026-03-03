@@ -204,11 +204,11 @@ The dashboard shows a progress bar with time remaining. After 48 hours, the sens
 
 The sensor auto-detects your hardware and recommends a profile. You can change it anytime in Settings.
 
-| Profile | Scan Interval | Max Decoys | Max Mimics | Scout Interval | Classification | Best For |
-|---------|--------------|------------|------------|----------------|---------------|----------|
-| **Lite** | 15 min | 3 | 0 | Disabled | Local signature DB only | Raspberry Pi 3, low-resource devices |
-| **Standard** | 5 min | 8 | 10 | 60 min | Cloud LLM (your API key) | Raspberry Pi 4, NAS, most setups |
-| **Full** | 1 min | 16 | 30 | 30 min | Local LLM (LM Studio/Ollama) | Dedicated server, power users |
+| Profile | Scan Interval | Max Decoys | Max Mimics | Classification | Best For |
+|---------|--------------|------------|------------|---------------|----------|
+| **Lite** | 15 min | 3 | Disabled | Local signature DB only | Raspberry Pi 3, low-resource devices |
+| **Standard** | 5 min | 8 | 10 | Cloud LLM (your API key) | Raspberry Pi 4, NAS, most setups |
+| **Full** | 1 min | 16 | 10+ | Local LLM (LM Studio/Ollama) | Dedicated server, power users |
 
 ---
 
@@ -425,7 +425,12 @@ The **Alerts** tab shows a chronological feed of alerts within the 90-day retent
 | New Device | High | An unknown device joined your network |
 | Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
 | Device Verification | Medium | A device reconnected with a different MAC but partial fingerprint match |
-| System (sensor offline, learning complete) | Medium/Low | Sensor status changes |
+| Behavioral Anomaly | Medium | A device deviated from its learned connection baseline |
+| Port Risk | Medium | A device is exposing a potentially risky port (e.g., open telnet, unencrypted management interface) |
+| Vendor Advisory | Medium | A device's manufacturer has a known security advisory |
+| Sensor Offline | Low | The sensor service stopped or became unreachable |
+| Learning Complete | Low | The 48-hour learning period has finished |
+| Review Reminder | Low | Devices have been in "unknown" trust status for an extended period |
 
 ### Grouped Security Alerts
 
@@ -444,12 +449,24 @@ Click any grouped alert to open its **Alert Detail View**, which shows the full 
 The toolbar provides multiple filtering dimensions:
 
 - **Severity chips** — All, Critical, High, Medium, Low
-- **Type chips** — All Types, Decoy Trip, New Device, MAC Changed, System
+- **Type chips** — All Types, Decoy Trip, Credential Trip, New Device, MAC Changed, Security, System
 - **Date Range** — Click the calendar button to filter by date range (From/To)
 - **Search** — Free-text search across alert titles, source IPs, and alert types
 - **History toggle** — Show or hide previously dismissed alerts
 
 All filters combine (AND logic). Active filters appear highlighted.
+
+### Alert Detail View
+
+Click any alert in the feed to open a detail sheet showing the full context of the alert:
+
+- **Header** — Severity indicator, title, alert type badge (e.g., "Port Scan Detected", "Credential Accessed"), severity label, and timestamp
+- **Source** — IP address, MAC address (if the device was identified), hostname, vendor, and device ID
+- **Intrusion Details** — Destination port, protocol, request path (for HTTP-based detections), and detection method (HTTP Decoy, Mimic Decoy, DNS Canary)
+- **Credential Access** (only for credential trip alerts) — Which planted credential was accessed and the request path used
+- **Decoy** — Which decoy was tripped, with name and ID
+
+Click **Done** to close the detail sheet.
 
 ### Incidents
 
@@ -459,7 +476,7 @@ Related alerts from the same source are grouped into **incidents**. Click any in
 - Source IP and MAC address
 - Time span (first alert to last alert)
 - Summary description
-- **Child alerts** — Expandable list of all alerts in the incident. Click any alert row to expand it and see full details: alert type, source IP/MAC, device ID, decoy ID, read/actioned timestamps, and any additional detail metadata
+- **Child alerts** — Expandable list of all alerts in the incident
 
 Use **Dismiss All** to acknowledge all alerts in an incident at once.
 
@@ -490,7 +507,7 @@ Dismissing a grouped security alert is like saying "I've seen this, I know about
 
 ## Settings
 
-The Settings tab contains eight configuration sections.
+The Settings tab contains the following configuration sections.
 
 ### Appearance
 
@@ -530,6 +547,32 @@ When a returning device's fingerprint confidence falls between 0.50 and the thre
 ### Credential Decoys
 
 Set the filename for the planted credential file served by decoy file shares. Default is `passwords.txt`. Change this if you want the credential artifact to look more natural for your network (e.g., `credentials.env`, `secrets.txt`).
+
+Seven credential types are planted across decoy services. When an intruder accesses a credential via HTTP (e.g., by requesting `/.env` or `/passwords.txt` on a decoy), a **Critical** severity "Credential Accessed" alert fires immediately.
+
+### DNS Canary Configuration
+
+DNS canary hostnames are **disabled by default**. When enabled, unique hostnames are embedded in three credential types (AWS keys, GitHub PATs, Home Assistant tokens). If an intruder steals one of these credentials and attempts to use it, the resulting DNS lookup is detected by the sensor's local DNS monitor.
+
+**Configuration** (in `config.yaml` or via environment variables):
+
+```yaml
+decoys:
+  dns_canaries:
+    enabled: false          # set to true to activate
+    domain: "canary.local"  # the domain suffix for generated hostnames
+```
+
+Or via environment variables:
+
+```bash
+SQUIRRELOPS_DECOYS__DNS_CANARIES__ENABLED=true
+SQUIRRELOPS_DECOYS__DNS_CANARIES__DOMAIN=canary.example.com
+```
+
+When enabled, credentials like AWS keys will contain hostnames in the format `{32-hex-chars}.{domain}` (e.g., `a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.canary.local`). The sensor's DNS monitor passively sniffs DNS traffic on the local network and matches queries against known canary hostnames. A match triggers a Critical "Credential Accessed" alert with `detection_method: dns_canary`.
+
+**Important:** DNS canary detection is purely local and passive. No external server is contacted. However, to receive canary callbacks from credentials used *outside* your local network, you would need to set up a canary collection server. See [DNS Canary Setup](#dns-canary-setup) for details.
 
 ### LLM Configuration
 
@@ -632,7 +675,7 @@ If it's not running, reload it:
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.squirrelops.sensor.plist
 ```
 
-The app reconnects automatically on a 30-second interval. After 5 minutes of disconnection, it generates a Medium-severity "Sensor Disconnected" alert.
+The app reconnects automatically on a 30-second interval. After 5 minutes of disconnection, it generates a Low-severity "Sensor Offline" alert.
 
 ### No Alerts Appearing
 
@@ -715,6 +758,188 @@ All locally stored data (databases, configuration, logs, alert history) is delet
 
 ---
 
+## DNS Canary Setup
+
+DNS canary hostnames let the sensor detect when a stolen credential is *used* — not just accessed. This section explains how the feature works and how to set up a canary collection server if you want detection beyond your local network.
+
+### How DNS Canaries Work
+
+1. The sensor generates credentials with unique hostnames embedded in them (e.g., an AWS key whose secret references `a1b2...c5d6.canary.example.com`)
+2. If an intruder steals the credential and tries to use it, their machine performs a DNS lookup for that hostname
+3. Detection can happen in two ways:
+   - **Local detection** (built-in): The sensor passively sniffs DNS queries on your LAN (UDP port 53) and matches them against known canary hostnames. This works when the intruder is still on your network.
+   - **Remote detection** (requires your own server): If you control the DNS zone for the canary domain, queries from *anywhere on the internet* are logged by your authoritative DNS server and can be forwarded back to the sensor.
+
+### Local-Only Setup (No External Server)
+
+This is the simplest configuration. It detects credential use only while the intruder is on your local network.
+
+1. Edit your sensor config (`config.yaml` or environment variables):
+
+```yaml
+decoys:
+  dns_canaries:
+    enabled: true
+    domain: "canary.local"    # .local is fine for LAN-only detection
+```
+
+2. Restart the sensor. New decoys deployed after this point will have canary hostnames embedded in their AWS key, GitHub PAT, and HA token credentials.
+
+3. Existing decoys are not retroactively updated. To regenerate credentials with canaries, disable and re-enable each decoy, or redeploy the sensor.
+
+That's it. The sensor's DNS monitor will detect any DNS queries for `*.canary.local` on your LAN and create Critical alerts.
+
+### Remote Detection Setup (External Canary Server)
+
+To detect credential use after an intruder has left your network, you need:
+
+1. **A domain you control** (e.g., `canary.example.com`)
+2. **A VPS or cloud server** to run an authoritative DNS server for that domain
+3. **DNS delegation** from your registrar pointing the canary subdomain to your server
+
+#### Requirements
+
+- A registered domain (or subdomain you can delegate)
+- A server with a public IP address (any small VPS will do — minimal CPU/RAM needed)
+- Ability to configure NS records at your domain registrar
+
+#### Step 1: Configure DNS Delegation
+
+At your domain registrar, create an NS record that delegates the canary subdomain to your server:
+
+```
+canary.example.com.  NS  ns1.canary.example.com.
+ns1.canary.example.com.  A  <your-server-public-ip>
+```
+
+This tells the global DNS system that your server is authoritative for `*.canary.example.com`.
+
+#### Step 2: Run a Logging DNS Server
+
+On your server, run a DNS server that logs all incoming queries and responds with a valid (but meaningless) answer. A minimal Python implementation using `dnslib`:
+
+```
+pip install dnslib
+```
+
+Create `canary_dns.py`:
+
+```python
+"""Minimal authoritative DNS server that logs all queries to a canary zone."""
+
+import datetime
+import json
+import sys
+
+from dnslib import DNSRecord, RR, QTYPE, A
+from dnslib.server import DNSServer, BaseResolver
+
+ZONE = sys.argv[1] if len(sys.argv) > 1 else "canary.example.com"
+LOG_FILE = sys.argv[2] if len(sys.argv) > 2 else "/var/log/canary-dns.jsonl"
+# Respond with a routable but harmless IP (RFC 5737 TEST-NET)
+ANSWER_IP = "192.0.2.1"
+
+
+class CanaryResolver(BaseResolver):
+    def resolve(self, request, handler):
+        reply = request.reply()
+        qname = str(request.q.qname).rstrip(".")
+        qtype = QTYPE[request.q.qtype]
+        source = handler.client_address[0]
+
+        entry = {
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "query": qname,
+            "type": qtype,
+            "source_ip": source,
+        }
+
+        with open(LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+        print(f"[CANARY] {source} -> {qname} ({qtype})")
+
+        if qname.endswith(ZONE) and qtype == "A":
+            reply.add_answer(RR(qname, QTYPE.A, rdata=A(ANSWER_IP), ttl=60))
+
+        return reply
+
+
+if __name__ == "__main__":
+    print(f"Starting canary DNS server for zone: {ZONE}")
+    print(f"Logging to: {LOG_FILE}")
+    resolver = CanaryResolver()
+    server = DNSServer(resolver, port=53, address="0.0.0.0")
+    server.start()
+```
+
+Run it:
+
+```bash
+sudo python3 canary_dns.py canary.example.com /var/log/canary-dns.jsonl
+```
+
+Or run it as a systemd service for persistence:
+
+```ini
+# /etc/systemd/system/canary-dns.service
+[Unit]
+Description=Canary DNS Server
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/canary-dns/canary_dns.py canary.example.com /var/log/canary-dns.jsonl
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### Step 3: Configure the Sensor
+
+Update your sensor config to use your domain:
+
+```yaml
+decoys:
+  dns_canaries:
+    enabled: true
+    domain: "canary.example.com"
+```
+
+Restart the sensor. New credentials will now contain hostnames like `a1b2...c5d6.canary.example.com`.
+
+#### Step 4: Monitor for Hits
+
+Check your canary DNS server logs for queries:
+
+```bash
+tail -f /var/log/canary-dns.jsonl
+```
+
+Each line is a JSON object with the query name, type, source IP, and timestamp. Cross-reference the hex subdomain against your sensor's `planted_credentials` table to identify which credential was compromised.
+
+#### Verification
+
+To verify the setup is working end-to-end:
+
+1. Deploy a decoy with canaries enabled
+2. Access the decoy's credential endpoint (e.g., `curl http://<decoy-ip>:<port>/.env`)
+3. Extract a canary hostname from the credential content
+4. From a different machine, run `nslookup <canary-hostname>` or `dig <canary-hostname>`
+5. Confirm the query appears in your canary DNS server logs
+6. Confirm the sensor creates a Critical alert (for local LAN queries)
+
+### Security Considerations
+
+- The canary domain does not need to host any web content — it only needs to answer DNS queries
+- The DNS server should be hardened: disable recursion, rate-limit responses, and restrict zone transfers
+- Canary hostnames are random 32-character hex strings, making them unguessable
+- The canary DNS server logs source IPs of queries, which can help attribute where stolen credentials were used
+- Consider rotating canary domains periodically if you suspect an intruder has identified your canary infrastructure
+
+---
+
 ## Privacy & Security
 
 ### What Stays on Your Network
@@ -729,8 +954,11 @@ Everything, by default. All device data, alert history, scan results, and config
 | **Cloud LLM Classification** (Standard mode) | Manufacturer OUI, DHCP fingerprint hash, mDNS service types, open port list. No IPs, MACs, or hostnames. | Your configured LLM provider (Anthropic or OpenAI), using your own API key | Switch to Lite or Full profile |
 | **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers." | Your Slack workspace | Toggle off in Settings > Alert Methods |
 | **Update Checks** | Current version number and platform identifier | SquirrelOps update endpoint | Don't click "Check for Updates" |
+| **DNS Canaries** (if enabled with external domain) | Canary hostnames appear in DNS queries initiated by intruders using stolen credentials. Your external canary DNS server receives these queries. | Your own canary DNS server | Set `decoys.dns_canaries.enabled: false` (this is the default) |
 
 In **Full mode** with a local LLM, no classification data leaves your network.
+
+**Note on DNS canaries:** When disabled (the default), no canary hostnames are generated and no DNS-related data leaves your network. When enabled with a `.local` domain, detection is purely local. Only when you configure an external domain and run your own canary DNS server do DNS queries from stolen credentials leave your network — and those queries go to a server *you* control, not to any third party.
 
 ### Certificate Pinning
 
@@ -760,4 +988,6 @@ On macOS, the sensor uses pfctl packet filter rules (loaded into a dedicated `co
 
 ### Credential Safety
 
-The only credentials the sensor stores are **synthetic credentials it generates for deception**. These are clearly marked as synthetic in the database. The sensor never stores your real service credentials.
+The only credentials the sensor stores are **synthetic credentials it generates for deception**. These are clearly marked as synthetic in the database (`planted_credentials` table with `credential_type` and `planted_location` columns). The sensor never stores your real service credentials.
+
+When DNS canaries are enabled, canary hostnames are stored alongside the credential in the `canary_hostname` column. These hostnames are random hex strings that do not contain any identifying information about your network, devices, or real credentials.

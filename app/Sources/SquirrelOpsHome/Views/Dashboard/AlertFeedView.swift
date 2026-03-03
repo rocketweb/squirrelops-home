@@ -21,8 +21,9 @@ struct AlertFeedView: View {
     @State private var filterDateFrom: Date? = nil
     @State private var filterDateTo: Date? = nil
     @State private var showDateFilter = false
-    @State private var selectedAlertId: Int?
     @State private var showDismissed = false
+    @State private var selectedAlertId: Int?
+    @State private var alertDetailId: Int?
 
     // MARK: - Severity filter options
 
@@ -112,8 +113,10 @@ struct AlertFeedView: View {
                                     dismissAlert(alert)
                                 }
                             }
-                            Button(alert.issueKey != nil ? "View Details" : "Open") {
-                                selectedAlertId = alert.id
+                            if alert.incidentId != nil {
+                                Button("View Incident") {
+                                    openIncidentForAlert(alert)
+                                }
                             }
                         }
                 }
@@ -124,12 +127,16 @@ struct AlertFeedView: View {
                     else { return }
                     selectedAlertId = nil
 
-                    // Open detail view based on alert type
-                    if alert.issueKey != nil {
-                        openAlertDetail(alert)
-                    } else if alert.incidentId != nil {
-                        openIncidentForAlert(alert)
+                    // Mark as read on click
+                    if alert.readAt == nil {
+                        appState.markAlertRead(alert.id)
+                        Task {
+                            try? await appState.sensorClient?.request(.readAlert(id: alert.id))
+                        }
                     }
+
+                    // Always open the alert detail sheet
+                    alertDetailId = alert.id
                 }
             }
         }
@@ -137,8 +144,13 @@ struct AlertFeedView: View {
         .sheet(item: $selectedIncident) { incident in
             IncidentDetailView(incident: incident, appState: appState)
         }
-        .sheet(item: $selectedAlertDetail) { alertDetail in
-            AlertDetailView(alertDetail: alertDetail, appState: appState)
+        .sheet(isPresented: Binding(
+            get: { alertDetailId != nil },
+            set: { if !$0 { alertDetailId = nil } }
+        )) {
+            if let id = alertDetailId {
+                AlertDetailView(alertId: id, appState: appState)
+            }
         }
         .overlay {
             if isLoadingIncident || isLoadingAlertDetail {

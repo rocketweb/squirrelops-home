@@ -195,12 +195,52 @@ class _ScanLoopWrapper:
 
 
 def create_secret_store(config: dict[str, Any]) -> Any:
-    """Create the platform-appropriate secret store."""
+    """Create the platform-appropriate secret store.
+
+    Passphrase resolution order:
+    1. Explicit ``sensor.secret_passphrase`` in config (if not the legacy default)
+    2. Auto-generated passphrase file (``data_dir/.secret_passphrase``)
+    3. Fresh install: generate a cryptographically random passphrase and persist it
+    4. Legacy install (secrets.enc exists but no passphrase file): fall back to
+       the old default with a warning so existing data remains accessible
+    """
+    import secrets as _secrets
+
     from squirrelops_home_sensor.secrets.encrypted_file import EncryptedFileStore
-    data_dir = config.get("sensor", {}).get("data_dir", "./data")
+
+    data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
+    secrets_file = data_dir / "secrets.enc"
+    passphrase_file = data_dir / ".secret_passphrase"
+
+    explicit = config.get("sensor", {}).get("secret_passphrase")
+
+    if explicit and explicit != "squirrelops-default":
+        # User provided an explicit passphrase — use it directly
+        passphrase = explicit
+    elif passphrase_file.exists():
+        # Auto-generated passphrase from a previous run
+        passphrase = passphrase_file.read_text().strip()
+    elif not secrets_file.exists():
+        # Fresh install — generate a strong passphrase and persist it
+        passphrase = _secrets.token_urlsafe(32)
+        passphrase_file.parent.mkdir(parents=True, exist_ok=True)
+        passphrase_file.write_text(passphrase)
+        passphrase_file.chmod(0o600)
+        logger.info("Generated new secret store passphrase at %s", passphrase_file)
+    else:
+        # Legacy install: secrets.enc exists but no passphrase file.
+        # Fall back to the old default so existing encrypted data stays accessible.
+        passphrase = "squirrelops-default"
+        logger.warning(
+            "Using legacy default passphrase for secret store. "
+            "Set sensor.secret_passphrase in config or delete %s "
+            "to auto-generate a secure passphrase on next restart.",
+            secrets_file,
+        )
+
     return EncryptedFileStore(
-        file_path=Path(data_dir) / "secrets.enc",
-        master_password=config.get("sensor", {}).get("secret_passphrase", "squirrelops-default"),
+        file_path=secrets_file,
+        master_password=passphrase,
     )
 
 
@@ -220,12 +260,15 @@ def create_orchestrator(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
 
     decoy_cfg = config.get("decoys", {})
     max_decoys = decoy_cfg.get("max_decoys", 8)
+    canary_cfg = decoy_cfg.get("dns_canaries", {})
 
     return _OrchestratorWrapper(
         DecoyOrchestrator(
             event_bus=event_bus,
             db=db,
             max_decoys=max_decoys,
+            canary_enabled=canary_cfg.get("enabled", False),
+            canary_domain=canary_cfg.get("domain", "canary.local"),
         )
     )
 
@@ -315,6 +358,8 @@ def create_scouts_subsystem(
     # Build mimic orchestrator
     template_gen = MimicTemplateGenerator()
     max_mimics = scouts_cfg.get("max_mimic_decoys", 10)
+    decoy_cfg = config.get("decoys", {})
+    canary_cfg = decoy_cfg.get("dns_canaries", {})
     mimic_orchestrator = MimicOrchestrator(
         scout_engine=scout_engine,
         template_generator=template_gen,
@@ -324,6 +369,8 @@ def create_scouts_subsystem(
         max_mimics=max_mimics,
         mdns_advertiser=mimic_mdns,
         port_forward_manager=port_fwd,
+        canary_enabled=canary_cfg.get("enabled", False),
+        canary_domain=canary_cfg.get("domain", "canary.local"),
     )
 
     logger.info(
@@ -587,6 +634,23 @@ async def run_sensor(
         )
 
     event_bus.subscribe(["*"], _ws_broadcast)
+
+    # 7c2. Wire alert pipeline: decoy events → alerts → incidents → dispatch
+    from squirrelops_home_sensor.alerts.incidents import IncidentGrouper
+    from squirrelops_home_sensor.alerts.dispatcher import AlertDispatcher, create_log_handler
+    from squirrelops_home_sensor.alerts.decoy_handler import DecoyAlertHandler
+
+    incident_grouper = IncidentGrouper(db=db, event_bus=event_bus)
+
+    alert_dispatcher = AlertDispatcher(methods=[
+        {"name": "log", "handler": create_log_handler(), "min_severity": "low"},
+    ])
+    alert_dispatcher.subscribe_to(event_bus)
+
+    decoy_alert_handler = DecoyAlertHandler(
+        db=db, event_bus=event_bus, incident_grouper=incident_grouper,
+    )
+    decoy_alert_handler.subscribe_to(event_bus)
 
     # 7d. Wire orchestrator into scan loop for auto-deploy
     scan_loop.set_orchestrator(orchestrator.inner)

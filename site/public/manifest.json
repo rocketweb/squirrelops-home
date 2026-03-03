@@ -1,32 +1,32 @@
 {
   "schema_version": 2,
   "latest": {
-    "sensor": "1.1.1",
-    "app": "1.1.1"
+    "sensor": "1.1.2",
+    "app": "1.1.2"
   },
   "min_supported": {
     "sensor": "1.0.0",
     "app": "1.0.0"
   },
   "downloads": {
-    "macos_pkg": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.1/SquirrelOpsHome-1.1.1.pkg",
-    "macos_pkg_sha256": "5c1d714463082e0b56168bd9121071f95b7c9453e9aaf5c12023cfa73215bf7c",
-    "docker_image": "ghcr.io/rocketweb/squirrelops-sensor:1.1.1"
+    "macos_pkg": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.2/SquirrelOpsHome-1.1.2.pkg",
+    "macos_pkg_sha256": "",
+    "docker_image": "ghcr.io/rocketweb/squirrelops-sensor:1.1.2"
   },
   "signatures": {
     "version": "2026.02.24",
     "download_url": "https://get.squirrelops.io/signatures/latest.json",
     "checksum_sha256": ""
   },
-  "updated_at": "2026-03-02T00:00:00Z",
+  "updated_at": "2026-03-03T00:00:00Z",
   "sensor": {
-    "latest_version": "1.1.1",
-    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.1"
+    "latest_version": "1.1.2",
+    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.2"
   },
   "app": {
-    "latest_version": "1.1.1",
-    "download_url": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.1/SquirrelOpsHome-1.1.1.pkg",
-    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.1",
-    "sha256": "a9697b76702c2882db616f5586266d61c4a03f89999a268dc49f9f6522139d98"
+    "latest_version": "1.1.2",
+    "download_url": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.2/SquirrelOpsHome-1.1.2.pkg",
+    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.2",
+    "sha256": ""
   }
 }

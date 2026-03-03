@@ -82,10 +82,30 @@ class CredentialGenerator:
     """Generates realistic credentials for decoy services.
 
     Each generator instance tracks emitted values to guarantee uniqueness.
+
+    Parameters
+    ----------
+    password_filename:
+        Filename used as ``planted_location`` for password-type credentials.
+    canary_enabled:
+        When ``True``, DNS canary hostnames are embedded in credentials that
+        support them (AWS keys, GitHub PATs, HA tokens).  Default ``False``.
+    canary_domain:
+        The domain suffix used when generating canary hostnames.
+        Default ``"canary.local"``.  Only relevant when *canary_enabled* is
+        ``True``.
     """
 
-    def __init__(self, *, password_filename: str = "passwords.txt") -> None:
+    def __init__(
+        self,
+        *,
+        password_filename: str = "passwords.txt",
+        canary_enabled: bool = False,
+        canary_domain: str = "canary.local",
+    ) -> None:
         self._password_filename = password_filename
+        self._canary_enabled = canary_enabled
+        self._canary_domain = canary_domain
         self._emitted_values: set[str] = set()
         self._emitted_hostnames: set[str] = set()
 
@@ -100,14 +120,17 @@ class CredentialGenerator:
     # Canary hostname
     # -----------------------------------------------------------------
 
-    def generate_canary_hostname(self) -> str:
-        """Generate a unique DNS canary hostname.
+    def generate_canary_hostname(self) -> Optional[str]:
+        """Generate a unique DNS canary hostname, or ``None`` if disabled.
 
-        Format: {32 hex chars}.canary.squirrelops.io
+        Returns ``None`` when ``canary_enabled`` is ``False``.
+        Format: {32 hex chars}.{canary_domain}
         Uses secrets.token_hex(16) for 32 hex characters.
         """
+        if not self._canary_enabled:
+            return None
         while True:
-            hostname = f"{secrets.token_hex(16)}.canary.squirrelops.io"
+            hostname = f"{secrets.token_hex(16)}.{self._canary_domain}"
             if hostname not in self._emitted_hostnames:
                 self._emitted_hostnames.add(hostname)
                 return hostname

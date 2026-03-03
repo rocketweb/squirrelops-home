@@ -31,11 +31,17 @@ class NetworkConfig(BaseModel):
     learning_duration_hours: int = 48
 
 
+class DNSCanaryConfig(BaseModel):
+    enabled: bool = False
+    domain: str = "canary.local"
+
+
 class DecoyConfig(BaseModel):
     max_decoys: int = 8
     health_check_interval: int = 1800
     restart_max_attempts: int = 3
     restart_window_seconds: int = 300
+    dns_canaries: DNSCanaryConfig = Field(default_factory=DNSCanaryConfig)
 
 
 class AlertMethodsConfig(BaseModel):

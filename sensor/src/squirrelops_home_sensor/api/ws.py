@@ -104,35 +104,46 @@ async def _authenticate(
     return None
 
 
+_REPLAY_BATCH_SIZE = 500
+
+
 async def _replay_events(
     ws: WebSocket, db: aiosqlite.Connection, since_seq: int
 ) -> None:
-    """Replay events with seq > since_seq, then send replay_complete."""
+    """Replay events with seq > since_seq, then send replay_complete.
+
+    Uses batched fetching to bound memory usage when the event log is large.
+    """
     cursor = await db.execute(
         "SELECT seq, event_type, payload, created_at FROM events WHERE seq > ? ORDER BY seq",
         (since_seq,),
     )
-    rows = await cursor.fetchall()
 
     # Columns: seq(0), event_type(1), payload(2), created_at(3)
     last_seq = since_seq
-    for row in rows:
-        payload = row[2]
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except (json.JSONDecodeError, TypeError):
-                pass
+    total_sent = 0
+    while True:
+        rows = await cursor.fetchmany(_REPLAY_BATCH_SIZE)
+        if not rows:
+            break
+        for row in rows:
+            payload = row[2]
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-        await ws.send_json({
-            "type": "event",
-            "seq": row[0],
-            "event_type": row[1],
-            "payload": payload,
-        })
-        last_seq = row[0]
+            await ws.send_json({
+                "type": "event",
+                "seq": row[0],
+                "event_type": row[1],
+                "payload": payload,
+            })
+            last_seq = row[0]
+            total_sent += 1
 
-    if not rows and since_seq == 0:
+    if total_sent == 0 and since_seq == 0:
         # Check if there are any events at all
         cursor = await db.execute("SELECT MAX(seq) FROM events")
         max_row = await cursor.fetchone()

@@ -107,11 +107,19 @@ def _parse_config(raw: Optional[str]) -> dict:
         return {}
 
 
-def _generate_credentials(decoy_type: str) -> list:
+def _generate_credentials(
+    decoy_type: str,
+    *,
+    canary_enabled: bool = False,
+    canary_domain: str = "canary.local",
+) -> list:
     """Generate appropriate planted credentials for a decoy type."""
     from squirrelops_home_sensor.decoys.credentials import CredentialGenerator
 
-    gen = CredentialGenerator()
+    gen = CredentialGenerator(
+        canary_enabled=canary_enabled,
+        canary_domain=canary_domain,
+    )
     if decoy_type == "file_share":
         creds = gen.generate_passwords_file()
         creds.append(gen.generate_ssh_key())
@@ -174,10 +182,14 @@ class DecoyOrchestrator:
         event_bus: EventBusProtocol,
         db: DBProtocol,
         max_decoys: int = 8,
+        canary_enabled: bool = False,
+        canary_domain: str = "canary.local",
     ) -> None:
         self._event_bus = event_bus
         self._db = db
         self._max_decoys = max_decoys
+        self._canary_enabled = canary_enabled
+        self._canary_domain = canary_domain
         self._records: dict[int, DecoyRecord] = {}
 
     # -----------------------------------------------------------------
@@ -340,7 +352,11 @@ class DecoyOrchestrator:
         """
         name = _DECOY_NAMES.get(decoy_type, decoy_type.replace("_", " ").title())
         now = datetime.now(timezone.utc).isoformat()
-        creds = _generate_credentials(decoy_type)
+        creds = _generate_credentials(
+            decoy_type,
+            canary_enabled=self._canary_enabled,
+            canary_domain=self._canary_domain,
+        )
 
         # Build default config per decoy type
         config: dict = {}
@@ -409,8 +425,8 @@ class DecoyOrchestrator:
         Args:
             decoy: The BaseDecoy instance to deploy.
         """
-        # Register connection callback
-        decoy.on_connection = self._handle_connection
+        # Register connection callback (closure captures decoy identity)
+        decoy.on_connection = lambda event, _did=decoy.decoy_id, _dname=decoy.name: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
 
         await decoy.start()
 
@@ -614,7 +630,7 @@ class DecoyOrchestrator:
                 credentials=creds,
                 config=config,
             )
-            new_decoy.on_connection = self._handle_connection
+            new_decoy.on_connection = lambda event, _did=decoy_id, _dname=row["name"]: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
             await new_decoy.start()
             record.decoy = new_decoy
         else:
@@ -639,16 +655,16 @@ class DecoyOrchestrator:
     # Connection handling
     # -----------------------------------------------------------------
 
-    def _handle_connection(self, event: DecoyConnectionEvent) -> None:
+    def _handle_connection(self, event: DecoyConnectionEvent, *, decoy_id: int | None = None, decoy_name: str | None = None) -> None:
         """Process a connection event from a decoy.
 
         Publishes decoy.trip for all connections, and additionally
         decoy.credential_trip if a planted credential was detected.
         Runs event publishing in a fire-and-forget task.
         """
-        asyncio.get_event_loop().create_task(self._async_handle_connection(event))
+        asyncio.get_event_loop().create_task(self._async_handle_connection(event, decoy_id=decoy_id, decoy_name=decoy_name))
 
-    async def _async_handle_connection(self, event: DecoyConnectionEvent) -> None:
+    async def _async_handle_connection(self, event: DecoyConnectionEvent, *, decoy_id: int | None = None, decoy_name: str | None = None) -> None:
         """Async handler for connection events."""
         # Publish decoy.trip for every connection
         await self._event_bus.publish(
@@ -660,6 +676,8 @@ class DecoyOrchestrator:
                 "protocol": event.protocol,
                 "request_path": event.request_path,
                 "timestamp": event.timestamp.isoformat(),
+                "decoy_id": decoy_id,
+                "decoy_name": decoy_name,
             },
         )
 
@@ -675,5 +693,7 @@ class DecoyOrchestrator:
                     "request_path": event.request_path,
                     "timestamp": event.timestamp.isoformat(),
                     "detection_method": "decoy_http",
+                    "decoy_id": decoy_id,
+                    "decoy_name": decoy_name,
                 },
             )

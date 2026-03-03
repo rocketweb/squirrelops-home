@@ -4,6 +4,10 @@ struct SystemHealthView: View {
     @Environment(\.colorScheme) private var colorScheme
     let appState: AppState
 
+    private static let appVersion: String = {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+    }()
+
     private var connectionDotColor: Color {
         switch appState.connectionState {
         case .live:
@@ -118,7 +122,17 @@ struct SystemHealthView: View {
 
                     HStack(spacing: Spacing.lg) {
                         VStack(alignment: .leading, spacing: Spacing.xs) {
-                            Text("Version")
+                            Text("App")
+                                .font(Typography.bodySmall)
+                                .foregroundStyle(Theme.textSecondary(colorScheme))
+                            Text(Self.appVersion)
+                                .font(Typography.mono)
+                                .tracking(Typography.monoTracking)
+                                .foregroundStyle(Theme.textPrimary(colorScheme))
+                        }
+
+                        VStack(alignment: .leading, spacing: Spacing.xs) {
+                            Text("Sensor")
                                 .font(Typography.bodySmall)
                                 .foregroundStyle(Theme.textSecondary(colorScheme))
                             Text(appState.sensorInfo?.version ?? "--")
