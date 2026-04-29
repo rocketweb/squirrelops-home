@@ -5,14 +5,16 @@ import Security
 ///
 /// During pairing (no CA stored yet), accepts any server certificate (TOFU).
 /// After pairing, validates the server certificate chain against the pinned CA.
-public final class TLSPinningDelegate: NSObject, URLSessionDelegate, Sendable {
+public final class TLSPinningDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
 
     private let caCertData: Data?
+    private let clientIdentity: SecIdentity?
 
     /// Initialize with optional CA cert DER data for pinning.
     /// Pass `nil` to accept any server cert (TOFU mode for pairing).
-    public init(caCertData: Data? = nil) {
+    public init(caCertData: Data? = nil, clientIdentity: SecIdentity? = nil) {
         self.caCertData = caCertData
+        self.clientIdentity = clientIdentity
     }
 
     public func urlSession(
@@ -20,6 +22,20 @@ public final class TLSPinningDelegate: NSObject, URLSessionDelegate, Sendable {
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+            guard let clientIdentity else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+            let credential = URLCredential(
+                identity: clientIdentity,
+                certificates: nil,
+                persistence: .forSession
+            )
+            completionHandler(.useCredential, credential)
+            return
+        }
+
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let serverTrust = challenge.protectionSpace.serverTrust else {
             completionHandler(.performDefaultHandling, nil)
@@ -32,12 +48,15 @@ public final class TLSPinningDelegate: NSObject, URLSessionDelegate, Sendable {
             return
         }
 
-        // Pin against stored CA cert
+        // Pin against stored CA cert. Sensor certificates are generated on
+        // local networks where users may connect by mDNS name, LAN IP, or
+        // localhost, so this validates the CA chain without hostname binding.
         guard let caCert = SecCertificateCreateWithData(nil, caCertData as CFData) else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
 
+        SecTrustSetPolicies(serverTrust, SecPolicyCreateBasicX509())
         SecTrustSetAnchorCertificates(serverTrust, [caCert] as CFArray)
         SecTrustSetAnchorCertificatesOnly(serverTrust, true)
 

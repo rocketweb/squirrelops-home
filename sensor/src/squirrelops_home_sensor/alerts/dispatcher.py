@@ -11,14 +11,12 @@ Built-in method factories:
   - ``create_apns_stub_handler()`` -- no-op placeholder (kept for compat)
 """
 
-from __future__ import annotations
-
 import json
 import logging
-from typing import Any, Awaitable, Callable, Protocol
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol
 
 from squirrelops_home_sensor.alerts.types import Severity, severity_emoji
-
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +96,64 @@ class AlertDispatcher:
                 )
 
 
+def build_methods_from_config(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build alert delivery methods from the live sensor config."""
+    methods: list[dict[str, Any]] = [
+        {"name": "log", "handler": create_log_handler(), "min_severity": "low"},
+    ]
+    alert_methods = config.get("alert_methods", {})
+    if not isinstance(alert_methods, dict):
+        return methods
+
+    slack_cfg = alert_methods.get("slack", {})
+    if isinstance(slack_cfg, dict) and slack_cfg.get("enabled"):
+        webhook_url = str(slack_cfg.get("webhook_url", "")).strip()
+        if webhook_url:
+            methods.append({
+                "name": "slack",
+                "handler": create_slack_handler(
+                    webhook_url,
+                    include_device_info=bool(slack_cfg.get("include_device_info", False)),
+                ),
+                "min_severity": slack_cfg.get("min_severity", "low"),
+            })
+        else:
+            logger.warning("Slack alert method enabled without webhook_url; skipping")
+
+    push_cfg = alert_methods.get("push", alert_methods.get("apns", {}))
+    if isinstance(push_cfg, dict) and push_cfg.get("enabled"):
+        methods.append({
+            "name": "apns",
+            "handler": create_apns_handler(
+                str(push_cfg.get("relay_url", config.get("apns_relay_url", ""))).strip(),
+                relay_token=str(push_cfg.get("relay_token", config.get("apns_relay_token", ""))),
+                device_token=str(push_cfg.get("device_token", "")),
+            ),
+            "min_severity": push_cfg.get("min_severity", "low"),
+        })
+
+    return methods
+
+
+class ConfigurableAlertDispatcher(AlertDispatcher):
+    """Alert dispatcher that resolves delivery methods from live config."""
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        self._config = config
+        super().__init__(methods=[])
+
+    async def dispatch(self, alert_payload: AlertPayload) -> None:
+        self._methods = [MethodConfig(m) for m in build_methods_from_config(self._config)]
+        await super().dispatch(alert_payload)
+
+
 # -- Slack payload formatter -----------------------------------------
 
-def format_slack_payload(alert_payload: AlertPayload, *, include_device_info: bool = False) -> dict[str, Any]:
+def format_slack_payload(
+    alert_payload: AlertPayload,
+    *,
+    include_device_info: bool = False,
+) -> dict[str, Any]:
     """Build a Slack Block Kit message from an alert payload.
 
     Returns a dict suitable for POST-ing to a Slack webhook URL.

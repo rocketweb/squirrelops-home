@@ -110,6 +110,7 @@ def _parse_config(raw: Optional[str]) -> dict:
 def _generate_credentials(
     decoy_type: str,
     *,
+    password_filename: str = "passwords.txt",
     canary_enabled: bool = False,
     canary_domain: str = "canary.local",
 ) -> list:
@@ -117,6 +118,7 @@ def _generate_credentials(
     from squirrelops_home_sensor.decoys.credentials import CredentialGenerator
 
     gen = CredentialGenerator(
+        password_filename=password_filename,
         canary_enabled=canary_enabled,
         canary_domain=canary_domain,
     )
@@ -184,12 +186,14 @@ class DecoyOrchestrator:
         max_decoys: int = 8,
         canary_enabled: bool = False,
         canary_domain: str = "canary.local",
+        credential_filename: str = "passwords.txt",
     ) -> None:
         self._event_bus = event_bus
         self._db = db
         self._max_decoys = max_decoys
         self._canary_enabled = canary_enabled
         self._canary_domain = canary_domain
+        self._credential_filename = credential_filename or "passwords.txt"
         self._records: dict[int, DecoyRecord] = {}
 
     # -----------------------------------------------------------------
@@ -354,6 +358,7 @@ class DecoyOrchestrator:
         now = datetime.now(timezone.utc).isoformat()
         creds = _generate_credentials(
             decoy_type,
+            password_filename=self._credential_filename,
             canary_enabled=self._canary_enabled,
             canary_domain=self._canary_domain,
         )
@@ -361,7 +366,7 @@ class DecoyOrchestrator:
         # Build default config per decoy type
         config: dict = {}
         if decoy_type == "file_share":
-            config["password_filename"] = "passwords.txt"
+            config["password_filename"] = self._credential_filename
 
         # Insert decoy row to get the ID
         cursor = await self._db.execute(

@@ -10,6 +10,8 @@ import aiosqlite
 from fastapi import APIRouter
 from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 
+from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
+
 router = APIRouter(tags=["websocket"])
 
 # Keepalive constants
@@ -75,7 +77,24 @@ async def _authenticate(
         })
         return None
 
-    # Check cert fingerprint
+    tls_fingerprint = client_cert_fingerprint_from_scope(ws.scope)
+    if tls_fingerprint:
+        cursor = await db.execute(
+            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ?",
+            (tls_fingerprint,),
+        )
+        row = await cursor.fetchone()
+        if row:
+            return row[0], tls_fingerprint
+
+    if ws.scope.get("scheme") == "wss":
+        await ws.send_json({
+            "type": "auth_error",
+            "reason": "Valid TLS client certificate required.",
+        })
+        return None
+
+    # Non-TLS development/test fallback.
     fingerprint = raw.get("cert_fingerprint")
     token = raw.get("token")
 

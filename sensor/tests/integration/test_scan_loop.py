@@ -34,7 +34,7 @@ from squirrelops_home_sensor.privileged.helper import (
 )
 from squirrelops_home_sensor.scanner.loop import ScanLoop
 from squirrelops_home_sensor.scanner.mdns_browser import MDNSBrowser, MDNSResult
-from squirrelops_home_sensor.scanner.port_scanner import PortScanner
+from squirrelops_home_sensor.scanner.port_scanner import PortResult, PortScanner
 from squirrelops_home_sensor.scanner.ssdp_scanner import SSDPResult, SSDPScanner
 
 
@@ -100,9 +100,12 @@ def mock_ops() -> AsyncMock:
 def mock_port_scanner() -> AsyncMock:
     """Mocked port scanner."""
     scanner = AsyncMock(spec=PortScanner)
-    scanner.scan.return_value = {
-        "192.168.1.1": [80, 443],
-        "192.168.1.2": [22],
+    scanner.scan_with_banners.return_value = {
+        "192.168.1.1": [
+            PortResult(port=80, service_name="http"),
+            PortResult(port=443, service_name="https"),
+        ],
+        "192.168.1.2": [PortResult(port=22, service_name="ssh")],
     }
     return scanner
 
@@ -167,7 +170,7 @@ class TestScanLoopExecution:
     ) -> None:
         """Phase 2: port scan enriches devices with open ports."""
         await scan_loop.run_single_scan()
-        mock_port_scanner.scan.assert_called_once()
+        mock_port_scanner.scan_with_banners.assert_called_once()
         device_1 = next(
             (d for d in device_manager.get_known_devices() if d.ip_address == "192.168.1.1"),
             None,
@@ -205,7 +208,7 @@ class TestScanLoopExecution:
     ) -> None:
         """If port scan fails, devices are still created from ARP."""
         failing_scanner = AsyncMock(spec=PortScanner)
-        failing_scanner.scan.side_effect = OSError("network error")
+        failing_scanner.scan_with_banners.side_effect = OSError("network error")
 
         loop = ScanLoop(
             device_manager=device_manager,
@@ -338,7 +341,7 @@ class TestScanLoopErrorHandling:
     ) -> None:
         """If port scan fails, ARP results are still processed."""
         failing_scanner = AsyncMock(spec=PortScanner)
-        failing_scanner.scan.side_effect = OSError("network error")
+        failing_scanner.scan_with_banners.side_effect = OSError("network error")
 
         loop = ScanLoop(
             device_manager=device_manager,
@@ -371,7 +374,9 @@ class TestScanResultMerging:
             ("192.168.1.99", "AA:BB:CC:DD:EE:99"),
         ]
         scanner = AsyncMock(spec=PortScanner)
-        scanner.scan.return_value = {"192.168.1.1": [80]}
+        scanner.scan_with_banners.return_value = {
+            "192.168.1.1": [PortResult(port=80, service_name="http")]
+        }
 
         loop = ScanLoop(
             device_manager=device_manager,

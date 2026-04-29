@@ -1,6 +1,10 @@
+profile: "standard"
+credential_filename: "passwords.txt"
+
 sensor:
   name: "SquirrelOps Home Sensor"
   data_dir: "./data"
+  port: 8443
 
 network:
   scan_interval: 300

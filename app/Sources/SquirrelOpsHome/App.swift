@@ -64,19 +64,21 @@ struct SquirrelOpsHomeApp: App {
     private func connectToSensor(_ sensor: PairingManager.PairedSensor) {
         appState.pairedSensor = sensor
 
-        // Use TOFU mode for TLS (sensor's server cert is self-signed, not
-        // signed by the pairing CA). Safe for local-network communication.
+        let caCertData = PairingManager.loadCACertificateData(for: sensor)
+        let clientIdentity = PairingManager.loadClientIdentity(for: sensor)
+
         let client = SensorClient(
             baseURL: sensor.baseURL,
             certFingerprint: sensor.certFingerprint,
-            caCertData: nil
+            caCertData: caCertData,
+            clientIdentity: clientIdentity
         )
         appState.sensorClient = client
         // WebSocket requires wss:// scheme instead of https://
         var wsComponents = URLComponents(url: sensor.baseURL.appendingPathComponent("ws/events"), resolvingAgainstBaseURL: false)!
         wsComponents.scheme = "wss"
         let wsURL = wsComponents.url!
-        let wsDelegate = TLSPinningDelegate(caCertData: nil)
+        let wsDelegate = TLSPinningDelegate(caCertData: caCertData, clientIdentity: clientIdentity)
         let wsSession = URLSession(configuration: .default, delegate: wsDelegate, delegateQueue: nil)
         let wsManager = WebSocketManager(url: wsURL, session: wsSession)
 

@@ -54,6 +54,12 @@ final class MockPairingClient: PairingClientProtocol, @unchecked Sendable {
 @Suite("PairingManager", .serialized)
 struct PairingManagerTests {
 
+    private func useIsolatedPairedSensorAccount() -> String {
+        let account = "io.squirrelops.home.paired-sensor.test.\(UUID().uuidString)"
+        PairingManager.pairedSensorAccountOverride = account
+        return account
+    }
+
     @Test("pair() calls challenge, verify, complete in order")
     func pairCallsEndpointsInOrder() async throws {
         let client = MockPairingClient()
@@ -317,6 +323,12 @@ struct PairingManagerTests {
 
     @Test("savePairedSensor and loadPairedSensor round-trip")
     func pairedSensorPersistence() throws {
+        let account = useIsolatedPairedSensorAccount()
+        defer {
+            try? KeychainStore.deletePassword(account: account)
+            PairingManager.pairedSensorAccountOverride = nil
+        }
+
         let sensor = PairingManager.PairedSensor(
             id: 99,
             name: "Persistent Sensor",
@@ -332,14 +344,16 @@ struct PairingManagerTests {
         #expect(loaded?.baseURL == sensor.baseURL)
         #expect(loaded?.certFingerprint == sensor.certFingerprint)
 
-        // Clean up
-        try? PairingManager.deletePairedSensor()
+        try PairingManager.deletePairedSensor()
     }
 
     @Test("loadPairedSensor returns nil when nothing stored")
     func loadPairedSensorReturnsNilWhenEmpty() throws {
-        // Ensure clean state
-        try? PairingManager.deletePairedSensor()
+        let account = useIsolatedPairedSensorAccount()
+        defer {
+            try? KeychainStore.deletePassword(account: account)
+            PairingManager.pairedSensorAccountOverride = nil
+        }
 
         let loaded = PairingManager.loadPairedSensor()
         #expect(loaded == nil)
@@ -347,6 +361,12 @@ struct PairingManagerTests {
 
     @Test("deletePairedSensor removes persisted data")
     func deletePairedSensorRemoves() throws {
+        let account = useIsolatedPairedSensorAccount()
+        defer {
+            try? KeychainStore.deletePassword(account: account)
+            PairingManager.pairedSensorAccountOverride = nil
+        }
+
         let sensor = PairingManager.PairedSensor(
             id: 88,
             name: "DeleteMe",

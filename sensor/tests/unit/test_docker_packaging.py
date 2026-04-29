@@ -160,6 +160,9 @@ class TestDockerCompose:
 
     def test_sensor_exposes_port_8443(self) -> None:
         sensor = self.compose["services"]["sensor"]
+        if sensor.get("network_mode") == "host":
+            assert sensor.get("environment", {}).get("SQUIRRELOPS_PORT") == "8443"
+            return
         ports = sensor.get("ports", [])
         port_strings = [str(p) for p in ports]
         assert any(

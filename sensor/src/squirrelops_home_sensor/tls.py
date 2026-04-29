@@ -199,15 +199,19 @@ async def ensure_tls_certs(
         await store.set("tls.server_key", _key_to_pem(server_key))  # type: ignore[union-attr]
         await store.set("tls.server_cert", _cert_to_pem(server_cert))  # type: ignore[union-attr]
 
-    # Always write PEM files for uvicorn
+    # Always write PEM files for uvicorn.  The CA file is used by uvicorn
+    # when requesting and verifying paired client certificates.
     cert_path = data_dir / "server.crt"
     key_path = data_dir / "server.key"
+    ca_path = data_dir / "ca.crt"
 
     data_dir.mkdir(parents=True, exist_ok=True)
     cert_path.write_text(_cert_to_pem(server_cert))
     key_path.write_text(_key_to_pem(server_key))
+    ca_path.write_text(_cert_to_pem(ca_cert))
     # Restrict key file permissions
     key_path.chmod(0o600)
+    ca_path.chmod(0o644)
 
     logger.info("TLS PEM files written to %s", data_dir)
     return cert_path, key_path, ca_key, ca_cert

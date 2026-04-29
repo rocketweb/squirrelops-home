@@ -88,7 +88,7 @@ class TestAuthMiddleware:
             await _db.execute("PRAGMA foreign_keys = ON")
             await create_all_tables(_db)
 
-        asyncio.get_event_loop().run_until_complete(setup_db())
+        asyncio.run(setup_db())
 
         async def override_db():
             yield _db
@@ -110,7 +110,7 @@ class TestAuthMiddleware:
         response = client.get("/devices")
         assert response.status_code == 403
 
-        asyncio.get_event_loop().run_until_complete(_db.close())
+        asyncio.run(_db.close())
 
     def test_pairing_routes_skip_auth(self, sensor_config):
         """Pairing routes must be accessible without client cert auth."""
@@ -128,7 +128,7 @@ class TestAuthMiddleware:
             await _db.execute("PRAGMA foreign_keys = ON")
             await create_all_tables(_db)
 
-        asyncio.get_event_loop().run_until_complete(setup_db())
+        asyncio.run(setup_db())
 
         async def override_db():
             yield _db
@@ -150,4 +150,4 @@ class TestAuthMiddleware:
         # Should not be 403 — pairing routes do not require client cert auth
         assert response.status_code != 403
 
-        asyncio.get_event_loop().run_until_complete(_db.close())
+        asyncio.run(_db.close())

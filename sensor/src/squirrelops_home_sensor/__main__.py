@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import ssl
 import sys
 from pathlib import Path
 from typing import Any
@@ -89,11 +90,20 @@ def create_scan_loop(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
     from squirrelops_home_sensor.scanner.loop import ScanLoop
     from squirrelops_home_sensor.scanner.port_scanner import PortScanner
 
-    # Build signature DB (load from file if available, otherwise empty)
-    sig_file = Path(config.get("sensor", {}).get("data_dir", "./data")) / "device_signatures.json"
-    if sig_file.exists():
+    # Build signature DB. Runtime overrides in the data dir win, then the
+    # packaged signatures bundled into Docker/wheels are used.
+    data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
+    signature_candidates = [
+        data_dir / "device_signatures.json",
+        Path.cwd() / "signatures" / "device_signatures.json",
+        Path(__file__).resolve().parents[2] / "signatures" / "device_signatures.json",
+    ]
+    sig_file = next((path for path in signature_candidates if path.exists()), None)
+    if sig_file is not None:
+        logger.info("Loading device signatures from %s", sig_file)
         sig_db = SignatureDB.load(sig_file)
     else:
+        logger.warning("No device signature database found; using empty signature DB")
         sig_db = SignatureDB(oui_prefixes={}, dhcp_fingerprints={}, mdns_patterns=[])
 
     # Build optional LLM classifier
@@ -269,6 +279,7 @@ def create_orchestrator(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
             max_decoys=max_decoys,
             canary_enabled=canary_cfg.get("enabled", False),
             canary_domain=canary_cfg.get("domain", "canary.local"),
+            credential_filename=config.get("credential_filename", "passwords.txt"),
         )
     )
 
@@ -438,8 +449,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--port",
         type=int,
-        default=8443,
-        help="Port for the API server (default: 8443)",
+        default=None,
+        help="Port for the API server (default: config/env value or 8443)",
     )
     parser.add_argument(
         "--no-tls",
@@ -513,7 +524,7 @@ def _display_pairing_code(code: str, config: dict[str, Any]) -> None:
 
 async def run_sensor(
     config_path: str | None = None,
-    port: int = 8443,
+    port: int | None = None,
     no_tls: bool = False,
 ) -> None:
     """Start the sensor and run until cancelled.
@@ -524,9 +535,10 @@ async def run_sensor(
     # 1. Load config
     config: dict[str, Any] = load_config(config_path)
 
-    # Override port from CLI if provided
     config.setdefault("sensor", {})
-    config["sensor"]["port"] = port
+    if port is not None:
+        config["sensor"]["port"] = port
+    port = int(config.get("sensor", {}).get("port", 8443))
     if no_tls:
         config["sensor"].setdefault("tls", {})
         config["sensor"]["tls"]["enabled"] = False
@@ -636,15 +648,13 @@ async def run_sensor(
     event_bus.subscribe(["*"], _ws_broadcast)
 
     # 7c2. Wire alert pipeline: decoy events → alerts → incidents → dispatch
-    from squirrelops_home_sensor.alerts.incidents import IncidentGrouper
-    from squirrelops_home_sensor.alerts.dispatcher import AlertDispatcher, create_log_handler
     from squirrelops_home_sensor.alerts.decoy_handler import DecoyAlertHandler
+    from squirrelops_home_sensor.alerts.dispatcher import ConfigurableAlertDispatcher
+    from squirrelops_home_sensor.alerts.incidents import IncidentGrouper
 
     incident_grouper = IncidentGrouper(db=db, event_bus=event_bus)
 
-    alert_dispatcher = AlertDispatcher(methods=[
-        {"name": "log", "handler": create_log_handler(), "min_severity": "low"},
-    ])
+    alert_dispatcher = ConfigurableAlertDispatcher(config)
     alert_dispatcher.subscribe_to(event_bus)
 
     decoy_alert_handler = DecoyAlertHandler(
@@ -687,12 +697,21 @@ async def run_sensor(
     if ssl_certfile and ssl_keyfile:
         uvicorn_kwargs["ssl_certfile"] = ssl_certfile
         uvicorn_kwargs["ssl_keyfile"] = ssl_keyfile
+        uvicorn_kwargs["ssl_cert_reqs"] = ssl.CERT_OPTIONAL
+        uvicorn_kwargs["ssl_ca_certs"] = str(Path(config["sensor"]["data_dir"]) / "ca.crt")
+
+    from squirrelops_home_sensor.tls_client_auth import (
+        ClientCertH11Protocol,
+        ClientCertWebSocketProtocol,
+    )
 
     uvicorn_config = uvicorn.Config(
         app=app,
         host="0.0.0.0",
         port=port,
         log_level="info",
+        http=ClientCertH11Protocol,
+        ws=ClientCertWebSocketProtocol,
         **uvicorn_kwargs,
     )
     server = uvicorn.Server(uvicorn_config)

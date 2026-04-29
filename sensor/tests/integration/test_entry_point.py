@@ -400,7 +400,7 @@ class TestCLIParsing:
 
         args = parse_args([])
         assert args.config is None
-        assert args.port == 8443
+        assert args.port is None
         assert args.no_tls is False
 
     def test_config_flag(self) -> None:

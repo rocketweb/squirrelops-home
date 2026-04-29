@@ -33,6 +33,7 @@ class TestSettingsModels:
         cfg = SensorConfig()
         assert cfg.name == "SquirrelOps Home Sensor"
         assert cfg.data_dir == "./data"
+        assert cfg.port == 8443
 
     def test_network_config_defaults(self) -> None:
         cfg = NetworkConfig()
@@ -73,6 +74,7 @@ class TestLoadDefaults:
     def test_load_from_defaults_file(self) -> None:
         settings = load_settings(config_path=DEFAULTS_PATH)
         assert settings.sensor.name == "SquirrelOps Home Sensor"
+        assert settings.profile == "standard"
         assert settings.network.scan_interval == 300
         assert settings.decoys.max_decoys == 8
 
@@ -136,6 +138,20 @@ class TestLoadFromEnvVars:
         with patch.dict(os.environ, {"SQUIRRELOPS_DECOYS__MAX_DECOYS": "3"}):
             settings = load_settings(config_path=DEFAULTS_PATH)
             assert settings.decoys.max_decoys == 3
+
+    def test_env_flat_runtime_keys_are_mapped(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SQUIRRELOPS_PORT": "9443",
+                "SQUIRRELOPS_DATA_DIR": "/app/data",
+                "SQUIRRELOPS_PROFILE": "lite",
+            },
+        ):
+            settings = load_settings(config_path=DEFAULTS_PATH)
+            assert settings.sensor.port == 9443
+            assert settings.sensor.data_dir == "/app/data"
+            assert settings.profile == "lite"
 
     def test_env_override_takes_precedence_over_file(
         self, tmp_path: pathlib.Path

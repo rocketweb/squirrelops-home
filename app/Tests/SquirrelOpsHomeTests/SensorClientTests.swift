@@ -309,10 +309,10 @@ struct SensorClientTests {
         #expect(capturedMethod.value == "POST")
     }
 
-    // MARK: - Auth header
+    // MARK: - Client certificate auth
 
-    @Test("Requests include x-client-cert-fingerprint header when fingerprint set")
-    func requestsIncludeAuthHeader() async throws {
+    @Test("Requests do not send spoofable client certificate header")
+    func requestsDoNotSendClientCertHeader() async throws {
         let session = mockSession()
         let client = SensorClient(
             baseURL: baseURL, certFingerprint: "sha256:abc123", session: session
@@ -329,11 +329,11 @@ struct SensorClientTests {
 
         let _: HealthResponse = try await client.request(.health)
 
-        #expect(capturedHeaders.value?["x-client-cert-fingerprint"] == "sha256:abc123")
+        #expect(capturedHeaders.value?["x-client-cert-fingerprint"] == nil)
     }
 
-    @Test("Requests omit auth header when no fingerprint")
-    func requestsOmitAuthHeaderWhenNil() async throws {
+    @Test("Requests omit client certificate header when no fingerprint")
+    func requestsOmitClientCertHeaderWhenNil() async throws {
         let session = mockSession()
         let client = SensorClient(baseURL: baseURL, session: session)
 

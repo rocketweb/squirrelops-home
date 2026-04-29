@@ -32,7 +32,7 @@ ALLOWED_CONFIG_KEYS = {
     "fingerprint", "profiles", "home_assistant", "scouts",
     # Legacy flat keys (from config.yaml)
     "sensor_name", "profile", "learning_mode", "scan_interval_seconds",
-    "max_decoys", "alert_methods", "subnet",
+    "max_decoys", "alert_methods", "subnet", "credential_filename",
 }
 
 

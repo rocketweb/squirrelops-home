@@ -6,6 +6,8 @@ from typing import AsyncGenerator
 import aiosqlite
 from fastapi import Depends, HTTPException, Request, status
 
+from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
+
 
 async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
     """Yield an aiosqlite database connection from the app state.
@@ -49,30 +51,7 @@ async def verify_client_cert(request: Request) -> dict:
     In tests, this is overridden to return a mock client dict.
     In production without a valid client cert, raises HTTP 403.
     """
-    # In production, extract cert from TLS connection
-    # For now, check if there's a bearer token (local sensor shortcut)
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        db_dep = request.app.dependency_overrides.get(get_db, get_db)
-        db_gen = db_dep()
-        db = await db_gen.__anext__()
-        try:
-            cursor = await db.execute(
-                "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ? AND is_local = 1",
-                (token,),
-            )
-            row = await cursor.fetchone()
-            if row:
-                return {"client_name": row[0], "fingerprint": token}
-        finally:
-            try:
-                await db_gen.__anext__()
-            except StopAsyncIteration:
-                pass
-
-    # Check for client cert fingerprint in header (set by TLS termination proxy or middleware)
-    cert_fingerprint = request.headers.get("x-client-cert-fingerprint", "")
+    cert_fingerprint = client_cert_fingerprint_from_scope(request.scope)
     if cert_fingerprint:
         db_dep = request.app.dependency_overrides.get(get_db, get_db)
         db_gen = db_dep()
@@ -85,6 +64,29 @@ async def verify_client_cert(request: Request) -> dict:
             row = await cursor.fetchone()
             if row:
                 return {"client_name": row[0], "fingerprint": cert_fingerprint}
+        finally:
+            try:
+                await db_gen.__anext__()
+            except StopAsyncIteration:
+                pass
+
+    # Development/local fallback: only honor bearer shortcuts on non-TLS
+    # requests. Production HTTPS requests must authenticate with a verified
+    # TLS client certificate, not a spoofable HTTP header.
+    auth_header = request.headers.get("authorization", "")
+    if request.url.scheme == "http" and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        db_dep = request.app.dependency_overrides.get(get_db, get_db)
+        db_gen = db_dep()
+        db = await db_gen.__anext__()
+        try:
+            cursor = await db.execute(
+                "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ? AND is_local = 1",
+                (token,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                return {"client_name": row[0], "fingerprint": token}
         finally:
             try:
                 await db_gen.__anext__()

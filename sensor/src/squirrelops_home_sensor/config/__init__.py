@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 class SensorConfig(BaseModel):
     name: str = "SquirrelOps Home Sensor"
     data_dir: str = "./data"
+    port: int = 8443
 
 
 class NetworkConfig(BaseModel):
@@ -121,6 +122,8 @@ class ProfilesConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 class Settings(BaseModel):
+    profile: str = "standard"
+    credential_filename: str = "passwords.txt"
     sensor: SensorConfig = Field(default_factory=SensorConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
     decoys: DecoyConfig = Field(default_factory=DecoyConfig)
@@ -192,6 +195,8 @@ def _collect_env_overrides() -> dict[str, Any]:
 # the flat keys are silently ignored by Pydantic, so e.g. a top-level
 # ``subnet: 192.168.1.0/24`` never reaches ``NetworkConfig.subnet``.
 _FLAT_KEY_MAP: dict[str, tuple[str, str]] = {
+    "data_dir": ("sensor", "data_dir"),
+    "port": ("sensor", "port"),
     "subnet": ("network", "subnet"),
     "scan_interval_seconds": ("network", "scan_interval"),
     "max_decoys": ("decoys", "max_decoys"),
@@ -249,11 +254,17 @@ def load_settings(
         if isinstance(file_data, dict):
             base = _deep_merge(base, file_data)
 
+    env_overrides = _collect_env_overrides()
+    if env_overrides:
+        _normalize_flat_keys(env_overrides)
+
     # Layer 3: persisted runtime config (written by PUT /config)
     # Only loaded in daemon mode (no explicit config_path) so that tests
     # passing a custom file aren't polluted by ./data/config.yaml.
     if config_path is None:
-        data_dir = base.get("sensor", {}).get("data_dir", "./data")
+        config_for_data_dir = _deep_merge(dict(base), env_overrides)
+        _normalize_flat_keys(config_for_data_dir)
+        data_dir = config_for_data_dir.get("sensor", {}).get("data_dir", "./data")
         persisted_path = pathlib.Path(data_dir) / "config.yaml"
         if persisted_path.exists():
             with open(persisted_path) as fh:
@@ -266,8 +277,8 @@ def load_settings(
     _normalize_flat_keys(base)
 
     # Layer 4: environment variable overrides
-    env_overrides = _collect_env_overrides()
     if env_overrides:
         base = _deep_merge(base, env_overrides)
+        _normalize_flat_keys(base)
 
     return Settings(**base)

@@ -17,6 +17,9 @@ ARG VERSION=dev
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         libpcap-dev \
+        iproute2 \
+        iptables \
+        nmap \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -70,7 +73,7 @@ EXPOSE 8443
 # -----------------------------------------------------------------------
 # Health check -- probe the /system/health endpoint
 # -----------------------------------------------------------------------
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD curl -f http://localhost:${SQUIRRELOPS_PORT}/system/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD curl -fsSk https://localhost:${SQUIRRELOPS_PORT}/system/health || exit 1
 
 # -----------------------------------------------------------------------
 # Entry point

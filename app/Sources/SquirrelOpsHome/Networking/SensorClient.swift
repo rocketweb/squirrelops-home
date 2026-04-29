@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 // MARK: - Errors
 
@@ -39,11 +40,16 @@ public final class SensorClient: Sendable {
         self.decoder = decoder
     }
 
-    /// Create a client with TLS pinning and auth header support.
-    public init(baseURL: URL, certFingerprint: String, caCertData: Data?) {
+    /// Create a client with TLS pinning and paired client certificate support.
+    public init(
+        baseURL: URL,
+        certFingerprint: String,
+        caCertData: Data?,
+        clientIdentity: SecIdentity? = nil
+    ) {
         self.baseURL = baseURL
         self.certFingerprint = certFingerprint
-        let delegate = TLSPinningDelegate(caCertData: caCertData)
+        let delegate = TLSPinningDelegate(caCertData: caCertData, clientIdentity: clientIdentity)
         let config = URLSessionConfiguration.default
         self.session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
 
@@ -63,10 +69,7 @@ public final class SensorClient: Sendable {
 
     /// Perform a request and decode the response as `T`.
     public func request<T: Decodable>(_ endpoint: Endpoint) async throws -> T {
-        var urlRequest = endpoint.urlRequest(baseURL: baseURL)
-        if let fingerprint = certFingerprint {
-            urlRequest.setValue(fingerprint, forHTTPHeaderField: "x-client-cert-fingerprint")
-        }
+        let urlRequest = endpoint.urlRequest(baseURL: baseURL)
 
         let data: Data
         let response: URLResponse
@@ -93,10 +96,7 @@ public final class SensorClient: Sendable {
 
     /// Perform a request that expects no response body (void).
     public func request(_ endpoint: Endpoint) async throws {
-        var urlRequest = endpoint.urlRequest(baseURL: baseURL)
-        if let fingerprint = certFingerprint {
-            urlRequest.setValue(fingerprint, forHTTPHeaderField: "x-client-cert-fingerprint")
-        }
+        let urlRequest = endpoint.urlRequest(baseURL: baseURL)
 
         let response: URLResponse
         do {

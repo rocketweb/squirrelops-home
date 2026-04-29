@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
+import Security
 
 // MARK: - ServiceResolver
 
@@ -513,6 +514,12 @@ public final class PairingManager: @unchecked Sendable {
                 PairingCrypto.hexEncode(privateKey.x963Representation),
                 account: privateKeyAccount
             )
+            try KeychainStore.storeClientIdentity(
+                certificateData: clientCertData,
+                privateKeyData: privateKey.x963Representation,
+                certificateLabel: clientLabel,
+                privateKeyLabel: privateKeyAccount
+            )
         } catch {
             throw PairingError.keychainStoreFailed(error.localizedDescription)
         }
@@ -552,6 +559,10 @@ public final class PairingManager: @unchecked Sendable {
 
         try KeychainStore.deleteCertificate(label: caLabel)
         try KeychainStore.deleteCertificate(label: clientLabel)
+        try KeychainStore.deleteClientIdentity(
+            certificateLabel: clientLabel,
+            privateKeyLabel: privateKeyAccount
+        )
         try KeychainStore.deletePassword(account: privateKeyAccount)
 
         try? PairingManager.deletePairedSensor()
@@ -560,7 +571,10 @@ public final class PairingManager: @unchecked Sendable {
 
     // MARK: - Persistence
 
-    private static let pairedSensorAccount = "io.squirrelops.home.paired-sensor"
+    nonisolated(unsafe) static var pairedSensorAccountOverride: String?
+    private static var pairedSensorAccount: String {
+        pairedSensorAccountOverride ?? "io.squirrelops.home.paired-sensor"
+    }
 
     /// Save a paired sensor to the Keychain for persistence across launches.
     public static func savePairedSensor(_ sensor: PairedSensor) throws {
@@ -581,6 +595,17 @@ public final class PairingManager: @unchecked Sendable {
     /// Delete the paired sensor from the Keychain.
     public static func deletePairedSensor() throws {
         try KeychainStore.deletePassword(account: pairedSensorAccount)
+    }
+
+    public static func loadCACertificateData(for sensor: PairedSensor) -> Data? {
+        try? KeychainStore.loadCertificateData(label: "io.squirrelops.home.ca.\(sensor.id)")
+    }
+
+    public static func loadClientIdentity(for sensor: PairedSensor) -> SecIdentity? {
+        try? KeychainStore.loadClientIdentity(
+            certificateLabel: "io.squirrelops.home.client.\(sensor.id)",
+            privateKeyLabel: "io.squirrelops.home.key.\(sensor.id)"
+        )
     }
 
     // MARK: - Helpers

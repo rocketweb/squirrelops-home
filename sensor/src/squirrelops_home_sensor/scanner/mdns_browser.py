@@ -102,18 +102,16 @@ class MDNSBrowser:
     async def browse(self) -> list[MDNSResult]:
         """Browse for mDNS services and return results."""
         collector = MDNSBrowseCollector()
+        pending: set[asyncio.Task[None]] = set()
 
         try:
             aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only)
 
-            async def on_service_state_change(
+            async def handle_service_added(
                 zeroconf: Zeroconf,
                 service_type: str,
                 name: str,
-                state_change: ServiceStateChange,
             ) -> None:
-                if state_change != ServiceStateChange.Added:
-                    return
                 info = AsyncServiceInfo(service_type, name)
                 await info.async_request(zeroconf, 1500)
                 extracted = extract_result_from_info(info)
@@ -124,6 +122,18 @@ class MDNSBrowser:
                         extracted["service_type"],
                     )
 
+            def on_service_state_change(
+                zeroconf: Zeroconf,
+                service_type: str,
+                name: str,
+                state_change: ServiceStateChange,
+            ) -> None:
+                if state_change != ServiceStateChange.Added:
+                    return
+                task = asyncio.create_task(handle_service_added(zeroconf, service_type, name))
+                pending.add(task)
+                task.add_done_callback(pending.discard)
+
             browser = AsyncServiceBrowser(
                 aiozc.zeroconf,
                 self._service_types,
@@ -131,6 +141,8 @@ class MDNSBrowser:
             )
 
             await asyncio.sleep(self._browse_timeout)
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
             await browser.async_cancel()
             await aiozc.async_close()
 

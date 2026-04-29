@@ -164,6 +164,8 @@ async def set_profile(
     config["profile"] = profile_name
     config["scan_interval_seconds"] = settings["scan_interval_seconds"]
     config["max_decoys"] = settings["max_decoys"]
+    config.setdefault("network", {})["scan_interval"] = settings["scan_interval_seconds"]
+    config.setdefault("decoys", {})["max_decoys"] = settings["max_decoys"]
 
     _persist_config(config)
 

@@ -445,10 +445,16 @@ class TestMacOSPrivilegedOpsTimeout:
 
         # Create a temp socket path
         sock_path = os.path.join(tempfile.mkdtemp(), "test-helper-timeout.sock")
+        client_writers = []
+        stop_event = asyncio.Event()
+
+        async def never_respond(reader, writer):
+            client_writers.append(writer)
+            await stop_event.wait()
 
         # Start a server that accepts but never responds
         server = await asyncio.start_unix_server(
-            lambda r, w: None,  # Accept but never write back
+            never_respond,
             path=sock_path,
         )
         try:
@@ -459,6 +465,11 @@ class TestMacOSPrivilegedOpsTimeout:
             with pytest.raises(asyncio.TimeoutError):
                 await ops.arp_scan("192.168.1.0/24")
         finally:
+            stop_event.set()
+            for writer in client_writers:
+                writer.close()
+                await writer.wait_closed()
             server.close()
             await server.wait_closed()
-            os.unlink(sock_path)
+            if os.path.exists(sock_path):
+                os.unlink(sock_path)
