@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import socket
+from contextlib import suppress
 
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
@@ -84,7 +85,15 @@ class MimicMDNSAdvertiser:
 
     async def start(self) -> None:
         """Initialize the mDNS responder."""
-        self._zeroconf = AsyncZeroconf()
+        try:
+            self._zeroconf = AsyncZeroconf()
+        except OSError:
+            self._zeroconf = None
+            logger.warning(
+                "mDNS mimic advertiser unavailable; continuing without it",
+                exc_info=True,
+            )
+            return
         logger.info("mDNS mimic advertiser started")
 
     async def register(
@@ -149,10 +158,8 @@ class MimicMDNSAdvertiser:
             return
 
         for info in services:
-            try:
+            with suppress(Exception):
                 await self._zeroconf.async_unregister_service(info)
-            except Exception:
-                pass
 
         logger.debug(
             "mDNS: unregistered %d services for mimic %d",

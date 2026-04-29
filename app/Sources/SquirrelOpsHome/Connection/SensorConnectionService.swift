@@ -41,6 +41,7 @@ public final class SensorConnectionService: @unchecked Sendable {
     private let sensorClient: any SensorClientProtocol
     private let webSocketManager: any WebSocketManagerProtocol
     private let appState: AppState?
+    private let localSensorProbe: @Sendable () async -> Bool
     private let onEvent: @Sendable (WSFrame) -> Void
     private var reconnectTask: Task<Void, Never>?
     private var listenTask: Task<Void, Never>?
@@ -56,11 +57,13 @@ public final class SensorConnectionService: @unchecked Sendable {
         sensorClient: any SensorClientProtocol,
         webSocketManager: any WebSocketManagerProtocol,
         appState: AppState? = nil,
+        localSensorProbe: @escaping @Sendable () async -> Bool = { false },
         onEvent: @escaping @Sendable (WSFrame) -> Void
     ) {
         self.sensorClient = sensorClient
         self.webSocketManager = webSocketManager
         self.appState = appState
+        self.localSensorProbe = localSensorProbe
         self.onEvent = onEvent
     }
 
@@ -101,6 +104,12 @@ public final class SensorConnectionService: @unchecked Sendable {
         do {
             health = try await sensorClient.request(.health)
         } catch {
+            if await localSensorProbe() {
+                state = .authFailed
+                lastError = "Stored pairing does not match the local sensor"
+                await syncStateAsync()
+                return
+            }
             state = .disconnected
             lastError = "Health check failed: \(error.localizedDescription)"
             await syncStateAsync()

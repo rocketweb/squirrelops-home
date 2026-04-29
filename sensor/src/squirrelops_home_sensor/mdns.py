@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import platform
 import socket
 import subprocess
 import sys
@@ -179,13 +178,23 @@ class ServiceAdvertiser:
             port=self.port,
             properties={"name": self.name},
         )
-        self._zeroconf = AsyncZeroconf()
         try:
+            self._zeroconf = AsyncZeroconf()
             await self._zeroconf.async_register_service(self._info)
-            logger.info("mDNS: advertising %s on %s:%d (server=%s)", self.name, ip, self.port, server)
+            logger.info(
+                "mDNS: advertising %s on %s:%d (server=%s)",
+                self.name,
+                ip,
+                self.port,
+                server,
+            )
         except Exception as exc:
-            logger.warning("mDNS: failed to register service (%s) — sensor will run without mDNS discovery", exc)
-            await self._zeroconf.async_close()
+            logger.warning(
+                "mDNS: failed to register service (%s); sensor will run without mDNS discovery",
+                exc,
+            )
+            if self._zeroconf is not None:
+                await self._zeroconf.async_close()
             self._zeroconf = None
 
     async def stop(self) -> None:

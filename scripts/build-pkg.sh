@@ -225,6 +225,10 @@ echo "$SENSOR_PYTHON_MODE" > "$SENSOR_INSTALL/.python-mode"
 info "Copying launchd plist template..."
 cp "$SENSOR_BUILD_DIR/com.squirrelops.sensor.plist" "$SENSOR_INSTALL/"
 
+info "Copying device signatures..."
+mkdir -p "$SENSOR_INSTALL/signatures"
+cp "$REPO_ROOT/sensor/signatures/device_signatures.json" "$SENSOR_INSTALL/signatures/"
+
 info "Copying uninstall script..."
 cp "$SCRIPT_DIR/pkg/uninstall.sh" "$SENSOR_INSTALL/uninstall.sh"
 chmod +x "$SENSOR_INSTALL/uninstall.sh"

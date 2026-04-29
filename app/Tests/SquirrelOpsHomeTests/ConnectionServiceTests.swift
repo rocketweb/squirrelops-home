@@ -170,6 +170,30 @@ struct ConnectionServiceTests {
         #expect(service.lastError != nil)
     }
 
+    @Test("Failed health check with reachable local sensor requires re-pair")
+    @MainActor
+    func failedHealthCheckWithLocalSensorRequiresRepair() async {
+        let client = MockSensorClient()
+        client.shouldFail = true
+        let appState = AppState()
+        let service = SensorConnectionService(
+            sensorClient: client,
+            webSocketManager: MockWSManager(),
+            appState: appState,
+            localSensorProbe: { true },
+            onEvent: { _ in }
+        )
+
+        await service.connect(
+            baseURL: URL(string: "https://10.0.0.1:8443")!,
+            certFingerprint: "sha256:stale"
+        )
+
+        #expect(service.state == .authFailed)
+        #expect(appState.connectionState == .authFailed)
+        #expect(service.lastError == "Stored pairing does not match the local sensor")
+    }
+
     @Test("enqueueAction adds to queue when disconnected")
     func enqueueActionAddsToQueue() {
         let service = SensorConnectionService(

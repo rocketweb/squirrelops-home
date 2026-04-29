@@ -597,6 +597,21 @@ public final class PairingManager: @unchecked Sendable {
         try KeychainStore.deletePassword(account: pairedSensorAccount)
     }
 
+    public static func deleteStoredCredentials(for sensor: PairedSensor) throws {
+        let caLabel = "io.squirrelops.home.ca.\(sensor.id)"
+        let clientLabel = "io.squirrelops.home.client.\(sensor.id)"
+        let privateKeyAccount = "io.squirrelops.home.key.\(sensor.id)"
+
+        try KeychainStore.deleteCertificate(label: caLabel)
+        try KeychainStore.deleteCertificate(label: clientLabel)
+        try KeychainStore.deleteClientIdentity(
+            certificateLabel: clientLabel,
+            privateKeyLabel: privateKeyAccount
+        )
+        try KeychainStore.deletePassword(account: privateKeyAccount)
+        try deletePairedSensor()
+    }
+
     public static func loadCACertificateData(for sensor: PairedSensor) -> Data? {
         try? KeychainStore.loadCertificateData(label: "io.squirrelops.home.ca.\(sensor.id)")
     }

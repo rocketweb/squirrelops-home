@@ -42,8 +42,13 @@ struct SquirrelOpsHomeApp: App {
                     guard let appState else { return }
                     connectionService?.disconnect()
                     connectionService = nil
+                    let pairedSensor = appState.pairedSensor
                     // Clear persisted pairing from Keychain
-                    try? PairingManager.deletePairedSensor()
+                    if let pairedSensor {
+                        try? PairingManager.deleteStoredCredentials(for: pairedSensor)
+                    } else {
+                        try? PairingManager.deletePairedSensor()
+                    }
                     appState.pairedSensor = nil
                     appState.connectionState = .disconnected
                     appState.sensorClient = nil
@@ -86,6 +91,9 @@ struct SquirrelOpsHomeApp: App {
             sensorClient: client,
             webSocketManager: wsManager,
             appState: appState,
+            localSensorProbe: { [pairingManager] in
+                await pairingManager.detectLocalSensor() != nil
+            },
             onEvent: { [appState] frame in
                 Task { @MainActor in
                     WSEventProcessor.process(frame, into: appState)

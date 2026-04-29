@@ -402,6 +402,32 @@ class TestEventBusIntegration:
         mock_handler.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_accepts_production_event_bus_shape(self):
+        from squirrelops_home_sensor.alerts.dispatcher import AlertDispatcher
+
+        mock_handler = AsyncMock()
+        dispatcher = AlertDispatcher(
+            methods=[
+                {"name": "test", "handler": mock_handler, "min_severity": "low"},
+            ]
+        )
+
+        await dispatcher._on_alert_event({
+            "seq": 1,
+            "event_type": "alert.new",
+            "payload": {
+                "alert_id": 1,
+                "alert_type": "decoy.trip",
+                "severity": "high",
+                "title": "Decoy tripped",
+                "created_at": "2026-02-22T10:00:00.000Z",
+            },
+            "source_id": None,
+        })
+
+        mock_handler.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_ignores_non_alert_events(self):
         from squirrelops_home_sensor.alerts.dispatcher import AlertDispatcher
 

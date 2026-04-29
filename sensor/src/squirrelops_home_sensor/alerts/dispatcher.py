@@ -69,9 +69,25 @@ class AlertDispatcher:
         event_bus.subscribe(["alert.new"], self._on_alert_event)
 
     async def _on_alert_event(
-        self, event_type: str, payload: AlertPayload, *args: Any
+        self,
+        event: dict[str, Any] | str,
+        payload: AlertPayload | None = None,
+        *args: Any,
     ) -> None:
-        """Event bus callback -- dispatches the alert payload."""
+        """Event bus callback -- dispatches the alert payload.
+
+        The production EventBus calls subscribers with one event dict, while
+        older tests and lightweight stubs call ``callback(event_type, payload)``.
+        Accept both shapes so dispatch is not silently disconnected.
+        """
+        if payload is None:
+            if isinstance(event, dict) and isinstance(event.get("payload"), dict):
+                payload = event["payload"]
+            elif isinstance(event, dict):
+                payload = event
+        if payload is None:
+            logger.warning("Alert dispatcher received event without payload: %r", event)
+            return
         await self.dispatch(payload)
 
     async def dispatch(self, alert_payload: AlertPayload) -> None:
