@@ -17,6 +17,8 @@
 #   APPLE_ID              Apple ID for notarization (optional)
 #   APPLE_TEAM_ID         Apple Team ID for notarization (optional)
 #   APPLE_APP_PASSWORD    App-specific password for notarization (optional)
+#   SKIP_PKG_SIGNING      Set to "1" to skip installer signing for local builds
+#   PRODUCTSIGN_TIMESTAMP Set to "none" to disable trusted timestamping
 #
 set -euo pipefail
 
@@ -51,6 +53,8 @@ VERSION="${SQUIRRELOPS_VERSION:-$(cat "$REPO_ROOT/VERSION")}"
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-Developer ID Application}"
 INSTALLER_IDENTITY="${INSTALLER_IDENTITY:-Developer ID Installer}"
+SKIP_PKG_SIGNING="${SKIP_PKG_SIGNING:-0}"
+PRODUCTSIGN_TIMESTAMP="${PRODUCTSIGN_TIMESTAMP:-}"
 
 BUILD_DIR="$REPO_ROOT/build/pkg"
 APP_ROOT="$BUILD_DIR/app-root"
@@ -138,16 +142,23 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
         MACHO_FILES+=("$f")
     done < <(find "$SENSOR_PYTHON_DIR" -type f \( -name "*.so" -o -name "*.dylib" \) -print0)
 
-    # Also sign the Python interpreter itself
+    # Also sign the Python interpreter itself, but only when it is embedded in
+    # the package payload. Venv builds usually point at a Homebrew/system
+    # interpreter via symlink; signing that external binary breaks the local
+    # Python/framework signature relationship.
     PYTHON_BIN="$SENSOR_PYTHON_DIR/bin/python3"
     if [ -f "$PYTHON_BIN" ] && ! [ -L "$PYTHON_BIN" ]; then
         MACHO_FILES+=("$PYTHON_BIN")
-    else
+    elif [ "$SENSOR_PYTHON_MODE" = "standalone" ]; then
         # Follow symlinks to find the real binary
         REAL_PYTHON="$(readlink -f "$PYTHON_BIN" 2>/dev/null || "$PYTHON_BIN" -c "import os,sys; print(os.path.realpath(sys.executable))" 2>/dev/null || true)"
-        if [ -n "$REAL_PYTHON" ] && [ -f "$REAL_PYTHON" ]; then
+        if [ -n "$REAL_PYTHON" ] && [ -f "$REAL_PYTHON" ] && [[ "$REAL_PYTHON" == "$SENSOR_PYTHON_DIR"* ]]; then
             MACHO_FILES+=("$REAL_PYTHON")
+        else
+            warn "Embedded Python binary not found inside sensor payload; skipping interpreter signing."
         fi
+    else
+        warn "Venv Python is an external symlink; skipping interpreter signing."
     fi
 
     info "Found ${#MACHO_FILES[@]} Mach-O binaries to sign."
@@ -285,15 +296,24 @@ info "Product archive created: $OUTPUT_DIR/$PKG_NAME"
 # ===========================================================================
 step "Step 7: Sign Installer Package"
 
-if security find-identity -v -p basic 2>/dev/null | grep -q "$INSTALLER_IDENTITY"; then
+if [ "$SKIP_PKG_SIGNING" = "1" ]; then
+    warn "SKIP_PKG_SIGNING=1; skipping .pkg signing."
+elif security find-identity -v -p basic 2>/dev/null | grep -q "$INSTALLER_IDENTITY"; then
     info "Signing .pkg with '$INSTALLER_IDENTITY'..."
     UNSIGNED_PKG="$OUTPUT_DIR/$PKG_NAME"
     SIGNED_PKG="$OUTPUT_DIR/${PKG_NAME%.pkg}-signed.pkg"
 
-    productsign \
-        --sign "$INSTALLER_IDENTITY" \
-        "$UNSIGNED_PKG" \
+    PRODUCTSIGN_ARGS=(productsign)
+    if [ -n "$PRODUCTSIGN_TIMESTAMP" ]; then
+        PRODUCTSIGN_ARGS+=(--timestamp="$PRODUCTSIGN_TIMESTAMP")
+    fi
+    PRODUCTSIGN_ARGS+=(
+        --sign "$INSTALLER_IDENTITY"
+        "$UNSIGNED_PKG"
         "$SIGNED_PKG"
+    )
+
+    "${PRODUCTSIGN_ARGS[@]}"
 
     # Replace unsigned with signed
     mv "$SIGNED_PKG" "$UNSIGNED_PKG"
