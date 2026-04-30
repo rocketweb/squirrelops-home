@@ -69,6 +69,26 @@ class TestStatusEndpoint:
         assert data["decoy_count"] == 3
         assert data["alert_count"] == 7
 
+    def test_status_device_count_excludes_mimic_decoys(self, client, db):
+        from tests.integration.conftest import seed_devices
+
+        asyncio.get_event_loop().run_until_complete(seed_devices(db, count=3))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    created_at, updated_at)
+                   VALUES ('files.local', 'mimic', '192.168.1.102', 80,
+                           'active', '{}', '2026-02-22T00:00:00Z',
+                           '2026-02-22T00:00:00Z')"""
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        response = client.get("/system/status")
+        data = response.json()
+        assert data["device_count"] == 2
+
 
 class TestProfileEndpoints:
     """GET /system/profile and PUT /system/profile."""

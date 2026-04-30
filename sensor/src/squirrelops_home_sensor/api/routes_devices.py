@@ -8,16 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from squirrelops_home_sensor.api.deps import get_db, verify_client_cert
+from squirrelops_home_sensor.devices.decoy_filter import DECOY_DEVICE_FILTER
 
 router = APIRouter(prefix="/devices", tags=["devices"])
-
-
-ACTIVE_DECOY_DEVICE_FILTER = """NOT EXISTS (
-    SELECT 1 FROM decoys dx
-    WHERE dx.status = 'active'
-      AND dx.decoy_type = 'mimic'
-      AND dx.bind_address = d.ip_address
-)"""
 
 
 # ---------- Request/Response models ----------
@@ -100,7 +93,10 @@ class PaginatedFingerprints(BaseModel):
 
 
 async def _get_device_or_404(db: aiosqlite.Connection, device_id: int) -> aiosqlite.Row:
-    cursor = await db.execute("SELECT * FROM devices WHERE id = ?", (device_id,))
+    cursor = await db.execute(
+        f"SELECT * FROM devices d WHERE d.id = ? AND {DECOY_DEVICE_FILTER}",
+        (device_id,),
+    )
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
@@ -159,7 +155,7 @@ async def list_devices(
     _auth: dict = Depends(verify_client_cert),
 ):
     """List devices with pagination, filters, and search."""
-    where_clauses = [ACTIVE_DECOY_DEVICE_FILTER]
+    where_clauses = [DECOY_DEVICE_FILTER]
     params: list = []
 
     if trust_status:

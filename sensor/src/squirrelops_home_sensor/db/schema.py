@@ -39,12 +39,15 @@ def get_all_table_names() -> list[str]:
 
 
 async def create_all_tables(db) -> None:
-    """Apply the full V1 schema to the database.
+    """Apply the full current schema to the database.
 
     Convenience wrapper for tests and fresh databases. For production
     use, prefer ``apply_migrations()`` from the migrations module.
     """
     await db.executescript(SCHEMA_V1_SQL)
+    from squirrelops_home_sensor.db.migrations import apply_migrations
+
+    await apply_migrations(db)
     await db.commit()
 
 

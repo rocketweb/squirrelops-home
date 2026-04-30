@@ -19,6 +19,7 @@ from typing import Any
 import aiosqlite
 
 from squirrelops_home_sensor.devices.classifier import DeviceClassifier
+from squirrelops_home_sensor.devices.decoy_filter import DECOY_DEVICE_FILTER, is_decoy_device_ip
 from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.fingerprint.composite import (
     CompositeFingerprint,
@@ -39,12 +40,6 @@ logger = logging.getLogger(__name__)
 
 AUTO_APPROVE_THRESHOLD = 0.75
 VERIFY_THRESHOLD = 0.20
-ACTIVE_MIMIC_IP_FILTER = """NOT EXISTS (
-    SELECT 1 FROM decoys dx
-    WHERE dx.status = 'active'
-      AND dx.decoy_type = 'mimic'
-      AND dx.bind_address = d.ip_address
-)"""
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +213,7 @@ class DeviceManager:
             "LEFT JOIN device_fingerprints fp ON fp.device_id = d.id "
             "AND fp.id = (SELECT MAX(fp2.id) FROM device_fingerprints fp2 "
             "WHERE fp2.device_id = d.id) "
-            f"WHERE {ACTIVE_MIMIC_IP_FILTER}"
+            f"WHERE {DECOY_DEVICE_FILTER}"
         )
         rows = await cursor.fetchall()
 
@@ -325,9 +320,12 @@ class DeviceManager:
         now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-        if await self._is_active_mimic_ip(scan.ip_address):
+        if await is_decoy_device_ip(self._db, scan.ip_address):
+            self._known_devices = [
+                td for td in self._known_devices if td.ip_address != scan.ip_address
+            ]
             logger.debug(
-                "Ignoring active mimic decoy IP in device scan: %s",
+                "Ignoring system-created decoy IP in device scan: %s",
                 scan.ip_address,
             )
             return
@@ -579,17 +577,6 @@ class DeviceManager:
                 "updated_at = ? WHERE device_id = ?",
                 (now_iso, device_id),
             )
-
-    async def _is_active_mimic_ip(self, ip_address: str) -> bool:
-        cursor = await self._db.execute(
-            """SELECT 1 FROM decoys
-               WHERE status = 'active'
-                 AND decoy_type = 'mimic'
-                 AND bind_address = ?
-               LIMIT 1""",
-            (ip_address,),
-        )
-        return await cursor.fetchone() is not None
 
     def get_known_devices(self) -> list[TrackedDevice]:
         """Return the list of all known tracked devices."""

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from squirrelops_home_sensor import __version__
 from squirrelops_home_sensor.api.deps import get_config, get_db, verify_client_cert
+from squirrelops_home_sensor.devices.decoy_filter import DECOY_DEVICE_FILTER
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -107,7 +108,7 @@ async def status(
     decoy_count = 0
     alert_count = 0
 
-    cursor = await db.execute("SELECT COUNT(*) FROM devices")
+    cursor = await db.execute(f"SELECT COUNT(*) FROM devices d WHERE {DECOY_DEVICE_FILTER}")
     row = await cursor.fetchone()
     if row:
         device_count = row[0]

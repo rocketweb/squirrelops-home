@@ -47,6 +47,38 @@ struct WSEventProcessorTests {
         #expect(state.devices[0].isOnline == true)
     }
 
+    @Test("decoy.status_changed removes matching device")
+    func decoyStatusChangedRemovesMatchingDevice() {
+        let state = AppState()
+        state.devices = [DeviceSummary(
+            id: 1, ipAddress: "192.168.1.118", macAddress: nil, hostname: "files.local",
+            vendor: nil, deviceType: "server", customName: nil,
+            trustStatus: "unknown", isOnline: true,
+            firstSeen: "2026-01-01", lastSeen: "2026-01-01"
+        )]
+        let payload: [String: AnyCodableValue] = [
+            "id": .int(10),
+            "name": .string("files.local"),
+            "decoy_type": .string("mimic"),
+            "bind_address": .string("192.168.1.118"),
+            "port": .int(80),
+            "status": .string("active"),
+            "connection_count": .int(0),
+            "credential_trip_count": .int(0),
+            "created_at": .string("2026-01-01T00:00:00Z"),
+            "updated_at": .string("2026-01-01T00:00:00Z"),
+        ]
+
+        WSEventProcessor.process(
+            .event(seq: 4, eventType: "decoy.status_changed", payload: payload),
+            into: state
+        )
+        WSEventProcessor.flushPendingUpdates(into: state)
+
+        #expect(state.devices.isEmpty)
+        #expect(state.decoys.count == 1)
+    }
+
     @Test("device.offline event updates device status")
     func deviceOfflineUpdates() {
         let state = AppState()

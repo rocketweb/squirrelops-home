@@ -201,6 +201,60 @@ class TestDeviceManagerPipeline:
         assert (await cursor.fetchone())[0] == 0
 
     @pytest.mark.asyncio
+    async def test_stopped_mimic_decoy_ip_is_not_registered_as_device(
+        self,
+        manager: DeviceManager,
+        db: aiosqlite.Connection,
+    ) -> None:
+        """Stale mimic records are still hidden from inventory."""
+        await db.execute(
+            """INSERT INTO decoys
+               (name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at)
+               VALUES ('files.local', 'mimic', '192.168.1.200', 80,
+                       'stopped', '{}', '2026-02-22T00:00:00Z',
+                       '2026-02-22T00:00:00Z')"""
+        )
+        await db.commit()
+
+        await manager.process_scan_result(
+            ScanResult(
+                ip_address="192.168.1.200",
+                mac_address="02:00:00:00:00:01",
+                hostname="files.local",
+                open_ports=[80],
+            )
+        )
+
+        cursor = await db.execute("SELECT COUNT(*) FROM devices")
+        assert (await cursor.fetchone())[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_active_virtual_ip_is_not_registered_as_device(
+        self,
+        manager: DeviceManager,
+        db: aiosqlite.Connection,
+    ) -> None:
+        """Orphaned active virtual IP rows are also ignored."""
+        await db.execute(
+            """INSERT INTO virtual_ips (ip_address, interface, created_at, released_at)
+               VALUES ('192.168.1.201', 'en0', '2026-02-22T00:00:00Z', NULL)"""
+        )
+        await db.commit()
+
+        await manager.process_scan_result(
+            ScanResult(
+                ip_address="192.168.1.201",
+                mac_address="02:00:00:00:00:02",
+                hostname="media.local",
+                open_ports=[80],
+            )
+        )
+
+        cursor = await db.execute("SELECT COUNT(*) FROM devices")
+        assert (await cursor.fetchone())[0] == 0
+
+    @pytest.mark.asyncio
     async def test_live_auto_approve_threshold_config_is_used(
         self,
         db: aiosqlite.Connection,

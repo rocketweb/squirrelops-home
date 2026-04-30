@@ -112,12 +112,31 @@ public enum WSEventProcessor {
         let hasAny = hasDeviceChanges || hasAlertChanges || !decoys.isEmpty || systemStatus != nil
         guard hasAny else { return }
 
+        // -- Decoys --
+        if !decoys.isEmpty {
+            var current = state.decoys
+            for decoy in decoys {
+                if decoy.status == "removed" {
+                    // Decoy was deleted — remove from state
+                    current.removeAll(where: { $0.id == decoy.id })
+                } else if let index = current.firstIndex(where: { $0.id == decoy.id }) {
+                    current[index] = decoy
+                } else {
+                    current.append(decoy)
+                }
+            }
+            state.decoys = current
+            state.devices = AppState.visibleDevices(state.devices, decoys: current)
+        }
+
         // -- Devices --
         if hasDeviceChanges {
             var devices = state.devices
 
             for device in deviceUpdates {
-                if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                if AppState.decoyDeviceIPs(in: state.decoys).contains(device.ipAddress) {
+                    devices.removeAll { $0.id == device.id || $0.ipAddress == device.ipAddress }
+                } else if let index = devices.firstIndex(where: { $0.id == device.id }) {
                     devices[index] = device
                 } else {
                     devices.append(device)
@@ -137,7 +156,7 @@ public enum WSEventProcessor {
                 }
             }
 
-            state.devices = devices
+            state.devices = AppState.visibleDevices(devices, decoys: state.decoys)
         }
 
         // -- Alerts --
@@ -164,22 +183,6 @@ public enum WSEventProcessor {
             }
 
             state.alerts = current
-        }
-
-        // -- Decoys --
-        if !decoys.isEmpty {
-            var current = state.decoys
-            for decoy in decoys {
-                if decoy.status == "removed" {
-                    // Decoy was deleted — remove from state
-                    current.removeAll(where: { $0.id == decoy.id })
-                } else if let index = current.firstIndex(where: { $0.id == decoy.id }) {
-                    current[index] = decoy
-                } else {
-                    current.append(decoy)
-                }
-            }
-            state.decoys = current
         }
 
         // -- System Status --

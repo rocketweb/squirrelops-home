@@ -14,8 +14,8 @@ DNS on macOS.
 
 from __future__ import annotations
 
-import hashlib
 import logging
+import re
 import socket
 from contextlib import suppress
 
@@ -24,18 +24,18 @@ from zeroconf.asyncio import AsyncZeroconf
 
 logger = logging.getLogger("squirrelops_home_sensor.scouts")
 
-# Device category -> plausible hostname prefixes.
-# Uses real product names so the hostnames blend in on a home network.
-_HOSTNAME_PREFIXES: dict[str, list[str]] = {
-    "smart_home": ["tapo-plug", "kasa-smart", "wemo-mini", "hue-bridge", "tp-smart"],
-    "camera": ["ipcam", "wyze-cam", "reolink-cam", "blink-mini"],
-    "nas": ["synology-ds", "qnap-ts", "wd-mycloud"],
-    "media": ["appletv", "roku-ultra", "chromecast", "fire-stick"],
-    "printer": ["hp-envy", "epson-wf", "canon-mx"],
-    "router": ["linksys-ea", "netgear-r", "asus-rt"],
-    "dev_server": ["homelab", "dev-srv"],
-    "generic": ["iot-device", "smart-device"],
+# Device category -> plausible low-drama hostnames.
+_HOSTNAME_CHOICES: dict[str, list[str]] = {
+    "smart_home": ["home", "hub", "control", "automation"],
+    "camera": ["camera", "security", "garage-cam", "porch-cam"],
+    "nas": ["files", "backup", "archive", "storage"],
+    "media": ["media", "photos", "plex", "library"],
+    "printer": ["printer", "scanner", "office-printer"],
+    "router": ["gateway", "router", "network", "admin"],
+    "dev_server": ["dev", "staging", "build", "api"],
+    "generic": ["files", "media", "business", "office", "docs", "backup"],
 }
+_LEGACY_SUFFIX_RE = re.compile(r"-[0-9A-Fa-f]{4}$")
 
 
 def generate_mimic_hostname(
@@ -58,16 +58,26 @@ def generate_mimic_hostname(
     virtual_ip:
         The virtual IP address (used as deterministic seed).
     """
-    digest = hashlib.md5(virtual_ip.encode()).hexdigest()
-    suffix = digest[:4].upper()
+    del mdns_name
+    choices = _HOSTNAME_CHOICES.get(device_category, _HOSTNAME_CHOICES["generic"])
+    try:
+        last_octet = int(virtual_ip.rsplit(".", 1)[-1])
+    except ValueError:
+        last_octet = sum(virtual_ip.encode())
+    return choices[last_octet % len(choices)]
 
-    if mdns_name:
-        base = mdns_name.rstrip(".").removesuffix(".local")
-        return f"{base}-{suffix}"
 
-    prefixes = _HOSTNAME_PREFIXES.get(device_category, _HOSTNAME_PREFIXES["generic"])
-    idx = int(digest[4:8], 16) % len(prefixes)
-    return f"{prefixes[idx]}-{suffix}"
+def mimic_display_name(hostname: str) -> str:
+    """Human-readable decoy name for UI and alerts."""
+    clean = hostname.rstrip(".").removesuffix(".local")
+    return f"{clean}.local"
+
+
+def should_refresh_mimic_name(name: str, mdns_hostname: str | None) -> bool:
+    """Return true for old generated names that should be replaced at startup."""
+    if name.startswith("Mimic:"):
+        return True
+    return bool(mdns_hostname and _LEGACY_SUFFIX_RE.search(mdns_hostname))
 
 
 class MimicMDNSAdvertiser:

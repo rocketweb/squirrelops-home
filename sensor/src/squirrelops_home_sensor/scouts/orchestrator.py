@@ -26,7 +26,12 @@ from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.network.port_forward import PortForwardManager, needs_remap, remap_port
 from squirrelops_home_sensor.network.virtual_ip import VirtualIPManager
 from squirrelops_home_sensor.scouts.engine import ScoutEngine
-from squirrelops_home_sensor.scouts.mdns import MimicMDNSAdvertiser, generate_mimic_hostname
+from squirrelops_home_sensor.scouts.mdns import (
+    MimicMDNSAdvertiser,
+    generate_mimic_hostname,
+    mimic_display_name,
+    should_refresh_mimic_name,
+)
 from squirrelops_home_sensor.scouts.templates import MimicTemplate, MimicTemplateGenerator
 
 logger = logging.getLogger("squirrelops_home_sensor.scouts")
@@ -230,13 +235,13 @@ class MimicOrchestrator:
 
         # Generate mDNS hostname for this mimic
         mdns_hostname = generate_mimic_hostname(
-            mdns_name=template.mdns_name,
+            mdns_name=None,
             device_category=template.device_category,
             virtual_ip=virtual_ip,
         )
 
         # Create decoy record in DB
-        mimic_name = f"Mimic: {hostname or template.source_ip}"
+        mimic_name = mimic_display_name(mdns_hostname)
         decoy_config = {
             "template_id": template_cursor.lastrowid,
             "mdns_hostname": mdns_hostname,
@@ -354,6 +359,41 @@ class MimicOrchestrator:
             if needs_remap(port):
                 remaps[port] = remap_port(port)
         return remaps
+
+    async def _normalize_mimic_identity(
+        self,
+        *,
+        decoy_id: int,
+        current_name: str,
+        config: dict[str, Any],
+        template_row: aiosqlite.Row,
+        bind_address: str,
+    ) -> tuple[str, str]:
+        """Backfill old mimic names to realistic hostnames."""
+        device_category = template_row["device_category"] or "generic"
+        mdns_hostname = generate_mimic_hostname(
+            mdns_name=None,
+            device_category=device_category,
+            virtual_ip=bind_address,
+        )
+        mimic_name = current_name
+        existing_hostname = config.get("mdns_hostname")
+
+        update_config = existing_hostname != mdns_hostname
+        if update_config:
+            config["mdns_hostname"] = mdns_hostname
+
+        if should_refresh_mimic_name(current_name, existing_hostname):
+            mimic_name = mimic_display_name(mdns_hostname)
+
+        if update_config or mimic_name != current_name:
+            await self._db.execute(
+                "UPDATE decoys SET name = ?, config = ? WHERE id = ?",
+                (mimic_name, json.dumps(config), decoy_id),
+            )
+            await self._db.commit()
+
+        return mimic_name, mdns_hostname
 
     def _build_port_configs(
         self, profiles: list, template: MimicTemplate,
@@ -568,18 +608,25 @@ class MimicOrchestrator:
             if not port_configs:
                 return False
 
+            mimic_name, mdns_hostname = await self._normalize_mimic_identity(
+                decoy_id=decoy_id,
+                current_name=row["name"],
+                config=config,
+                template_row=tmpl_row,
+                bind_address=bind_address,
+            )
             port_remaps = self._compute_port_remaps(port_configs)
 
             mimic = MimicDecoy(
                 decoy_id=decoy_id,
-                name=row["name"],
+                name=mimic_name,
                 bind_address=bind_address,
                 port_configs=port_configs,
                 server_header=server_header,
                 planted_credentials=credentials,
                 port_remaps=port_remaps,
             )
-            mimic.on_connection = lambda event, _did=decoy_id, _dname=row["name"]: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
+            mimic.on_connection = lambda event, _did=decoy_id, _dname=mimic_name: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
             await mimic.start()
             self._active_mimics[decoy_id] = mimic
 
@@ -589,7 +636,6 @@ class MimicOrchestrator:
 
             # Re-register mDNS service
             if self._mdns is not None:
-                mdns_hostname = config.get("mdns_hostname")
                 if mdns_hostname:
                     primary_port = port_configs[0]["port"] if port_configs else 80
                     mdns_svc_type = tmpl_row["mdns_service_type"]
@@ -612,7 +658,7 @@ class MimicOrchestrator:
                 "decoy.status_changed",
                 {
                     "id": decoy_id,
-                    "name": row["name"],
+                    "name": mimic_name,
                     "decoy_type": "mimic",
                     "bind_address": bind_address,
                     "port": row["port"],
@@ -624,7 +670,7 @@ class MimicOrchestrator:
                 },
             )
 
-            logger.info("Restarted mimic decoy '%s' (id=%d)", row["name"], decoy_id)
+            logger.info("Restarted mimic decoy '%s' (id=%d)", mimic_name, decoy_id)
             return True
 
         except Exception:
@@ -742,18 +788,25 @@ class MimicOrchestrator:
                 if not port_configs:
                     continue
 
+                mimic_name, mdns_hostname = await self._normalize_mimic_identity(
+                    decoy_id=decoy_id,
+                    current_name=row["name"],
+                    config=config,
+                    template_row=tmpl_row,
+                    bind_address=bind_address,
+                )
                 port_remaps = self._compute_port_remaps(port_configs)
 
                 mimic = MimicDecoy(
                     decoy_id=decoy_id,
-                    name=row["name"],
+                    name=mimic_name,
                     bind_address=bind_address,
                     port_configs=port_configs,
                     server_header=server_header,
                     planted_credentials=credentials,
                     port_remaps=port_remaps,
                 )
-                mimic.on_connection = lambda event, _did=decoy_id, _dname=row["name"]: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
+                mimic.on_connection = lambda event, _did=decoy_id, _dname=mimic_name: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
                 await mimic.start()
                 self._active_mimics[decoy_id] = mimic
 
@@ -763,22 +816,6 @@ class MimicOrchestrator:
 
                 # Re-register mDNS service
                 if self._mdns is not None:
-                    mdns_hostname = config.get("mdns_hostname")
-                    if not mdns_hostname:
-                        # Backfill for mimics deployed before mDNS support
-                        device_category = tmpl_row["device_category"] or "generic"
-                        mdns_hostname = generate_mimic_hostname(
-                            mdns_name=tmpl_row["mdns_name"],
-                            device_category=device_category,
-                            virtual_ip=bind_address,
-                        )
-                        config["mdns_hostname"] = mdns_hostname
-                        await self._db.execute(
-                            "UPDATE decoys SET config = ? WHERE id = ?",
-                            (json.dumps(config), decoy_id),
-                        )
-                        await self._db.commit()
-
                     primary_port = port_configs[0]["port"] if port_configs else 80
                     mdns_svc_type = tmpl_row["mdns_service_type"]
                     await self._mdns.register(

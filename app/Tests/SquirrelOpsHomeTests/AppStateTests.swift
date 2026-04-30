@@ -230,6 +230,41 @@ struct AppStateTests {
         #expect(state.decoys.count == 1)
     }
 
+    @Test("applySyncData filters mimic decoy devices")
+    func applySyncDataFiltersMimicDecoyDevices() {
+        let state = AppState()
+        let health = HealthResponse(version: "1.0", sensorId: "s1", uptimeSeconds: 60)
+        let status = StatusResponse(
+            profile: "standard", learningMode: false,
+            deviceCount: 2, decoyCount: 1, alertCount: 0
+        )
+        let realDevice = DeviceSummary(
+            id: 1, ipAddress: "192.168.1.117", macAddress: nil, hostname: "macbook",
+            vendor: nil, deviceType: "computer", customName: nil,
+            trustStatus: "approved", isOnline: true,
+            firstSeen: "2026-01-01", lastSeen: "2026-01-01"
+        )
+        let decoyDevice = DeviceSummary(
+            id: 2, ipAddress: "192.168.1.118", macAddress: nil, hostname: "files.local",
+            vendor: nil, deviceType: "server", customName: nil,
+            trustStatus: "unknown", isOnline: true,
+            firstSeen: "2026-01-01", lastSeen: "2026-01-01"
+        )
+        let decoy = DecoySummary(
+            id: 10, name: "files.local", decoyType: "mimic", bindAddress: "192.168.1.118",
+            port: 80, status: "active", connectionCount: 0, credentialTripCount: 0,
+            createdAt: "2026-01-01", updatedAt: "2026-01-01"
+        )
+
+        state.applySyncData(
+            sensorInfo: health, status: status,
+            devices: [realDevice, decoyDevice],
+            alerts: [], decoys: DecoyListResponse(items: [decoy])
+        )
+
+        #expect(state.devices.map(\.ipAddress) == ["192.168.1.117"])
+    }
+
     @Test("updateDevice replaces existing or appends new")
     func updateDeviceReplaceOrAppend() {
         let state = AppState()
@@ -258,6 +293,53 @@ struct AppStateTests {
         )
         state.updateDevice(d2)
         #expect(state.devices.count == 2)
+    }
+
+    @Test("updateDevice ignores known mimic decoy IPs")
+    func updateDeviceIgnoresKnownMimicDecoyIPs() {
+        let state = AppState()
+        state.decoys = [
+            DecoySummary(
+                id: 10, name: "files.local", decoyType: "mimic",
+                bindAddress: "192.168.1.118", port: 80, status: "active",
+                connectionCount: 0, credentialTripCount: 0,
+                createdAt: "2026-01-01", updatedAt: "2026-01-01"
+            ),
+        ]
+        let device = DeviceSummary(
+            id: 2, ipAddress: "192.168.1.118", macAddress: nil, hostname: "files.local",
+            vendor: nil, deviceType: "server", customName: nil,
+            trustStatus: "unknown", isOnline: true,
+            firstSeen: "2026-01-01", lastSeen: "2026-01-01"
+        )
+
+        state.updateDevice(device)
+
+        #expect(state.devices.isEmpty)
+    }
+
+    @Test("updateDecoy removes matching devices")
+    func updateDecoyRemovesMatchingDevices() {
+        let state = AppState()
+        state.devices = [
+            DeviceSummary(
+                id: 2, ipAddress: "192.168.1.118", macAddress: nil,
+                hostname: "files.local", vendor: nil, deviceType: "server",
+                customName: nil, trustStatus: "unknown", isOnline: true,
+                firstSeen: "2026-01-01", lastSeen: "2026-01-01"
+            ),
+        ]
+
+        state.updateDecoy(
+            DecoySummary(
+                id: 10, name: "files.local", decoyType: "mimic",
+                bindAddress: "192.168.1.118", port: 80, status: "active",
+                connectionCount: 0, credentialTripCount: 0,
+                createdAt: "2026-01-01", updatedAt: "2026-01-01"
+            )
+        )
+
+        #expect(state.devices.isEmpty)
     }
 
     @Test("addAlert prepends to front")

@@ -76,6 +76,25 @@ public final class AppState {
 
     public init() {}
 
+    public static func decoyDeviceIPs(in decoys: [DecoySummary]) -> Set<String> {
+        Set(decoys.compactMap { decoy in
+            guard decoy.decoyType == "mimic" else { return nil }
+            guard !["", "0.0.0.0", "127.0.0.1", "::"].contains(decoy.bindAddress) else {
+                return nil
+            }
+            return decoy.bindAddress
+        })
+    }
+
+    public static func visibleDevices(
+        _ devices: [DeviceSummary],
+        decoys: [DecoySummary]
+    ) -> [DeviceSummary] {
+        let decoyIPs = decoyDeviceIPs(in: decoys)
+        guard !decoyIPs.isEmpty else { return devices }
+        return devices.filter { !decoyIPs.contains($0.ipAddress) }
+    }
+
     // MARK: - Mutation Methods
 
     public func applySyncData(
@@ -87,12 +106,17 @@ public final class AppState {
     ) {
         self.sensorInfo = sensorInfo
         self.systemStatus = status
-        self.devices = devices
-        self.alerts = alerts
         self.decoys = decoys.items
+        self.devices = Self.visibleDevices(devices, decoys: decoys.items)
+        self.alerts = alerts
     }
 
     public func updateDevice(_ device: DeviceSummary) {
+        if Self.decoyDeviceIPs(in: decoys).contains(device.ipAddress) {
+            devices.removeAll { $0.id == device.id || $0.ipAddress == device.ipAddress }
+            return
+        }
+
         if let index = devices.firstIndex(where: { $0.id == device.id }) {
             devices[index] = device
         } else {
@@ -147,11 +171,14 @@ public final class AppState {
 
     /// Upsert a decoy: update existing or append if new (from auto-deploy WS events).
     public func updateDecoy(_ decoy: DecoySummary) {
-        if let index = decoys.firstIndex(where: { $0.id == decoy.id }) {
+        if decoy.status == "removed" {
+            decoys.removeAll(where: { $0.id == decoy.id })
+        } else if let index = decoys.firstIndex(where: { $0.id == decoy.id }) {
             decoys[index] = decoy
         } else {
             decoys.append(decoy)
         }
+        devices = Self.visibleDevices(devices, decoys: decoys)
     }
 
     public func refreshDecoys() async {
