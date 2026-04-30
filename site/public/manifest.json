@@ -10,7 +10,7 @@
   },
   "downloads": {
     "macos_pkg": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.3/SquirrelOpsHome-1.1.3.pkg",
-    "macos_pkg_sha256": "8bf9529872ac55837c7ad809b3ebb77fe41821553198198fbe882cf917b82570",
+    "macos_pkg_sha256": "a6f881efedd0bd16f7a6eba9124894c1ecf881207226f95b176f2c9f4d7690a0",
     "docker_image": "ghcr.io/rocketweb/squirrelops-sensor:1.1.3"
   },
   "signatures": {
@@ -27,6 +27,6 @@
     "latest_version": "1.1.3",
     "download_url": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.3/SquirrelOpsHome-1.1.3.pkg",
     "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.3",
-    "sha256": "8bf9529872ac55837c7ad809b3ebb77fe41821553198198fbe882cf917b82570"
+    "sha256": "a6f881efedd0bd16f7a6eba9124894c1ecf881207226f95b176f2c9f4d7690a0"
   }
 }
