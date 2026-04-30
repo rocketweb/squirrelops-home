@@ -25,6 +25,7 @@ from squirrelops_home_sensor.fingerprint.composite import (
     compute_fingerprint,
 )
 from squirrelops_home_sensor.fingerprint.matcher import (
+    DEFAULT_WEIGHTS,
     KnownDevice,
     match_device,
 )
@@ -38,6 +39,12 @@ logger = logging.getLogger(__name__)
 
 AUTO_APPROVE_THRESHOLD = 0.75
 VERIFY_THRESHOLD = 0.20
+ACTIVE_MIMIC_IP_FILTER = """NOT EXISTS (
+    SELECT 1 FROM decoys dx
+    WHERE dx.status = 'active'
+      AND dx.decoy_type = 'mimic'
+      AND dx.bind_address = d.ip_address
+)"""
 
 
 # ---------------------------------------------------------------------------
@@ -106,11 +113,48 @@ class DeviceManager:
         db: aiosqlite.Connection,
         event_bus: EventBus,
         classifier: DeviceClassifier,
+        config: dict[str, Any] | None = None,
     ) -> None:
         self._db = db
         self._bus = event_bus
         self._classifier = classifier
+        self._config = config
         self._known_devices: list[TrackedDevice] = []
+
+    def _fingerprint_config(self) -> dict[str, Any]:
+        if self._config is None:
+            return {}
+        fingerprint = self._config.get("fingerprint", {})
+        return fingerprint if isinstance(fingerprint, dict) else {}
+
+    @staticmethod
+    def _float_config(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _auto_approve_threshold(self) -> float:
+        return self._float_config(
+            self._fingerprint_config().get("auto_approve_threshold"),
+            AUTO_APPROVE_THRESHOLD,
+        )
+
+    def _verify_threshold(self) -> float:
+        return self._float_config(
+            self._fingerprint_config().get("verify_threshold"),
+            VERIFY_THRESHOLD,
+        )
+
+    def _signal_weights(self) -> dict[str, float]:
+        configured = self._fingerprint_config().get("signal_weights", {})
+        if not isinstance(configured, dict):
+            return DEFAULT_WEIGHTS
+
+        weights = dict(DEFAULT_WEIGHTS)
+        for signal, default in DEFAULT_WEIGHTS.items():
+            weights[signal] = self._float_config(configured.get(signal), default)
+        return weights
 
     async def _build_device_payload(
         self, tracked: TrackedDevice, now_iso: str
@@ -173,7 +217,8 @@ class DeviceManager:
             "FROM devices d "
             "LEFT JOIN device_fingerprints fp ON fp.device_id = d.id "
             "AND fp.id = (SELECT MAX(fp2.id) FROM device_fingerprints fp2 "
-            "WHERE fp2.device_id = d.id)"
+            "WHERE fp2.device_id = d.id) "
+            f"WHERE {ACTIVE_MIMIC_IP_FILTER}"
         )
         rows = await cursor.fetchall()
 
@@ -280,6 +325,13 @@ class DeviceManager:
         now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
+        if await self._is_active_mimic_ip(scan.ip_address):
+            logger.debug(
+                "Ignoring active mimic decoy IP in device scan: %s",
+                scan.ip_address,
+            )
+            return
+
         # Stage 1: Compute composite fingerprint
         fp = compute_fingerprint(
             mac=scan.mac_address,
@@ -309,7 +361,7 @@ class DeviceManager:
             )
             if mac_match is not None:
                 matched_id = mac_match.device_id
-                confidence = AUTO_APPROVE_THRESHOLD
+                confidence = self._auto_approve_threshold()
 
         # Full multi-signal matching (for devices without MAC or when
         # MAC didn't match -- e.g. MAC randomisation)
@@ -329,6 +381,7 @@ class DeviceManager:
                 known_for_match,
                 connection_destinations=conn_dests,
                 open_ports=ports_set,
+                weights=self._signal_weights(),
             )
 
         if matched_id is not None:
@@ -458,6 +511,11 @@ class DeviceManager:
              fp.open_ports_hash, fp.composite_hash, fp.signal_count,
              confidence, now_iso, now_iso),
         )
+        auto_approve_threshold = self._auto_approve_threshold()
+        verify_threshold = self._verify_threshold()
+        if confidence >= auto_approve_threshold:
+            await self._auto_approve_device_if_unknown(matched_id, now_iso)
+
         await self._db.commit()
 
         # Determine which events to emit
@@ -478,14 +536,14 @@ class DeviceManager:
         device_payload = await self._build_device_payload(tracked, now_iso)
 
         # Confidence-based events
-        if confidence >= AUTO_APPROVE_THRESHOLD:
+        if confidence >= auto_approve_threshold:
             # High confidence -- silent update
             await self._bus.publish(
                 "device.updated",
                 device_payload,
                 source_id=str(matched_id),
             )
-        elif confidence >= VERIFY_THRESHOLD:
+        elif confidence >= verify_threshold:
             # Medium confidence -- verification needed
             await self._bus.publish(
                 "device.verification_needed",
@@ -499,6 +557,39 @@ class DeviceManager:
                 {**device_payload, "low_confidence": True},
                 source_id=str(matched_id),
             )
+
+    async def _auto_approve_device_if_unknown(self, device_id: int, now_iso: str) -> None:
+        cursor = await self._db.execute(
+            "SELECT status FROM device_trust WHERE device_id = ?",
+            (device_id,),
+        )
+        row = await cursor.fetchone()
+        if row is not None and row[0] != "unknown":
+            return
+
+        if row is None:
+            await self._db.execute(
+                "INSERT INTO device_trust (device_id, status, approved_by, updated_at) "
+                "VALUES (?, 'approved', 'auto', ?)",
+                (device_id, now_iso),
+            )
+        else:
+            await self._db.execute(
+                "UPDATE device_trust SET status = 'approved', approved_by = 'auto', "
+                "updated_at = ? WHERE device_id = ?",
+                (now_iso, device_id),
+            )
+
+    async def _is_active_mimic_ip(self, ip_address: str) -> bool:
+        cursor = await self._db.execute(
+            """SELECT 1 FROM decoys
+               WHERE status = 'active'
+                 AND decoy_type = 'mimic'
+                 AND bind_address = ?
+               LIMIT 1""",
+            (ip_address,),
+        )
+        return await cursor.fetchone() is not None
 
     def get_known_devices(self) -> list[TrackedDevice]:
         """Return the list of all known tracked devices."""

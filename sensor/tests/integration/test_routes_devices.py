@@ -90,6 +90,25 @@ class TestListDevices:
         assert len(data["items"]) == 0
         assert data["total"] == 0
 
+    def test_list_excludes_active_mimic_decoy_ips(self, client, db):
+        asyncio.get_event_loop().run_until_complete(seed_devices(db, count=2))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    created_at, updated_at)
+                   VALUES ('Mimic: Camera', 'mimic', '192.168.1.102', 80,
+                           'active', '{}', '2026-02-22T00:00:00Z',
+                           '2026-02-22T00:00:00Z')"""
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        response = client.get("/devices")
+        data = response.json()
+        assert data["total"] == 1
+        assert [item["ip_address"] for item in data["items"]] == ["192.168.1.101"]
+
 
 class TestGetDevice:
     """GET /devices/{id} -- device detail with latest fingerprint and trust."""

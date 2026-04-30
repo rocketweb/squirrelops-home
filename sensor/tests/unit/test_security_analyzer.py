@@ -135,6 +135,10 @@ async def test_grouping_multiple_devices_same_port(db, mock_event_bus):
     assert len(affected) == 4
     device_ids = {d["device_id"] for d in affected}
     assert device_ids == {1, 2, 3, 4}
+    detail = json.loads(row["detail"])
+    assert detail["affected_summary"] == "\n".join(
+        f"- Speaker {i} (192.168.1.{100 + i})" for i in range(1, 5)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -318,9 +322,8 @@ async def test_acknowledged_alert_not_re_alerted(db, mock_event_bus):
 
 
 @pytest.mark.asyncio
-async def test_acknowledged_alert_un_acks_on_new_device(db, mock_event_bus):
-    """When a previously acknowledged grouped alert gets a new device, read_at
-    should be cleared so the user is re-notified."""
+async def test_acknowledged_alert_stays_acknowledged_on_new_device(db, mock_event_bus):
+    """Dismissed grouped alerts stay dismissed even when more devices match."""
     for i in range(1, 4):
         await _insert_test_device(
             db, device_id=i,
@@ -365,20 +368,22 @@ async def test_acknowledged_alert_un_acks_on_new_device(db, mock_event_bus):
     ]
     await analyzer.analyze_all_devices(devices_scan2)
 
-    # read_at should be cleared
+    # read_at should remain set
     cursor = await db.execute(
         "SELECT read_at FROM home_alerts WHERE id = ?", (alert_id,)
     )
     row = await cursor.fetchone()
-    assert row["read_at"] is None
+    assert row["read_at"] is not None
 
-    # alert.updated event should have been published
+    # alert.updated event should have been published with refreshed details,
+    # but it must not make the alert active again.
     mock_event_bus.publish.assert_called_once()
     event_type = mock_event_bus.publish.call_args[0][0]
     assert event_type == "alert.updated"
     payload = mock_event_bus.publish.call_args[0][1]
-    assert payload["read_at"] is None
+    assert payload["read_at"] is not None
     assert payload["device_count"] == 3
+    assert "Speaker 3 (192.168.1.103)" in payload["detail"]
 
 
 # ---------------------------------------------------------------------------

@@ -98,10 +98,10 @@ The sensor adapts to available resources:
 ### Sensor — Linux/NAS (Docker)
 
 ```bash
-curl -fsSL https://get.squirrelops.io/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/rocketweb/squirrelops-home/main/scripts/install.sh | sudo bash
 ```
 
-Runs on any Linux host with Docker (ARM64 and x86_64). Exposes port 8443 with TLS.
+Installs the sensor only on any Linux host with Docker (ARM64 and x86_64). The dashboard/control plane is the macOS app and is installed separately on a Mac. The sensor exposes port 8443 with TLS.
 
 ### Sensor — macOS (launchd)
 

@@ -123,13 +123,14 @@ class SecurityInsightAnalyzer:
                         if dev_info["device_id"] in added_ids:
                             merged.append(dev_info)
 
-                    # Un-acknowledge if new devices appeared
-                    was_acknowledged = existing["read_at"] is not None
+                    # Dismissed means dismissed. Keep read_at intact even when
+                    # the grouped issue gains more devices; the detail is
+                    # refreshed but the user is not re-alerted for that issue.
                     await self._update_grouped_alert(
                         alert_id,
                         finding,
                         merged,
-                        clear_read=was_acknowledged,
+                        clear_read=False,
                     )
 
                     # Record insight state for new devices
@@ -194,11 +195,15 @@ class SecurityInsightAnalyzer:
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         n = len(affected)
         title = f"{finding.service_name} open on {n} device{'s' if n > 1 else ''}"
+        affected_summary = self._format_affected_devices(affected)
 
         detail_obj = {
             "issue_key": issue_key,
             "port": finding.port,
             "service_name": finding.service_name,
+            "device_count": n,
+            "affected_devices": affected,
+            "affected_summary": affected_summary,
         }
 
         cursor = await self._db.execute(
@@ -235,6 +240,8 @@ class SecurityInsightAnalyzer:
                 "incident_id": None,
                 "read_at": None,
                 "actioned_at": None,
+                "detail": affected_summary,
+                "affected_devices": affected,
                 "alert_count": None,
                 "device_count": n,
                 "issue_key": issue_key,
@@ -256,20 +263,29 @@ class SecurityInsightAnalyzer:
         """Update an existing grouped alert's device list."""
         n = len(affected)
         title = f"{finding.service_name} open on {n} device{'s' if n > 1 else ''}"
+        affected_summary = self._format_affected_devices(affected)
+        detail_obj = {
+            "issue_key": issue_key_for_port_risk(finding),
+            "port": finding.port,
+            "service_name": finding.service_name,
+            "device_count": n,
+            "affected_devices": affected,
+            "affected_summary": affected_summary,
+        }
 
         if clear_read:
             await self._db.execute(
                 "UPDATE home_alerts SET "
-                "affected_devices = ?, device_count = ?, title = ?, read_at = NULL "
+                "detail = ?, affected_devices = ?, device_count = ?, title = ?, read_at = NULL "
                 "WHERE id = ?",
-                (json.dumps(affected), n, title, alert_id),
+                (json.dumps(detail_obj), json.dumps(affected), n, title, alert_id),
             )
         else:
             await self._db.execute(
                 "UPDATE home_alerts SET "
-                "affected_devices = ?, device_count = ?, title = ? "
+                "detail = ?, affected_devices = ?, device_count = ?, title = ? "
                 "WHERE id = ?",
-                (json.dumps(affected), n, title, alert_id),
+                (json.dumps(detail_obj), json.dumps(affected), n, title, alert_id),
             )
         await self._db.commit()
 
@@ -291,6 +307,8 @@ class SecurityInsightAnalyzer:
                         "incident_id": None,
                         "read_at": row["read_at"],
                         "actioned_at": row["actioned_at"],
+                        "detail": affected_summary,
+                        "affected_devices": affected,
                         "alert_count": None,
                         "device_count": n,
                         "issue_key": row["issue_key"],
@@ -337,12 +355,19 @@ class SecurityInsightAnalyzer:
                     if n > 0
                     else row["title"]
                 )
+                if isinstance(detail, dict):
+                    detail["device_count"] = n
+                    detail["affected_devices"] = pruned
+                    detail["affected_summary"] = self._format_affected_devices(pruned)
+                    detail_json = json.dumps(detail)
+                else:
+                    detail_json = row["detail"]
 
                 await self._db.execute(
                     "UPDATE home_alerts SET "
-                    "affected_devices = ?, device_count = ?, title = ? "
+                    "detail = ?, affected_devices = ?, device_count = ?, title = ? "
                     "WHERE id = ?",
-                    (json.dumps(pruned), n, title, row["id"]),
+                    (detail_json, json.dumps(pruned), n, title, row["id"]),
                 )
                 await self._db.commit()
 
@@ -397,3 +422,13 @@ class SecurityInsightAnalyzer:
 
         if resolved:
             await self._db.commit()
+
+    @staticmethod
+    def _format_affected_devices(affected: list[dict]) -> str:
+        """Return a compact device list for notification bodies and alert detail."""
+        if not affected:
+            return "No devices are currently affected."
+        return "\n".join(
+            f"- {dev.get('display_name') or 'Unknown device'} ({dev.get('ip_address') or 'unknown IP'})"
+            for dev in affected
+        )

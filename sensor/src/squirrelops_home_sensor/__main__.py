@@ -117,6 +117,7 @@ def create_scan_loop(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
         db=db,
         event_bus=event_bus,
         classifier=classifier,
+        config=config,
     )
 
     # Build privileged operations

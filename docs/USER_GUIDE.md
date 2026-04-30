@@ -43,10 +43,10 @@ There are three installation paths. Choose the one that fits your setup.
 
 ### Path A: Docker on Linux/NAS
 
-This is the recommended path if you have an always-on Linux device (Raspberry Pi, NAS, server). The sensor runs as a Docker container with host networking.
+This is the recommended path if you have an always-on Linux device (Raspberry Pi, NAS, server). This installs the sensor only. The dashboard/control plane is always the macOS app and must be installed separately on a Mac.
 
 ```bash
-curl -fsSL https://get.squirrelops.io/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/rocketweb/squirrelops-home/main/scripts/install.sh | sudo bash
 ```
 
 The script will:

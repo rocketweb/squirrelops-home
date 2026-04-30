@@ -3,7 +3,7 @@
 # SquirrelOps Home Sensor — Install Script
 #
 # Usage:
-#   curl -fsSL https://get.squirrelops.io/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/rocketweb/squirrelops-home/main/scripts/install.sh | sudo bash
 #   # or
 #   sudo bash install.sh
 #

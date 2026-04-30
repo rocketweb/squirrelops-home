@@ -42,8 +42,12 @@ struct AlertDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
-                    sourceSection(alert)
-                    intrusionSection(alert)
+                    if alert.alertType == "security.port_risk" {
+                        portRiskSection(alert)
+                    } else {
+                        sourceSection(alert)
+                        intrusionSection(alert)
+                    }
                     if hasCredentialInfo(alert) {
                         credentialSection(alert)
                     }
@@ -101,7 +105,53 @@ struct AlertDetailView: View {
         .padding(Spacing.lg)
     }
 
+    // MARK: - Port Risk Section
+
+    private func portRiskSection(_ alert: AlertDetail) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.s12) {
+            sectionHeader("AFFECTED DEVICES")
+
+            VStack(alignment: .leading, spacing: Spacing.s12) {
+                if let service = detailValue(alert, "service_name") {
+                    detailRow(label: "Service", value: service)
+                }
+                if let port = detailValue(alert, "port") {
+                    detailRow(label: "Port", value: port, mono: true)
+                }
+
+                if let devices = alert.affectedDevices, !devices.isEmpty {
+                    VStack(spacing: Spacing.xs) {
+                        ForEach(devices) { device in
+                            HStack(spacing: Spacing.sm) {
+                                Text(device.displayName)
+                                    .font(Typography.bodySmall)
+                                    .foregroundStyle(Theme.textPrimary(colorScheme))
+                                    .lineLimit(1)
+                                Spacer()
+                                Text(device.ipAddress)
+                                    .font(Typography.mono)
+                                    .tracking(Typography.monoTracking)
+                                    .foregroundStyle(Theme.textSecondary(colorScheme))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .padding(.top, Spacing.xs)
+                }
+
+                if let risk = alert.riskDescription {
+                    detailRow(label: "Risk", value: risk)
+                }
+                if let remediation = alert.remediation {
+                    detailRow(label: "Fix", value: remediation)
+                }
+            }
+            .sectionCard(colorScheme: colorScheme)
+        }
+    }
+
     // MARK: - Source Section
+
 
     private func sourceSection(_ alert: AlertDetail) -> some View {
         VStack(alignment: .leading, spacing: Spacing.s12) {

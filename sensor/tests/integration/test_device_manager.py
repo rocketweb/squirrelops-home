@@ -132,6 +132,131 @@ class TestDeviceManagerPipeline:
         assert len(updated_events) >= 1
 
     @pytest.mark.asyncio
+    async def test_high_confidence_match_auto_approves_unknown_device(
+        self,
+        manager: DeviceManager,
+        event_bus: EventBus,
+        db: aiosqlite.Connection,
+    ) -> None:
+        """A returning device at the approval threshold is marked approved."""
+        received_events: list[dict] = []
+
+        async def handler(event: dict) -> None:
+            received_events.append(event)
+
+        event_bus.subscribe(["device.updated"], handler)
+
+        scan = ScanResult(
+            ip_address="192.168.1.100",
+            mac_address="A4:83:E7:11:22:33",
+            hostname="macbook-pro.local",
+            mdns_hostname="macbook-pro.local",
+            open_ports=[22, 80, 443],
+            dhcp_options=[1, 3, 6, 15, 28, 51, 53],
+            connections=[("8.8.8.8", 443)],
+        )
+
+        await manager.process_scan_result(scan)
+        await manager.process_scan_result(scan)
+        await asyncio.sleep(0.1)
+
+        cursor = await db.execute(
+            "SELECT status, approved_by FROM device_trust WHERE device_id = 1"
+        )
+        trust = await cursor.fetchone()
+        assert trust is not None
+        assert trust["status"] == "approved"
+        assert trust["approved_by"] == "auto"
+
+        updated_events = [e for e in received_events if e["event_type"] == "device.updated"]
+        assert updated_events[-1]["payload"]["trust_status"] == "approved"
+
+    @pytest.mark.asyncio
+    async def test_active_mimic_decoy_ip_is_not_registered_as_device(
+        self,
+        manager: DeviceManager,
+        db: aiosqlite.Connection,
+    ) -> None:
+        """Virtual IPs owned by mimic decoys are not added to device inventory."""
+        await db.execute(
+            """INSERT INTO decoys
+               (name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at)
+               VALUES ('Mimic: Printer', 'mimic', '192.168.1.200', 80,
+                       'active', '{}', '2026-02-22T00:00:00Z',
+                       '2026-02-22T00:00:00Z')"""
+        )
+        await db.commit()
+
+        await manager.process_scan_result(
+            ScanResult(
+                ip_address="192.168.1.200",
+                mac_address="02:00:00:00:00:01",
+                hostname="printer-mimic.local",
+                open_ports=[80],
+            )
+        )
+
+        cursor = await db.execute("SELECT COUNT(*) FROM devices")
+        assert (await cursor.fetchone())[0] == 0
+
+    @pytest.mark.asyncio
+    async def test_live_auto_approve_threshold_config_is_used(
+        self,
+        db: aiosqlite.Connection,
+        event_bus: EventBus,
+        classifier: DeviceClassifier,
+    ) -> None:
+        """Runtime threshold changes affect matching without restarting the manager."""
+        config = {
+            "fingerprint": {
+                "auto_approve_threshold": 0.90,
+                "verify_threshold": 0.50,
+            }
+        }
+        manager = DeviceManager(
+            db=db, event_bus=event_bus, classifier=classifier, config=config
+        )
+        received_events: list[dict] = []
+
+        async def handler(event: dict) -> None:
+            received_events.append(event)
+
+        event_bus.subscribe(["device.updated", "device.verification_needed"], handler)
+
+        scan1 = ScanResult(
+            ip_address="192.168.1.100",
+            mac_address="A4:83:E7:11:22:33",
+            hostname="macbook-pro.local",
+            mdns_hostname="macbook-pro.local",
+            dhcp_options=[1, 3, 6, 15, 28, 51, 53],
+        )
+        scan2 = ScanResult(
+            ip_address="192.168.1.101",
+            mac_address="11:22:33:44:55:66",
+            hostname="macbook-pro.local",
+            mdns_hostname="macbook-pro.local",
+            dhcp_options=[1, 3, 6, 15, 28, 51, 53],
+        )
+
+        await manager.process_scan_result(scan1)
+        await manager.process_scan_result(scan2)
+        await asyncio.sleep(0.1)
+
+        cursor = await db.execute("SELECT status FROM device_trust WHERE device_id = 1")
+        assert await cursor.fetchone() is None
+        assert any(e["event_type"] == "device.verification_needed" for e in received_events)
+
+        config["fingerprint"]["auto_approve_threshold"] = 0.75
+        await manager.process_scan_result(scan2)
+        await asyncio.sleep(0.1)
+
+        cursor = await db.execute("SELECT status FROM device_trust WHERE device_id = 1")
+        trust = await cursor.fetchone()
+        assert trust is not None
+        assert trust["status"] == "approved"
+
+    @pytest.mark.asyncio
     async def test_device_fingerprint_stored(
         self, manager: DeviceManager, db: aiosqlite.Connection
     ) -> None:

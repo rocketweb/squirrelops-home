@@ -145,12 +145,21 @@ struct DeviceInventoryView: View {
                 Spacer()
 
                 if viewMode == .byDevice {
-                    Picker("Sort", selection: $sortOrder) {
-                        ForEach(SortOrder.allCases) { order in
-                            Text(order.rawValue).tag(order)
+                    HStack(spacing: Spacing.xs) {
+                        Text("Sort")
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.textSecondary(colorScheme))
+                            .lineLimit(1)
+                            .fixedSize()
+
+                        Picker("Sort", selection: $sortOrder) {
+                            ForEach(SortOrder.allCases) { order in
+                                Text(order.rawValue).tag(order)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
                     }
-                    .pickerStyle(.segmented)
                     .frame(maxWidth: 360)
 
                     Toggle(isOn: $groupByArea) {
@@ -158,12 +167,21 @@ struct DeviceInventoryView: View {
                     }
                     .toggleStyle(.button)
                 } else {
-                    Picker("Sort", selection: $portSortOrder) {
-                        ForEach(PortSortOrder.allCases) { order in
-                            Text(order.rawValue).tag(order)
+                    HStack(spacing: Spacing.xs) {
+                        Text("Sort")
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.textSecondary(colorScheme))
+                            .lineLimit(1)
+                            .fixedSize()
+
+                        Picker("Sort", selection: $portSortOrder) {
+                            ForEach(PortSortOrder.allCases) { order in
+                                Text(order.rawValue).tag(order)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
                     }
-                    .pickerStyle(.segmented)
                     .frame(maxWidth: 260)
                 }
 

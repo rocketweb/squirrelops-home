@@ -203,11 +203,13 @@ jobs:
 
           ### Linux / NAS (Docker)
 
+          Installs the **sensor only** on Linux/NAS. The dashboard/control-plane app is macOS-only and must be installed separately on a Mac.
+
           ```bash
-          curl -fsSL https://get.squirrelops.io/install.sh | sudo bash
+          curl -fsSL LINUX_INSTALL_URL | sudo bash
           ```
 
-          Then install the macOS app separately to use as your dashboard.
+          After the sensor is running, install the macOS app separately to pair with it and use the dashboard.
 
           ### Uninstall
 
@@ -220,6 +222,7 @@ jobs:
 
           # Fix version placeholder
           sed -i "s/VERSION/${VERSION}/g" release-body.md
+          sed -i "s|LINUX_INSTALL_URL|https://raw.githubusercontent.com/${{ github.repository }}/${TAG_NAME}/scripts/install.sh|g" release-body.md
 
           # Fix download URL
           PKG_FILE=$(ls release-assets/SquirrelOpsHome-*.pkg 2>/dev/null | grep -v '.sha256' | head -1)

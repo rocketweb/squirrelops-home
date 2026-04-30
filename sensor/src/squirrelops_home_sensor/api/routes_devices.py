@@ -12,6 +12,14 @@ from squirrelops_home_sensor.api.deps import get_db, verify_client_cert
 router = APIRouter(prefix="/devices", tags=["devices"])
 
 
+ACTIVE_DECOY_DEVICE_FILTER = """NOT EXISTS (
+    SELECT 1 FROM decoys dx
+    WHERE dx.status = 'active'
+      AND dx.decoy_type = 'mimic'
+      AND dx.bind_address = d.ip_address
+)"""
+
+
 # ---------- Request/Response models ----------
 
 
@@ -151,7 +159,7 @@ async def list_devices(
     _auth: dict = Depends(verify_client_cert),
 ):
     """List devices with pagination, filters, and search."""
-    where_clauses = []
+    where_clauses = [ACTIVE_DECOY_DEVICE_FILTER]
     params: list = []
 
     if trust_status:
