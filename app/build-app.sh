@@ -77,6 +77,13 @@ for bundle in "$BUILD_DIR"/*_"${APP_NAME}".bundle; do
     fi
 done
 
+# SPM's generated Bundle.module accessor looks for this bundle at
+# Bundle.main.bundleURL. Put the compatibility copy in place before signing.
+RESOURCE_BUNDLE="$APP_BUNDLE/Contents/Resources/${APP_NAME}_${APP_NAME}.bundle"
+if [ -d "$RESOURCE_BUNDLE" ]; then
+    cp -R "$RESOURCE_BUNDLE" "$APP_BUNDLE/"
+fi
+
 # Copy helper binary into LaunchServices location if it exists
 HELPER_BUNDLE_ID="com.squirrelops.helper"
 if [ -f "$BUILD_DIR/$HELPER_NAME" ]; then
