@@ -261,6 +261,7 @@ jobs:
              .app.download_url = $pkg_url |
              .app.release_notes_url = $release_url |
              .sensor.release_notes_url = $release_url |
+             .downloads.macos_pkg_sha256 = $pkg_sha |
              .app.sha256 = $pkg_sha' \
             site/public/manifest.json > site/public/manifest.json.tmp
 
