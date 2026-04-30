@@ -139,32 +139,34 @@ public struct KeychainStore {
     ) throws -> SecIdentity {
         try? deleteClientIdentity(certificateLabel: certificateLabel, privateKeyLabel: privateKeyLabel)
 
+        let keyTag = keyApplicationTag(privateKeyLabel)
+        let keyQuery: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: keyTag,
+        ]
+        let deleteStatus = SecItemDelete(keyQuery as CFDictionary)
+        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+            throw KeychainError.unexpectedStatus(deleteStatus)
+        }
+
         let keyAttributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
             kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
             kSecAttrKeySizeInBits as String: 256,
-        ]
-
-        var keyError: Unmanaged<CFError>?
-        guard let secKey = SecKeyCreateWithData(
-            privateKeyData as CFData,
-            keyAttributes as CFDictionary,
-            &keyError
-        ) else {
-            let reason = keyError?.takeRetainedValue().localizedDescription ?? "unknown key import error"
-            throw KeychainError.identityCreationFailed(reason)
-        }
-
-        let keyQuery: [String: Any] = [
-            kSecClass as String: kSecClassKey,
-            kSecValueRef as String: secKey,
-            kSecAttrApplicationTag as String: keyApplicationTag(privateKeyLabel),
+            kSecAttrIsPermanent as String: true,
+            kSecAttrApplicationTag as String: keyTag,
             kSecAttrLabel as String: privateKeyLabel,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
-        let keyStatus = SecItemAdd(keyQuery as CFDictionary, nil)
-        guard keyStatus == errSecSuccess || keyStatus == errSecDuplicateItem else {
-            throw KeychainError.unexpectedStatus(keyStatus)
+
+        var keyError: Unmanaged<CFError>?
+        guard SecKeyCreateWithData(
+            privateKeyData as CFData,
+            keyAttributes as CFDictionary,
+            &keyError
+        ) != nil else {
+            let reason = keyError?.takeRetainedValue().localizedDescription ?? "unknown key import error"
+            throw KeychainError.identityCreationFailed(reason)
         }
 
         guard let derData = certificateDERData(from: certificateData),
