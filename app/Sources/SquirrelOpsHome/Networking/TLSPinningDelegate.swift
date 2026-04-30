@@ -17,6 +17,20 @@ public final class TLSPinningDelegate: NSObject, URLSessionDelegate, @unchecked 
         self.clientIdentity = clientIdentity
     }
 
+    static func certificateDERData(from data: Data) -> Data? {
+        guard let pem = String(data: data, encoding: .utf8),
+              pem.contains("-----BEGIN CERTIFICATE-----") else {
+            return data
+        }
+        let base64 = pem
+            .replacingOccurrences(of: "-----BEGIN CERTIFICATE-----", with: "")
+            .replacingOccurrences(of: "-----END CERTIFICATE-----", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: " ", with: "")
+        return Data(base64Encoded: base64)
+    }
+
     public func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
@@ -51,7 +65,8 @@ public final class TLSPinningDelegate: NSObject, URLSessionDelegate, @unchecked 
         // Pin against stored CA cert. Sensor certificates are generated on
         // local networks where users may connect by mDNS name, LAN IP, or
         // localhost, so this validates the CA chain without hostname binding.
-        guard let caCert = SecCertificateCreateWithData(nil, caCertData as CFData) else {
+        guard let caDERData = Self.certificateDERData(from: caCertData),
+              let caCert = SecCertificateCreateWithData(nil, caDERData as CFData) else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
