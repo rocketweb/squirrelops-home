@@ -136,6 +136,8 @@ jobs:
     name: Publish Sensor Wheel to PyPI
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -156,10 +158,15 @@ jobs:
         run: python -m build sensor/
 
       - name: Publish to PyPI
+        if: ${{ env.PYPI_API_TOKEN != '' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
+          password: ${{ env.PYPI_API_TOKEN }}
           packages-dir: sensor/dist/
+
+      - name: Skip PyPI publish
+        if: ${{ env.PYPI_API_TOKEN == '' }}
+        run: echo "PYPI_API_TOKEN is not configured; skipping PyPI publish."
 
   # ---------------------------------------------------------------------------
   # Job 4: Create GitHub Release and update manifest

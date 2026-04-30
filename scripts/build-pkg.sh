@@ -352,7 +352,7 @@ if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_PA
         warn "The .pkg is signed but not notarized."
         warn "Users may need to right-click → Open on first launch."
         # Try to extract submission ID and fetch log for debugging
-        SUBMISSION_ID=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$NOTARY_OUTPUT" | head -1)
+        SUBMISSION_ID=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$NOTARY_OUTPUT" | head -1 || true)
         if [ -n "$SUBMISSION_ID" ]; then
             warn "Fetching notarization log for submission $SUBMISSION_ID..."
             xcrun notarytool log "$SUBMISSION_ID" \
