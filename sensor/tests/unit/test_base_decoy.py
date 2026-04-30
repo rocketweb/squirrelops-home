@@ -1,14 +1,12 @@
 """Unit tests for BaseDecoy abstract class and DecoyConnectionEvent."""
 
-import asyncio
 import dataclasses
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
-
 
 # ---------------------------------------------------------------------------
 # DecoyConnectionEvent dataclass tests
@@ -19,7 +17,7 @@ class TestDecoyConnectionEvent:
 
     def test_required_fields(self):
         """Event must require source_ip, source_port, dest_port, protocol, timestamp."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         event = DecoyConnectionEvent(
             source_ip="192.168.1.100",
             source_port=54321,
@@ -40,7 +38,7 @@ class TestDecoyConnectionEvent:
             source_port=12345,
             dest_port=8080,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         assert event.request_path is None
         assert event.credential_used is None
@@ -52,7 +50,7 @@ class TestDecoyConnectionEvent:
             source_port=12345,
             dest_port=8080,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             request_path="/api/health",
             credential_used="AKIAIOSFODNN7EXAMPLE",
         )
@@ -70,7 +68,7 @@ class TestDecoyConnectionEvent:
             source_port=12345,
             dest_port=8080,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             event.source_ip = "changed"
@@ -184,7 +182,7 @@ class TestBaseDecoyConnectionCallback:
             source_port=54321,
             dest_port=3001,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         decoy._notify_connection(event)
         callback.assert_called_once_with(event)
@@ -196,7 +194,7 @@ class TestBaseDecoyConnectionCallback:
             source_port=54321,
             dest_port=3001,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         # Should not raise
         decoy._notify_connection(event)
@@ -206,7 +204,7 @@ class TestBaseDecoyConnectionCallback:
         received_events = []
         decoy.on_connection = lambda e: received_events.append(e)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         event = DecoyConnectionEvent(
             source_ip="10.0.0.1",
             source_port=9999,

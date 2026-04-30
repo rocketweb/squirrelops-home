@@ -2,12 +2,7 @@
 import asyncio
 import hashlib
 import hmac
-import json
 import os
-import time
-
-import pytest
-from fastapi.testclient import TestClient
 
 from tests.integration.conftest import seed_pairing
 
@@ -172,8 +167,8 @@ class TestPairingComplete:
 
     def _do_challenge_and_verify(self, client, app):
         """Helper: run challenge + verify, return shared_key and pairing state."""
-        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
         from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
         # Step 1: challenge
         challenge_resp = client.get("/pairing/code/challenge")
@@ -210,10 +205,10 @@ class TestPairingComplete:
         return shared_key, verify_resp.json()
 
     def test_complete_returns_200(self, client, app):
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import serialization, hashes
         from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.x509.oid import NameOID
 
         shared_key, verify_data = self._do_challenge_and_verify(client, app)
@@ -239,10 +234,10 @@ class TestPairingComplete:
         assert response.status_code == 200
 
     def test_complete_returns_encrypted_client_cert(self, client, app):
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import serialization, hashes
         from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.x509.oid import NameOID
 
         shared_key, verify_data = self._do_challenge_and_verify(client, app)
@@ -267,10 +262,10 @@ class TestPairingComplete:
         assert "encrypted_client_cert" in data
 
     def test_complete_client_cert_is_decryptable(self, client, app):
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import serialization, hashes
         from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.x509.oid import NameOID
 
         shared_key, verify_data = self._do_challenge_and_verify(client, app)
@@ -302,10 +297,10 @@ class TestPairingComplete:
         assert cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "Test MacBook"
 
     def test_complete_stores_pairing_record(self, client, app, db):
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import serialization, hashes
         from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.x509.oid import NameOID
 
         shared_key, verify_data = self._do_challenge_and_verify(client, app)
@@ -337,10 +332,10 @@ class TestPairingComplete:
         assert row["client_cert_fingerprint"].startswith("sha256:")
 
     def test_complete_invalidates_code(self, client, app):
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import serialization, hashes
         from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.x509.oid import NameOID
 
         shared_key, verify_data = self._do_challenge_and_verify(client, app)
@@ -371,11 +366,11 @@ class TestPairingFullFlow:
     """End-to-end: challenge -> verify -> complete -> authenticated request."""
 
     def test_full_pairing_flow(self, client, app, db):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import serialization, hashes
-        from cryptography import x509
         from cryptography.x509.oid import NameOID
 
         # Step 1: Challenge
@@ -443,8 +438,8 @@ class TestPairingFullFlow:
         # Verify the client cert was signed by the CA
         ca_public_key = ca_cert.public_key()
         # This should not raise
-        from cryptography.hazmat.primitives.asymmetric.ec import ECDSA as _ECDSA
         from cryptography.hazmat.primitives import hashes as _hashes
+        from cryptography.hazmat.primitives.asymmetric.ec import ECDSA as _ECDSA
         ca_public_key.verify(
             client_cert.signature,
             client_cert.tbs_certificate_bytes,

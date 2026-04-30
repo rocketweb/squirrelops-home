@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
@@ -212,7 +212,7 @@ class MimicOrchestrator:
         port_configs = self._build_port_configs(profiles, template)
 
         # Persist template to DB
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         template_cursor = await self._db.execute(
             """INSERT INTO mimic_templates
                (source_device_id, source_ip, device_category, routes_json,
@@ -601,7 +601,7 @@ class MimicOrchestrator:
                         hostname=mdns_hostname,
                     )
 
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             await self._db.execute(
                 "UPDATE decoys SET status = 'active', updated_at = ? WHERE id = ?",
                 (now, decoy_id),
@@ -675,7 +675,7 @@ class MimicOrchestrator:
                             "marking as stopped",
                             bind_address, row["name"], decoy_id,
                         )
-                        now = datetime.now(timezone.utc).isoformat()
+                        now = datetime.now(UTC).isoformat()
                         await self._db.execute(
                             "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
                             (now, decoy_id),
@@ -793,7 +793,7 @@ class MimicOrchestrator:
 
             except Exception:
                 logger.exception("Failed to resume mimic decoy %d", row["id"])
-                now = datetime.now(timezone.utc).isoformat()
+                now = datetime.now(UTC).isoformat()
                 await self._db.execute(
                     "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
                     (now, row["id"]),

@@ -8,14 +8,12 @@ parent incidents.
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import aiosqlite
 import pytest
 import pytest_asyncio
-
 
 # -- Lightweight event bus stub --------------------------------------
 
@@ -108,7 +106,7 @@ async def event_bus():
 
 
 def _iso_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def _iso_at(dt: datetime) -> str:
@@ -194,7 +192,7 @@ class TestSameSourceGrouping:
 
         grouper = IncidentGrouper(db=db, event_bus=event_bus)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         alert1_id = await _create_alert_via_grouper(
             grouper,
@@ -289,7 +287,7 @@ class TestWindowExpiry:
             incident_window_minutes=15,
         )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # First alert
         await _create_alert_via_grouper(
@@ -333,7 +331,7 @@ class TestWindowExpiry:
             incident_window_minutes=15,
         )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         await _create_alert_via_grouper(
             grouper,
@@ -386,7 +384,7 @@ class TestSeverityEscalation:
 
         grouper = IncidentGrouper(db=db, event_bus=event_bus)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         await _create_alert_via_grouper(
             grouper,
@@ -424,7 +422,7 @@ class TestSeverityEscalation:
 
         grouper = IncidentGrouper(db=db, event_bus=event_bus)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         await _create_alert_via_grouper(
             grouper,
@@ -458,7 +456,7 @@ class TestSeverityEscalation:
 
         grouper = IncidentGrouper(db=db, event_bus=event_bus)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Start with medium
         await _create_alert_via_grouper(
@@ -532,7 +530,7 @@ class TestSummaryGeneration:
 
         grouper = IncidentGrouper(db=db, event_bus=event_bus)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         await _create_alert_via_grouper(
             grouper,
@@ -624,7 +622,7 @@ class TestIncidentClosing:
         )
 
         # Insert an incident that last had activity 45 minutes ago
-        old_time = datetime.now(timezone.utc) - timedelta(minutes=45)
+        old_time = datetime.now(UTC) - timedelta(minutes=45)
         await db.execute(
             """INSERT INTO incidents (source_ip, status, severity, alert_count,
                first_alert_at, last_alert_at, summary)
@@ -652,7 +650,7 @@ class TestIncidentClosing:
         )
 
         # Insert an incident that last had activity 10 minutes ago
-        recent_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        recent_time = datetime.now(UTC) - timedelta(minutes=10)
         await db.execute(
             """INSERT INTO incidents (source_ip, status, severity, alert_count,
                first_alert_at, last_alert_at, summary)
@@ -675,7 +673,7 @@ class TestIncidentClosing:
 
         grouper = IncidentGrouper(db=db, event_bus=event_bus)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Create and close an incident manually
         await db.execute(

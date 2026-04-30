@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from squirrelops_home_sensor.alerts.types import Severity
 from squirrelops_home_sensor.security.port_risks import evaluate_device_ports
 

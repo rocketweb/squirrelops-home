@@ -2,62 +2,60 @@
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 import pytest
 
 from squirrelops_home_sensor.db.migrations import apply_migrations
 from squirrelops_home_sensor.db.queries import (
-    # Device queries
-    insert_device_fingerprint,
-    get_device_fingerprints,
-    set_device_trust,
-    get_device_trust,
-    # Alert queries
-    insert_alert,
-    get_alert,
-    list_alerts,
-    mark_alert_read,
-    mark_alert_actioned,
-    # Incident queries
-    insert_incident,
-    get_incident,
-    get_active_incident_for_source,
-    update_incident,
-    list_incidents,
     close_incident,
-    # Decoy queries
-    insert_decoy,
+    delete_pairing,
+    get_active_incident_for_source,
+    get_alert,
+    get_credential_by_canary_hostname,
+    get_credential_by_value,
     get_decoy,
-    list_decoys,
-    update_decoy_status,
+    get_device_fingerprints,
+    get_device_trust,
+    get_incident,
+    get_pairing,
+    get_planted_credential,
     increment_decoy_connection_count,
     increment_decoy_credential_trip_count,
-    # Decoy connection queries
-    insert_decoy_connection,
-    list_decoy_connections,
-    # Credential queries
-    insert_planted_credential,
-    get_planted_credential,
-    list_planted_credentials,
-    mark_credential_tripped,
-    get_credential_by_value,
-    get_credential_by_canary_hostname,
+    # Alert queries
+    insert_alert,
     # Canary observation queries
     insert_canary_observation,
-    list_canary_observations,
+    # Decoy queries
+    insert_decoy,
+    # Decoy connection queries
+    insert_decoy_connection,
+    # Device queries
+    insert_device_fingerprint,
+    # Incident queries
+    insert_incident,
     # Pairing queries
     insert_pairing,
-    get_pairing,
+    # Credential queries
+    insert_planted_credential,
+    list_alerts,
+    list_canary_observations,
+    list_decoy_connections,
+    list_decoys,
+    list_incidents,
     list_pairings,
-    delete_pairing,
-    update_pairing_last_connected,
+    list_planted_credentials,
+    mark_alert_actioned,
+    mark_alert_read,
+    mark_credential_tripped,
     # Retention
     purge_old_records,
+    set_device_trust,
+    update_decoy_status,
+    update_incident,
+    update_pairing_last_connected,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -79,11 +77,11 @@ async def db() -> aiosqlite.Connection:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _past_iso(days: int) -> str:
-    dt = datetime.now(timezone.utc) - timedelta(days=days)
+    dt = datetime.now(UTC) - timedelta(days=days)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 

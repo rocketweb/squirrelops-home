@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import ipaddress
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 from cryptography import x509
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.ec import (
     ECDSA,
+    SECP256R1,
     EllipticCurvePrivateKey,
     EllipticCurvePublicKey,
-    SECP256R1,
     generate_private_key,
 )
-from cryptography.hazmat.primitives import hashes
 from cryptography.x509.oid import NameOID
 
 from squirrelops_home_sensor.tls import (
@@ -27,7 +26,6 @@ from squirrelops_home_sensor.tls import (
     generate_ca,
     generate_server_cert,
 )
-
 
 # ---------------------------------------------------------------------------
 # In-memory SecretStore for tests

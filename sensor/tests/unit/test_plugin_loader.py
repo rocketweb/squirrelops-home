@@ -11,7 +11,6 @@ import pytest
 from squirrelops_home_sensor.plugins.base import BaseAgentModule
 from squirrelops_home_sensor.plugins.loader import PluginLoader
 
-
 # ---------------------------------------------------------------------------
 # Helpers -- concrete plugin for testing the ABC
 # ---------------------------------------------------------------------------

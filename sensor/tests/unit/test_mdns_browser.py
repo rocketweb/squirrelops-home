@@ -7,17 +7,13 @@ Tests cover:
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 from squirrelops_home_sensor.scanner.mdns_browser import (
     BROWSE_SERVICE_TYPES,
-    MDNSBrowser,
     MDNSResult,
     extract_result_from_info,
 )
-
 
 # ---------------------------------------------------------------------------
 # MDNSResult dataclass

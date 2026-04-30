@@ -12,8 +12,8 @@ Pipeline stages:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
@@ -277,7 +277,7 @@ class DeviceManager:
         scan:
             Raw scan result from the network scanner.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
         # Stage 1: Compute composite fingerprint
@@ -514,7 +514,7 @@ class DeviceManager:
         """
         from squirrelops_home_sensor.scanner.port_scanner import PortResult
 
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         for item in port_results:
             if isinstance(item, PortResult):
                 port, svc, banner = item.port, item.service_name, item.banner
@@ -572,7 +572,7 @@ class DeviceManager:
             return
 
         tracked.open_ports = ports_set
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         tracked.last_seen = now
 
@@ -643,7 +643,7 @@ class DeviceManager:
 
         # Determine what changed
         changed = False
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
         # Hostname: mDNS wins over UPnP friendly name
@@ -754,7 +754,7 @@ class DeviceManager:
             has_custom_name = row is not None and row["custom_name"] is not None
 
             changed = False
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
             # Hostname: only if HA has a name AND no custom_name is set

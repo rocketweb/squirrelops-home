@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 import aiosqlite
 import pytest
 
 from squirrelops_home_sensor.db.migrations import apply_migrations
-from squirrelops_home_sensor.events.bus import EventBus, Subscription
+from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.events.log import EventLog
 from squirrelops_home_sensor.events.types import EventType
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -93,7 +91,7 @@ class TestEventLog:
 
     @pytest.mark.asyncio
     async def test_append_with_source_id(self, event_log: EventLog) -> None:
-        seq = await event_log.append("test.event", {"k": "v"}, source_id="device-1")
+        await event_log.append("test.event", {"k": "v"}, source_id="device-1")
         events = await event_log.replay(since_seq=0)
         assert events[0]["source_id"] == "device-1"
 

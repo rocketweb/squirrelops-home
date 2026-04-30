@@ -13,12 +13,16 @@ and LibreSSL (macOS system curl) do not support Ed25519 TLS certificates.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric.ec import ECDSA, EllipticCurvePrivateKey, SECP256R1, generate_private_key
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    SECP256R1,
+    EllipticCurvePrivateKey,
+    generate_private_key,
+)
 from cryptography.x509.oid import NameOID
 
 logger = logging.getLogger(__name__)
@@ -86,8 +90,8 @@ def generate_ca(sensor_name: str) -> tuple[EllipticCurvePrivateKey, x509.Certifi
         .issuer_name(issuer)
         .public_key(ca_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=_VALIDITY_DAYS))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=_VALIDITY_DAYS))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .sign(ca_key, hashes.SHA256())
     )
@@ -124,8 +128,8 @@ def generate_server_cert(
         .issuer_name(ca_cert.subject)
         .public_key(server_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=_VALIDITY_DAYS))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=_VALIDITY_DAYS))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.SubjectAlternativeName([

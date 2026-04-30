@@ -13,7 +13,7 @@ import asyncio
 import json
 import logging
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from squirrelops_home_sensor.privileged.helper import (
@@ -181,7 +181,7 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         for entry in result:
             ts = datetime.fromisoformat(entry["timestamp"])
             if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
+                ts = ts.replace(tzinfo=UTC)
             queries.append(
                 DNSQuery(
                     query_name=entry["query_name"],

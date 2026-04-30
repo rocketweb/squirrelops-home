@@ -9,8 +9,7 @@ by the DNSMonitor and matched here.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ class CanaryManager:
         self._hostnames.add(normalized)
         self._credential_map[normalized] = credential_id
 
-    def get_credential_id(self, hostname: str) -> Optional[int]:
+    def get_credential_id(self, hostname: str) -> int | None:
         """Return the credential ID for a canary hostname, or None."""
         normalized = hostname.lower().rstrip(".")
         return self._credential_map.get(normalized)
@@ -78,7 +77,7 @@ class CanaryManager:
         self,
         hostname: str,
         queried_by_ip: str,
-        queried_by_mac: Optional[str] = None,
+        queried_by_mac: str | None = None,
     ) -> dict:
         """Record a canary DNS observation.
 
@@ -94,7 +93,7 @@ class CanaryManager:
             Dict with observation details.
         """
         normalized = hostname.lower().rstrip(".")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         credential_id = self.get_credential_id(normalized)
 
         observation = {

@@ -1,9 +1,5 @@
 """Integration tests for device routes: list, get, update, trust actions, fingerprint history."""
 import asyncio
-import json
-
-import pytest
-from fastapi.testclient import TestClient
 
 from tests.integration.conftest import seed_devices
 

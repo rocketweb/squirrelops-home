@@ -1,8 +1,7 @@
 """Device routes: list, get, update, trust actions, fingerprint history."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,13 +18,13 @@ router = APIRouter(prefix="/devices", tags=["devices"])
 class DeviceSummary(BaseModel):
     id: int
     ip_address: str
-    mac_address: Optional[str] = None
-    hostname: Optional[str] = None
-    vendor: Optional[str] = None
+    mac_address: str | None = None
+    hostname: str | None = None
+    vendor: str | None = None
     device_type: str
-    model_name: Optional[str] = None
-    area: Optional[str] = None
-    custom_name: Optional[str] = None
+    model_name: str | None = None
+    area: str | None = None
+    custom_name: str | None = None
     trust_status: str
     is_online: bool
     first_seen: str
@@ -41,14 +40,14 @@ class PaginatedDevices(BaseModel):
 
 class FingerprintEntry(BaseModel):
     id: int
-    mac_address: Optional[str] = None
-    mdns_hostname: Optional[str] = None
-    dhcp_fingerprint_hash: Optional[str] = None
-    connection_pattern_hash: Optional[str] = None
-    open_ports_hash: Optional[str] = None
-    composite_hash: Optional[str] = None
+    mac_address: str | None = None
+    mdns_hostname: str | None = None
+    dhcp_fingerprint_hash: str | None = None
+    connection_pattern_hash: str | None = None
+    open_ports_hash: str | None = None
+    composite_hash: str | None = None
     signal_count: int
-    confidence: Optional[float] = None
+    confidence: float | None = None
     first_seen: str
     last_seen: str
 
@@ -56,26 +55,26 @@ class FingerprintEntry(BaseModel):
 class DeviceDetail(BaseModel):
     id: int
     ip_address: str
-    mac_address: Optional[str] = None
-    hostname: Optional[str] = None
-    vendor: Optional[str] = None
+    mac_address: str | None = None
+    hostname: str | None = None
+    vendor: str | None = None
     device_type: str
-    model_name: Optional[str] = None
-    area: Optional[str] = None
-    custom_name: Optional[str] = None
-    notes: Optional[str] = None
+    model_name: str | None = None
+    area: str | None = None
+    custom_name: str | None = None
+    notes: str | None = None
     trust_status: str
-    trust_updated_at: Optional[str] = None
+    trust_updated_at: str | None = None
     is_online: bool
     first_seen: str
     last_seen: str
-    latest_fingerprint: Optional[FingerprintEntry] = None
+    latest_fingerprint: FingerprintEntry | None = None
 
 
 class DeviceUpdateRequest(BaseModel):
-    custom_name: Optional[str] = None
-    notes: Optional[str] = None
-    device_type: Optional[str] = None
+    custom_name: str | None = None
+    notes: str | None = None
+    device_type: str | None = None
 
 
 class TrustActionResponse(BaseModel):
@@ -100,7 +99,7 @@ async def _get_device_or_404(db: aiosqlite.Connection, device_id: int) -> aiosql
     return row
 
 
-async def _get_trust(db: aiosqlite.Connection, device_id: int) -> tuple[str, Optional[str]]:
+async def _get_trust(db: aiosqlite.Connection, device_id: int) -> tuple[str, str | None]:
     cursor = await db.execute(
         "SELECT status, updated_at FROM device_trust WHERE device_id = ?", (device_id,)
     )
@@ -112,7 +111,7 @@ async def _get_trust(db: aiosqlite.Connection, device_id: int) -> tuple[str, Opt
 
 async def _get_latest_fingerprint(
     db: aiosqlite.Connection, device_id: int
-) -> Optional[FingerprintEntry]:
+) -> FingerprintEntry | None:
     cursor = await db.execute(
         """SELECT * FROM device_fingerprints
            WHERE device_id = ?
@@ -144,10 +143,10 @@ async def _get_latest_fingerprint(
 async def list_devices(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    trust_status: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
-    online: Optional[bool] = Query(None),
-    search: Optional[str] = Query(None),
+    trust_status: str | None = Query(None),
+    category: str | None = Query(None),
+    online: bool | None = Query(None),
+    search: str | None = Query(None),
     db: aiosqlite.Connection = Depends(get_db),
     _auth: dict = Depends(verify_client_cert),
 ):
@@ -323,7 +322,7 @@ async def verify_device(
     """Request re-verification of device identity."""
     await _get_device_or_404(db, device_id)
     trust_status, _ = await _get_trust(db, device_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     # Update the timestamp to signal re-verification was requested
     await db.execute(
@@ -344,7 +343,7 @@ async def _set_trust(
     db: aiosqlite.Connection, device_id: int, new_status: str
 ) -> TrustActionResponse:
     await _get_device_or_404(db, device_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         """INSERT INTO device_trust (device_id, status, approved_by, updated_at)
            VALUES (?, ?, 'user', ?)
@@ -405,8 +404,8 @@ async def get_fingerprint_history(
 class OpenPortEntry(BaseModel):
     port: int
     protocol: str
-    service_name: Optional[str] = None
-    banner: Optional[str] = None
+    service_name: str | None = None
+    banner: str | None = None
     first_seen: str
     last_seen: str
 

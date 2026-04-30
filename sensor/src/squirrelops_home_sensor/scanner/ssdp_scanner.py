@@ -204,7 +204,7 @@ class SSDPScanner:
                         timeout=min(remaining, 0.5),
                     )
                     responses.append((data.decode("utf-8", errors="replace"), addr[0]))
-                except (asyncio.TimeoutError, OSError):
+                except (TimeoutError, OSError):
                     continue
 
             sock.close()

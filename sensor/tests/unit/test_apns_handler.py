@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from squirrelops_home_sensor.alerts.dispatcher import create_apns_handler
-
 
 # -- Helpers ----------------------------------------------------------------
 

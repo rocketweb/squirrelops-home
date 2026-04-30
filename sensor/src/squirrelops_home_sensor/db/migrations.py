@@ -7,7 +7,7 @@ migrations in order. Version 0 means no schema exists yet.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import aiosqlite
 
@@ -32,7 +32,7 @@ async def _get_current_version(db: aiosqlite.Connection) -> int:
 async def _apply_v1(db: aiosqlite.Connection) -> None:
     """Apply schema version 1: create all initial tables and indexes."""
     await db.executescript(SCHEMA_V1_SQL)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
         (1, now),
@@ -51,7 +51,7 @@ async def _apply_v2(db: aiosqlite.Connection) -> None:
     """Apply schema version 2: add model_name column to devices."""
     if not await _column_exists(db, "devices", "model_name"):
         await db.execute("ALTER TABLE devices ADD COLUMN model_name TEXT")
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
         (2, now),
@@ -63,7 +63,7 @@ async def _apply_v3(db: aiosqlite.Connection) -> None:
     """V3: Add area column to devices table."""
     if not await _column_exists(db, "devices", "area"):
         await db.execute("ALTER TABLE devices ADD COLUMN area TEXT")
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
         (3, now),
@@ -113,7 +113,7 @@ async def _apply_v4(db: aiosqlite.Connection) -> None:
             CREATE INDEX idx_insight_state_key ON security_insight_state(insight_key);
         """)
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
         (4, now),
@@ -128,7 +128,7 @@ async def _apply_v5(db: aiosqlite.Connection) -> None:
     if not await _column_exists(db, "device_open_ports", "banner"):
         await db.execute("ALTER TABLE device_open_ports ADD COLUMN banner TEXT")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
         (5, now),
@@ -191,7 +191,7 @@ async def _apply_v6(db: aiosqlite.Connection) -> None:
             );
         """)
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
         (6, now),
@@ -247,7 +247,7 @@ async def _apply_v7(db: aiosqlite.Connection) -> None:
             dup_count,
         )
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
         (7, now),
@@ -411,7 +411,7 @@ async def _apply_v8(db: aiosqlite.Connection) -> None:
     )
     await db.commit()
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
         (8, now),

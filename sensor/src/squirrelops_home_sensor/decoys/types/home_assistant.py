@@ -14,12 +14,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from clownpeanuts.services.http.emulator import Emulator
-from clownpeanuts.tarpit.throttle import AdaptiveThrottle
-
 from squirrelops_home_sensor.decoys.credentials import GeneratedCredential
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
@@ -87,7 +84,7 @@ class HomeAssistantDecoy(BaseDecoy):
         name: str,
         port: int,
         bind_address: str = "127.0.0.1",
-        planted_credentials: Optional[list[GeneratedCredential]] = None,
+        planted_credentials: list[GeneratedCredential] | None = None,
     ) -> None:
         super().__init__(
             decoy_id=decoy_id,
@@ -97,7 +94,7 @@ class HomeAssistantDecoy(BaseDecoy):
             decoy_type="home_assistant",
         )
         self._planted_credentials = planted_credentials or []
-        self._emulator: Optional[Emulator] = None
+        self._emulator: Emulator | None = None
         self._running = False
 
         # Build credential lookup set
@@ -135,7 +132,7 @@ class HomeAssistantDecoy(BaseDecoy):
         self,
         headers: dict[str, str],
         body: str | None,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Check if a planted credential appears in request headers or body."""
         # Check Authorization header
         auth = headers.get("Authorization", "") or headers.get("authorization", "")
@@ -167,7 +164,7 @@ class HomeAssistantDecoy(BaseDecoy):
             source_port=client_address[1],
             dest_port=self.port,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             request_path=path,
             credential_used=credential_used,
         )

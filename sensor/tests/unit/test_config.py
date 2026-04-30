@@ -2,10 +2,8 @@
 
 import os
 import pathlib
-import tempfile
 from unittest.mock import patch
 
-import pytest
 import yaml
 
 from squirrelops_home_sensor.config import (
@@ -20,7 +18,6 @@ from squirrelops_home_sensor.config import (
     _normalize_flat_keys,
     load_settings,
 )
-
 
 SENSOR_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULTS_PATH = SENSOR_ROOT / "config" / "home_defaults.yaml"

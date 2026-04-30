@@ -14,14 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from clownpeanuts.services.http.emulator import Emulator
-from clownpeanuts.tarpit.throttle import AdaptiveThrottle
-
 from squirrelops_home_sensor.decoys.credentials import GeneratedCredential
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
@@ -70,8 +66,8 @@ class FileShareDecoy(BaseDecoy):
         name: str,
         port: int,
         bind_address: str = "127.0.0.1",
-        planted_credentials: Optional[list[GeneratedCredential]] = None,
-        config: Optional[dict] = None,
+        planted_credentials: list[GeneratedCredential] | None = None,
+        config: dict | None = None,
     ) -> None:
         super().__init__(
             decoy_id=decoy_id,
@@ -82,7 +78,7 @@ class FileShareDecoy(BaseDecoy):
         )
         self._planted_credentials = planted_credentials or []
         self._config = config or {}
-        self._emulator: Optional[Emulator] = None
+        self._emulator: Emulator | None = None
         self._running = False
 
         # Configurable filename (read from decoy config)
@@ -147,7 +143,7 @@ class FileShareDecoy(BaseDecoy):
             },
         ]
 
-    def _decode_basic_auth(self, auth_header: str) -> Optional[str]:
+    def _decode_basic_auth(self, auth_header: str) -> str | None:
         """Decode a Basic Authorization header value.
 
         Returns the decoded 'username:password' string, or None if
@@ -166,7 +162,7 @@ class FileShareDecoy(BaseDecoy):
         self,
         headers: dict[str, str],
         body: str | None,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Check for planted credentials in the request.
 
         Checks both Basic auth (decoded) and Bearer token headers,
@@ -208,7 +204,7 @@ class FileShareDecoy(BaseDecoy):
             source_port=client_address[1],
             dest_port=self.port,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             request_path=path,
             credential_used=credential_used,
         )

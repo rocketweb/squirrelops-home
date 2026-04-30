@@ -1,8 +1,8 @@
 """Alert routes: list, get, incident detail, mark read/actioned, export."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,17 +18,17 @@ router = APIRouter(tags=["alerts"])
 
 class AlertSummary(BaseModel):
     id: int
-    incident_id: Optional[int] = None
+    incident_id: int | None = None
     alert_type: str
     severity: str
     title: str
-    source_ip: Optional[str] = None
-    read_at: Optional[str] = None
-    actioned_at: Optional[str] = None
+    source_ip: str | None = None
+    read_at: str | None = None
+    actioned_at: str | None = None
     created_at: str
-    alert_count: Optional[int] = None  # present when this represents an incident
-    device_count: Optional[int] = None  # grouped alert: number of affected devices
-    issue_key: Optional[str] = None  # grouped alert: grouping key
+    alert_count: int | None = None  # present when this represents an incident
+    device_count: int | None = None  # grouped alert: number of affected devices
+    issue_key: str | None = None  # grouped alert: grouping key
 
 
 class PaginatedAlerts(BaseModel):
@@ -40,42 +40,42 @@ class PaginatedAlerts(BaseModel):
 
 class AlertDetail(BaseModel):
     id: int
-    incident_id: Optional[int] = None
+    incident_id: int | None = None
     alert_type: str
     severity: str
     title: str
     detail: Any  # JSON object
-    source_ip: Optional[str] = None
-    source_mac: Optional[str] = None
-    device_id: Optional[int] = None
-    decoy_id: Optional[int] = None
-    read_at: Optional[str] = None
-    actioned_at: Optional[str] = None
-    action_note: Optional[str] = None
+    source_ip: str | None = None
+    source_mac: str | None = None
+    device_id: int | None = None
+    decoy_id: int | None = None
+    read_at: str | None = None
+    actioned_at: str | None = None
+    action_note: str | None = None
     created_at: str
-    issue_key: Optional[str] = None
-    affected_devices: Optional[list] = None  # grouped alert: list of device dicts
-    device_count: Optional[int] = None
-    risk_description: Optional[str] = None
-    remediation: Optional[str] = None
+    issue_key: str | None = None
+    affected_devices: list | None = None  # grouped alert: list of device dicts
+    device_count: int | None = None
+    risk_description: str | None = None
+    remediation: str | None = None
 
 
 class IncidentDetail(BaseModel):
     id: int
     source_ip: str
-    source_mac: Optional[str] = None
+    source_mac: str | None = None
     status: str
     severity: str
     alert_count: int
     first_alert_at: str
     last_alert_at: str
-    closed_at: Optional[str] = None
-    summary: Optional[str] = None
+    closed_at: str | None = None
+    summary: str | None = None
     alerts: list[AlertDetail]
 
 
 class ActionRequest(BaseModel):
-    note: Optional[str] = None
+    note: str | None = None
 
 
 class AlertReadResponse(BaseModel):
@@ -151,11 +151,11 @@ def _parse_alert_row(row: aiosqlite.Row) -> AlertDetail:
 async def list_alerts(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    severity: Optional[str] = Query(None),
-    alert_type: Optional[str] = Query(None),
-    unread: Optional[bool] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
+    severity: str | None = Query(None),
+    alert_type: str | None = Query(None),
+    unread: bool | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     db: aiosqlite.Connection = Depends(get_db),
     _auth: dict = Depends(verify_client_cert),
 ):
@@ -262,8 +262,8 @@ async def list_alerts(
 async def export_alerts(
     limit: int = Query(10000, ge=1, le=50000),
     offset: int = Query(0, ge=0),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
     db: aiosqlite.Connection = Depends(get_db),
     _auth: dict = Depends(verify_client_cert),
 ):
@@ -326,7 +326,7 @@ async def export_alerts(
     return ExportResponse(
         alerts=alerts,
         incidents=incidents,
-        exported_at=datetime.now(timezone.utc).isoformat(),
+        exported_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -356,7 +356,7 @@ async def mark_alert_read(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     if row["read_at"] is None:
         await db.execute(
             "UPDATE home_alerts SET read_at = ? WHERE id = ?", (now, alert_id)
@@ -381,7 +381,7 @@ async def mark_alert_actioned(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     await db.execute(
         "UPDATE home_alerts SET actioned_at = ?, action_note = ? WHERE id = ?",
@@ -443,7 +443,7 @@ async def mark_incident_read(
     if not await cursor.fetchone():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     cursor = await db.execute(
         "UPDATE home_alerts SET read_at = ? WHERE incident_id = ? AND read_at IS NULL",
         (now, incident_id),

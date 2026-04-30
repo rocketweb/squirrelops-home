@@ -1,9 +1,5 @@
 """Integration tests for decoy routes: list, get, restart, update config, connections."""
 import asyncio
-import json
-
-import pytest
-from fastapi.testclient import TestClient
 
 from tests.integration.conftest import seed_decoys
 

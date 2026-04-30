@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Callable, Optional
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
@@ -106,7 +106,6 @@ class _MimicEndpoint:
 
             request_text = request_line.decode("utf-8", errors="replace").strip()
             parts = request_text.split(" ")
-            method = parts[0] if len(parts) >= 1 else "GET"
             path = parts[1] if len(parts) >= 2 else "/"
 
             # Read headers
@@ -151,14 +150,14 @@ class _MimicEndpoint:
                     source_port=source_port,
                     dest_port=self.port,
                     protocol="tcp",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     request_path=path,
                     credential_used=credential_used,
                 )
                 self.connection_callback(event)
                 notified = True
 
-        except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
+        except (TimeoutError, ConnectionResetError, BrokenPipeError):
             # TCP connect without completing HTTP exchange (e.g. nmap scan).
             # Still record the connection attempt.
             if not notified and self.connection_callback:
@@ -167,7 +166,7 @@ class _MimicEndpoint:
                     source_port=source_port,
                     dest_port=self.port,
                     protocol="tcp",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                 )
                 self.connection_callback(event)
         except Exception:
@@ -200,7 +199,7 @@ class _MimicEndpoint:
             try:
                 data = await asyncio.wait_for(reader.read(512), timeout=5.0)
                 body_text = data.decode("utf-8", errors="replace") if data else ""
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 body_text = ""
 
             credential_used = self._check_credentials({}, body_text)
@@ -211,7 +210,7 @@ class _MimicEndpoint:
                     source_port=source_port,
                     dest_port=self.port,
                     protocol="tcp",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                     credential_used=credential_used,
                 )
                 self.connection_callback(event)
@@ -225,7 +224,7 @@ class _MimicEndpoint:
                     source_port=source_port,
                     dest_port=self.port,
                     protocol="tcp",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=datetime.now(UTC),
                 )
                 self.connection_callback(event)
         except Exception:
@@ -310,8 +309,8 @@ class MimicDecoy(BaseDecoy):
         bind_address: str,
         port_configs: list[dict],
         server_header: str | None = None,
-        planted_credentials: Optional[list] = None,
-        port_remaps: Optional[dict[int, int]] = None,
+        planted_credentials: list | None = None,
+        port_remaps: dict[int, int] | None = None,
     ) -> None:
         # Use the first port as the primary port for the base class
         primary_port = port_configs[0]["port"] if port_configs else 0

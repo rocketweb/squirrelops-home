@@ -16,8 +16,8 @@ import asyncio
 import enum
 import json as json_mod
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Protocol, runtime_checkable
+from datetime import UTC, datetime, timedelta
+from typing import Protocol, runtime_checkable
 
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
@@ -74,8 +74,8 @@ class DecoyRecord:
         self.decoy = decoy
         self.health = DecoyHealth.ACTIVE
         self.failure_count: int = 0
-        self.last_failure_at: Optional[datetime] = None
-        self.failure_window_start: Optional[datetime] = None
+        self.last_failure_at: datetime | None = None
+        self.failure_window_start: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ class DBProtocol(Protocol):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _parse_config(raw: Optional[str]) -> dict:
+def _parse_config(raw: str | None) -> dict:
     """Parse a JSON config string from the DB, returning an empty dict on failure."""
     if not raw:
         return {}
@@ -141,7 +141,7 @@ def _create_decoy_instance(
     port: int,
     bind_address: str,
     credentials: list,
-    config: Optional[dict] = None,
+    config: dict | None = None,
 ) -> BaseDecoy:
     """Factory for creating BaseDecoy subclass instances."""
     from squirrelops_home_sensor.decoys.types.dev_server import DevServerDecoy
@@ -279,7 +279,7 @@ class DecoyOrchestrator:
                 logger.exception(
                     "Failed to resume decoy '%s' (id=%d)", row["name"], row["id"],
                 )
-                now = datetime.now(timezone.utc).isoformat()
+                now = datetime.now(UTC).isoformat()
                 await self._db.execute(
                     "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
                     (now, row["id"]),
@@ -355,7 +355,7 @@ class DecoyOrchestrator:
         Returns (decoy_instance, created_at_iso_string).
         """
         name = _DECOY_NAMES.get(decoy_type, decoy_type.replace("_", " ").title())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         creds = _generate_credentials(
             decoy_type,
             password_filename=self._credential_filename,
@@ -456,7 +456,7 @@ class DecoyOrchestrator:
             decoy.port,
         )
 
-    def get_decoy(self, decoy_id: int) -> Optional[DecoyRecord]:
+    def get_decoy(self, decoy_id: int) -> DecoyRecord | None:
         """Return the DecoyRecord for a given decoy ID, or None."""
         return self._records.get(decoy_id)
 
@@ -482,7 +482,7 @@ class DecoyOrchestrator:
             restart fails -> increment failure_count
             3 failures within 5 min -> DEGRADED
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for record in list(self._records.values()):
             if record.health in (DecoyHealth.DEGRADED, DecoyHealth.STOPPED):
@@ -554,7 +554,7 @@ class DecoyOrchestrator:
         Called periodically (e.g. every 5 minutes). If a degraded decoy's
         last failure is older than 30 minutes, attempts a restart.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for record in list(self._records.values()):
             if record.health != DecoyHealth.DEGRADED:

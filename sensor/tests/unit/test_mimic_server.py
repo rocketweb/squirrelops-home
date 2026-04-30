@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
 
 from squirrelops_home_sensor.decoys.types.mimic import (
+    _STATUS_TEXTS,
     MimicDecoy,
     _MimicEndpoint,
-    _STATUS_TEXTS,
 )
 
 

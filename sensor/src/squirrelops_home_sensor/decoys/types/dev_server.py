@@ -15,12 +15,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from clownpeanuts.services.http.emulator import Emulator
-from clownpeanuts.tarpit.throttle import AdaptiveThrottle
-
 from squirrelops_home_sensor.decoys.credentials import GeneratedCredential
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
@@ -76,7 +73,7 @@ class DevServerDecoy(BaseDecoy):
         name: str,
         port: int,
         bind_address: str = "127.0.0.1",
-        planted_credentials: Optional[list[GeneratedCredential]] = None,
+        planted_credentials: list[GeneratedCredential] | None = None,
     ) -> None:
         super().__init__(
             decoy_id=decoy_id,
@@ -86,7 +83,7 @@ class DevServerDecoy(BaseDecoy):
             decoy_type="dev_server",
         )
         self._planted_credentials = planted_credentials or []
-        self._emulator: Optional[Emulator] = None
+        self._emulator: Emulator | None = None
         self._running = False
 
         # Build the credential lookup set for fast detection
@@ -143,7 +140,7 @@ class DevServerDecoy(BaseDecoy):
         self,
         headers: dict[str, str],
         body: str | None,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Check if any planted credential appears in the request.
 
         Scans Authorization headers and request body for planted credential
@@ -183,7 +180,7 @@ class DevServerDecoy(BaseDecoy):
             source_port=client_address[1],
             dest_port=self.port,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             request_path=path,
             credential_used=credential_used,
         )

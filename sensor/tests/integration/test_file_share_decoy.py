@@ -6,17 +6,15 @@ SSH key download, access logging, and basic auth credential detection.
 
 import asyncio
 import base64
-from datetime import datetime, timezone
 
-import pytest
 import httpx
+import pytest
 
-from squirrelops_home_sensor.decoys.types.file_share import FileShareDecoy
-from squirrelops_home_sensor.decoys.types.base import DecoyConnectionEvent
 from squirrelops_home_sensor.decoys.credentials import (
     CredentialGenerator,
-    GeneratedCredential,
 )
+from squirrelops_home_sensor.decoys.types.base import DecoyConnectionEvent
+from squirrelops_home_sensor.decoys.types.file_share import FileShareDecoy
 
 
 @pytest.fixture

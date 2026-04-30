@@ -8,14 +8,11 @@ Tests cover:
 """
 from __future__ import annotations
 
-import pytest
-
 from squirrelops_home_sensor.scanner.ssdp_scanner import (
     SSDPResult,
     parse_ssdp_response,
     parse_upnp_xml,
 )
-
 
 # ---------------------------------------------------------------------------
 # SSDP response parsing

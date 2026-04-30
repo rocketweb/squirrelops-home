@@ -200,7 +200,7 @@ class _ScanLoopWrapper:
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=10)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+            except (TimeoutError, asyncio.CancelledError):
                 pass
 
 
@@ -596,7 +596,10 @@ async def run_sensor(
     app = create_app(config=config, ca_key=ca_key, ca_cert=ca_cert)
 
     # 7b. Wire up dependency overrides for production
-    from squirrelops_home_sensor.api.deps import get_db as _get_db_dep, get_config as _get_config_dep, get_event_bus as _get_event_bus_dep, get_privileged_ops as _get_priv_ops_dep
+    from squirrelops_home_sensor.api.deps import get_config as _get_config_dep
+    from squirrelops_home_sensor.api.deps import get_db as _get_db_dep
+    from squirrelops_home_sensor.api.deps import get_event_bus as _get_event_bus_dep
+    from squirrelops_home_sensor.api.deps import get_privileged_ops as _get_priv_ops_dep
 
     async def _prod_get_db():
         yield db
@@ -616,7 +619,8 @@ async def run_sensor(
     app.dependency_overrides[_get_priv_ops_dep] = _prod_get_priv_ops
 
     # 7b2. Wire scouts API dependencies
-    from squirrelops_home_sensor.api.routes_scouts import get_scout_scheduler as _get_sched_dep, get_mimic_orchestrator as _get_mimic_dep
+    from squirrelops_home_sensor.api.routes_scouts import get_mimic_orchestrator as _get_mimic_dep
+    from squirrelops_home_sensor.api.routes_scouts import get_scout_scheduler as _get_sched_dep
 
     async def _prod_get_scout_scheduler():
         return scout_scheduler
@@ -628,7 +632,9 @@ async def run_sensor(
     app.dependency_overrides[_get_mimic_dep] = _prod_get_mimic_orchestrator
 
     # 7b3. Wire decoy orchestrator into decoy routes
-    from squirrelops_home_sensor.api.routes_decoys import get_decoy_orchestrator as _get_decoy_orch_dep
+    from squirrelops_home_sensor.api.routes_decoys import (
+        get_decoy_orchestrator as _get_decoy_orch_dep,
+    )
 
     async def _prod_get_decoy_orchestrator():
         return orchestrator.inner

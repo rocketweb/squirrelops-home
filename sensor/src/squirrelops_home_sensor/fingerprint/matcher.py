@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 
 from squirrelops_home_sensor.fingerprint.composite import CompositeFingerprint
 
-
 # ---------------------------------------------------------------------------
 # Default configuration
 # ---------------------------------------------------------------------------

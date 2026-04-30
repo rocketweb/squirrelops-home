@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from squirrelops_home_sensor.models import (
     Alert,
@@ -30,7 +27,6 @@ from squirrelops_home_sensor.models import (
     SystemStatus,
     TrustStatus,
 )
-
 
 # ---------------------------------------------------------------------------
 # Enum tests
@@ -106,7 +102,7 @@ class TestDeviceModel:
     """Test Device model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         device = Device(
             id=1,
             ip_address="192.168.1.100",
@@ -122,7 +118,7 @@ class TestDeviceModel:
         assert restored.mac_address == "AA:BB:CC:DD:EE:FF"
 
     def test_optional_fields_default_none(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         device = Device(
             id=1,
             ip_address="10.0.0.1",
@@ -138,7 +134,7 @@ class TestDeviceFingerprintModel:
     """Test DeviceFingerprint model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         fp = DeviceFingerprint(
             id=1,
             device_id=10,
@@ -155,7 +151,7 @@ class TestDeviceFingerprintModel:
         assert restored.confidence == 0.85
 
     def test_optional_signal_fields(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         fp = DeviceFingerprint(
             id=1,
             device_id=10,
@@ -173,7 +169,7 @@ class TestDeviceTrustModel:
     """Test DeviceTrust model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         trust = DeviceTrust(
             device_id=1,
             status=TrustStatus.APPROVED,
@@ -186,7 +182,7 @@ class TestDeviceTrustModel:
         assert restored.approved_by == "user"
 
     def test_status_validation(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         trust = DeviceTrust(
             device_id=1,
             status="approved",
@@ -199,7 +195,7 @@ class TestAlertModel:
     """Test Alert model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         alert = Alert(
             id=1,
             alert_type=AlertType.DECOY_TRIP,
@@ -215,7 +211,7 @@ class TestAlertModel:
         assert restored.alert_type == AlertType.DECOY_TRIP
 
     def test_optional_fields(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         alert = Alert(
             id=1,
             alert_type=AlertType.NEW_DEVICE,
@@ -237,7 +233,7 @@ class TestIncidentModel:
     """Test Incident model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         incident = Incident(
             id=1,
             source_ip="192.168.1.50",
@@ -257,7 +253,7 @@ class TestDecoyModel:
     """Test Decoy model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         decoy = Decoy(
             id=1,
             name="Dev Server Trap",
@@ -277,7 +273,7 @@ class TestDecoyModel:
         assert restored.port == 3000
 
     def test_optional_config_field(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         decoy = Decoy(
             id=1,
             name="Test",
@@ -298,7 +294,7 @@ class TestDecoyConnectionModel:
     """Test DecoyConnection model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         conn = DecoyConnection(
             id=1,
             decoy_id=1,
@@ -315,7 +311,7 @@ class TestPlantedCredentialModel:
     """Test PlantedCredential model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cred = PlantedCredential(
             id=1,
             credential_type=CredentialType.AWS_KEY,
@@ -329,7 +325,7 @@ class TestPlantedCredentialModel:
         assert restored.credential_type == CredentialType.AWS_KEY
 
     def test_optional_canary_hostname(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cred = PlantedCredential(
             id=1,
             credential_type=CredentialType.DB_CONNECTION,
@@ -346,7 +342,7 @@ class TestCanaryObservationModel:
     """Test CanaryObservation model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         obs = CanaryObservation(
             id=1,
             credential_id=5,
@@ -363,7 +359,7 @@ class TestPairingInfoModel:
     """Test PairingInfo model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         pairing = PairingInfo(
             id=1,
             client_name="Matt's MacBook Pro",
@@ -381,7 +377,7 @@ class TestEventModel:
     """Test Event model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         event = Event(
             seq=42,
             event_type="device.discovered",
@@ -395,7 +391,7 @@ class TestEventModel:
         assert restored.payload["device_id"] == 1
 
     def test_optional_source_id(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         event = Event(
             seq=1,
             event_type="system.scan_complete",
@@ -409,7 +405,7 @@ class TestSystemStatusModel:
     """Test SystemStatus model serialization."""
 
     def test_roundtrip(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         status = SystemStatus(
             version="0.1.0",
             profile=ResourceProfile.STANDARD,

@@ -5,19 +5,15 @@ planted HA token detection.
 """
 
 import asyncio
-import json
-from datetime import datetime, timezone
-from unittest.mock import MagicMock
 
-import pytest
 import httpx
+import pytest
 
-from squirrelops_home_sensor.decoys.types.home_assistant import HomeAssistantDecoy
-from squirrelops_home_sensor.decoys.types.base import DecoyConnectionEvent
 from squirrelops_home_sensor.decoys.credentials import (
     CredentialGenerator,
-    GeneratedCredential,
 )
+from squirrelops_home_sensor.decoys.types.base import DecoyConnectionEvent
+from squirrelops_home_sensor.decoys.types.home_assistant import HomeAssistantDecoy
 
 
 @pytest.fixture

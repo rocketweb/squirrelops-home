@@ -7,7 +7,6 @@ from typing import Any
 
 import yaml
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
 
 from squirrelops_home_sensor.api.deps import get_config, verify_client_cert
 from squirrelops_home_sensor.config import _FLAT_KEY_MAP

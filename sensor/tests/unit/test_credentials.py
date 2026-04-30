@@ -5,8 +5,6 @@ and DNS canary hostname generation.
 """
 
 import re
-import secrets
-from unittest.mock import patch
 
 import pytest
 
@@ -14,7 +12,6 @@ from squirrelops_home_sensor.decoys.credentials import (
     CredentialGenerator,
     GeneratedCredential,
 )
-
 
 # ---------------------------------------------------------------------------
 # GeneratedCredential dataclass

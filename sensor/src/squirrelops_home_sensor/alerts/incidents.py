@@ -14,13 +14,12 @@ closure create a new incident.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 import aiosqlite
 
 from squirrelops_home_sensor.alerts.types import Severity
-
 
 # -- Protocols for dependency injection ------------------------------
 
@@ -94,14 +93,14 @@ class IncidentGrouper:
     async def close_stale_incidents(self) -> int:
         """Close active incidents whose last alert is older than the
         close window. Returns the number of incidents closed."""
-        cutoff = datetime.now(timezone.utc) - self._close_window
+        cutoff = datetime.now(UTC) - self._close_window
         cutoff_str = _format_iso(cutoff)
 
         cursor = await self._db.execute(
             """UPDATE incidents
                SET status = 'closed', closed_at = ?
                WHERE status = 'active' AND last_alert_at < ?""",
-            (_format_iso(datetime.now(timezone.utc)), cutoff_str),
+            (_format_iso(datetime.now(UTC)), cutoff_str),
         )
         await self._db.commit()
         return cursor.rowcount

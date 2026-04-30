@@ -8,10 +8,9 @@ import pathlib
 import pytest
 
 from squirrelops_home_sensor.devices.signatures import (
-    SignatureDB,
     DeviceClassification,
+    SignatureDB,
 )
-
 
 SENSOR_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SIGNATURES_PATH = SENSOR_ROOT / "signatures" / "device_signatures.json"
@@ -225,7 +224,7 @@ class TestTwoLayerOUILookup:
 
     def test_bulk_with_known_type_gets_higher_confidence(self, db: SignatureDB) -> None:
         # Find a prefix in OUI_DB whose manufacturer is in MANUFACTURER_TYPES
-        from squirrelops_home_sensor.devices.oui_db import OUI_DB, MANUFACTURER_TYPES
+        from squirrelops_home_sensor.devices.oui_db import MANUFACTURER_TYPES, OUI_DB
         test_prefix = None
         for prefix, mfr in OUI_DB.items():
             if mfr in MANUFACTURER_TYPES and prefix not in db._oui_prefixes:
@@ -238,7 +237,7 @@ class TestTwoLayerOUILookup:
         assert result.device_type != "unknown"
 
     def test_bulk_with_unknown_type_gets_lower_confidence(self, db: SignatureDB) -> None:
-        from squirrelops_home_sensor.devices.oui_db import OUI_DB, MANUFACTURER_TYPES
+        from squirrelops_home_sensor.devices.oui_db import MANUFACTURER_TYPES, OUI_DB
         test_prefix = None
         for prefix, mfr in OUI_DB.items():
             if mfr not in MANUFACTURER_TYPES and prefix not in db._oui_prefixes:

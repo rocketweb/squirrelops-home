@@ -16,10 +16,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
-
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +70,7 @@ class AlertRetentionService:
         Order of operations matters -- alerts are purged before incidents
         to respect foreign key relationships.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self._retention_days)
+        cutoff = datetime.now(UTC) - timedelta(days=self._retention_days)
         cutoff_str = _format_iso(cutoff)
 
         result = PurgeResult()

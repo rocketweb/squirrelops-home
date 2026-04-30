@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -19,8 +18,8 @@ router = APIRouter(prefix="/scouts", tags=["scouts"])
 class ScoutStatusResponse(BaseModel):
     enabled: bool
     is_running: bool
-    last_scout_at: Optional[str] = None
-    last_scout_duration_ms: Optional[int] = None
+    last_scout_at: str | None = None
+    last_scout_duration_ms: int | None = None
     total_profiles: int
     interval_minutes: int
     active_mimics: int
@@ -33,20 +32,20 @@ class ServiceProfileSummary(BaseModel):
     ip_address: str
     port: int
     protocol: str
-    service_name: Optional[str] = None
-    http_status: Optional[int] = None
-    http_server_header: Optional[str] = None
-    tls_cn: Optional[str] = None
-    protocol_version: Optional[str] = None
+    service_name: str | None = None
+    http_status: int | None = None
+    http_server_header: str | None = None
+    tls_cn: str | None = None
+    protocol_version: str | None = None
     scouted_at: str
 
 
 class ServiceProfileDetail(ServiceProfileSummary):
-    http_headers: Optional[dict] = None
-    http_body_snippet: Optional[str] = None
-    favicon_hash: Optional[str] = None
-    tls_issuer: Optional[str] = None
-    tls_not_after: Optional[str] = None
+    http_headers: dict | None = None
+    http_body_snippet: str | None = None
+    favicon_hash: str | None = None
+    tls_issuer: str | None = None
+    tls_not_after: str | None = None
 
 
 class MimicDecoySummary(BaseModel):
@@ -55,11 +54,11 @@ class MimicDecoySummary(BaseModel):
     bind_address: str
     port: int
     status: str
-    source_device_id: Optional[int] = None
-    device_category: Optional[str] = None
+    source_device_id: int | None = None
+    device_category: str | None = None
     connection_count: int = 0
     created_at: str
-    mdns_hostname: Optional[str] = None
+    mdns_hostname: str | None = None
 
 
 # ---------- Dependency stubs ----------

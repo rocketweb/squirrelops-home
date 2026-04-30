@@ -10,7 +10,7 @@ Idempotent: only one reminder per device. Safe to run multiple times.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
@@ -46,9 +46,9 @@ class DeviceReviewService:
 
         Returns the number of new reminders created.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=self._threshold_hours)
+        cutoff = datetime.now(UTC) - timedelta(hours=self._threshold_hours)
         cutoff_str = _format_iso(cutoff)
-        now_str = _format_iso(datetime.now(timezone.utc))
+        now_str = _format_iso(datetime.now(UTC))
 
         # Find devices that:
         # 1. Were first seen before the cutoff

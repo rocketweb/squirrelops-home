@@ -1,9 +1,5 @@
 """Integration tests for alert routes: list, get, incident detail, mark read/actioned, export."""
 import asyncio
-import json
-
-import pytest
-from fastapi.testclient import TestClient
 
 from tests.integration.conftest import seed_alerts, seed_grouped_alerts, seed_incidents
 
@@ -82,7 +78,6 @@ class TestListAlerts:
         data = response.json()
         # Should see the incident as one item + the standalone alert
         incident_items = [i for i in data["items"] if i.get("incident_id") is not None]
-        standalone_items = [i for i in data["items"] if i.get("incident_id") is None]
         # The incident's child alerts should be collapsed into one incident entry
         assert len(incident_items) <= 1 or any(
             i.get("alert_count", 0) > 1 for i in data["items"]

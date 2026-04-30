@@ -8,11 +8,10 @@ components.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import aiosqlite
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -274,7 +273,7 @@ async def get_active_incident_for_source(
     within ``window_minutes`` of now, or None if no match.
     """
     cutoff = (
-        datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+        datetime.now(UTC) - timedelta(minutes=window_minutes)
     ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return await _fetchone(
         db,
@@ -764,7 +763,7 @@ async def purge_old_records(
     Preserves alerts linked to active (unclosed) incidents.
     """
     cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=days)
+        datetime.now(UTC) - timedelta(days=days)
     ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     counts: dict[str, int] = {}

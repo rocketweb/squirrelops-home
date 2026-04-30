@@ -151,11 +151,7 @@ class PortScanner:
                 writer.close()
                 await writer.wait_closed()
                 return (ip, port, True)
-            except (
-                asyncio.TimeoutError,
-                ConnectionRefusedError,
-                OSError,
-            ):
+            except (TimeoutError, ConnectionRefusedError, OSError):
                 return (ip, port, False)
 
     async def _check_port_with_banner(
@@ -171,7 +167,7 @@ class PortScanner:
                     asyncio.open_connection(ip, port),
                     timeout=self._timeout,
                 )
-            except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+            except (TimeoutError, ConnectionRefusedError, OSError):
                 return (ip, None)
 
             # Port is open — try banner grab
@@ -218,7 +214,7 @@ class PortScanner:
             banner = _sanitize_banner(raw)
             return banner if banner else None
 
-        except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError, OSError):
+        except (TimeoutError, ConnectionResetError, BrokenPipeError, OSError):
             return None
 
 

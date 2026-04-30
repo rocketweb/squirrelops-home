@@ -6,9 +6,7 @@ home_alerts rows, publish alert.new events, and invoke incident grouping.
 
 from __future__ import annotations
 
-import asyncio
 import json
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -18,7 +16,6 @@ import pytest_asyncio
 
 from squirrelops_home_sensor.alerts.decoy_handler import DecoyAlertHandler
 from squirrelops_home_sensor.alerts.types import AlertType, Severity
-
 
 # -- Helpers ---------------------------------------------------------------
 

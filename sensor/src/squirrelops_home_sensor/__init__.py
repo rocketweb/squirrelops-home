@@ -1,6 +1,7 @@
 """SquirrelOps Home Sensor — network security with active deception."""
 
-from importlib.metadata import version as _pkg_version, PackageNotFoundError as _PNF
+from importlib.metadata import PackageNotFoundError as _PNF
+from importlib.metadata import version as _pkg_version
 from pathlib import Path as _Path
 
 

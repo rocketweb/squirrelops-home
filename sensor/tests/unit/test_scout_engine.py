@@ -1,8 +1,6 @@
 """Tests for the scout engine — deep service fingerprinting."""
 from __future__ import annotations
 
-import asyncio
-import json
 from unittest.mock import AsyncMock, patch
 
 import aiosqlite
@@ -11,9 +9,6 @@ import pytest
 from squirrelops_home_sensor.scouts.engine import (
     ScoutEngine,
     ServiceProfile,
-    _HTTP_PORTS,
-    _PROTOCOL_PORTS,
-    _TLS_PORTS,
 )
 
 _SCHEMA = """

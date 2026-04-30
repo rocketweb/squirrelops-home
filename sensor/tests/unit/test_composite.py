@@ -12,7 +12,6 @@ from squirrelops_home_sensor.fingerprint.composite import (
     compute_fingerprint,
 )
 
-
 # ---------------------------------------------------------------------------
 # CompositeFingerprint dataclass tests
 # ---------------------------------------------------------------------------

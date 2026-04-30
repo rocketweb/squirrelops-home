@@ -6,20 +6,16 @@ and resource profile limit enforcement.
 """
 
 import asyncio
-import time
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 
 from squirrelops_home_sensor.decoys.orchestrator import (
-    DecoyOrchestrator,
     DecoyHealth,
-    DecoyRecord,
+    DecoyOrchestrator,
 )
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
-from squirrelops_home_sensor.decoys.credentials import CredentialGenerator
-
 
 # ---------------------------------------------------------------------------
 # Helpers: fake decoy for testing
@@ -369,7 +365,7 @@ class TestConnectionHandler:
             source_port=54321,
             dest_port=9999,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             request_path="/api/health",
         )
         decoy._notify_connection(event)
@@ -393,7 +389,7 @@ class TestConnectionHandler:
             source_port=54321,
             dest_port=9999,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             request_path="/.env",
             credential_used="AKIA1234567890ABCDEF",
         )
@@ -418,7 +414,7 @@ class TestConnectionHandler:
             source_port=12345,
             dest_port=9999,
             protocol="tcp",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             request_path="/",
         )
         decoy._notify_connection(event)
@@ -475,7 +471,7 @@ class TestDegradationRecovery:
 
         # Fix the decoy and pretend 30 minutes passed
         decoy.fail_on_start = False
-        record.last_failure_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        record.last_failure_at = datetime(2020, 1, 1, tzinfo=UTC)
 
         await orchestrator.check_degraded()
 
@@ -494,7 +490,7 @@ class TestDegradationRecovery:
             await orchestrator.check_health()
 
         record = orchestrator.get_decoy(1)
-        record.last_failure_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        record.last_failure_at = datetime(2020, 1, 1, tzinfo=UTC)
 
         await orchestrator.check_degraded()
 

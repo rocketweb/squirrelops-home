@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import aiosqlite
 import pytest
@@ -29,14 +28,12 @@ from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.events.log import EventLog
 from squirrelops_home_sensor.events.types import EventType
 from squirrelops_home_sensor.privileged.helper import (
-    LinuxPrivilegedOps,
     PrivilegedOperations,
 )
 from squirrelops_home_sensor.scanner.loop import ScanLoop
 from squirrelops_home_sensor.scanner.mdns_browser import MDNSBrowser, MDNSResult
 from squirrelops_home_sensor.scanner.port_scanner import PortResult, PortScanner
 from squirrelops_home_sensor.scanner.ssdp_scanner import SSDPResult, SSDPScanner
-
 
 SENSOR_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SIGNATURES_PATH = SENSOR_ROOT / "signatures" / "device_signatures.json"

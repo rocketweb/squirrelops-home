@@ -2,16 +2,15 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Optional
 
 import aiosqlite
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 
 from squirrelops_home_sensor import __version__
-from squirrelops_home_sensor.api.deps import get_db, get_config, verify_client_cert
+from squirrelops_home_sensor.api.deps import get_config, get_db, verify_client_cert
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -204,9 +203,9 @@ async def get_learning(
 
     started_at = datetime.fromisoformat(started_at_str)
     if started_at.tzinfo is None:
-        started_at = started_at.replace(tzinfo=timezone.utc)
+        started_at = started_at.replace(tzinfo=UTC)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     elapsed = (now - started_at).total_seconds() / 3600.0
 
     if elapsed >= duration_hours:
@@ -243,25 +242,24 @@ async def check_updates(
 
     try:
         import aiohttp
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                manifest_url,
-                params={"current_version": current, "platform": "sensor"},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    return UpdateCheckResponse(
-                        current_version=current,
-                        message="Update check failed.",
-                    )
-                data = await resp.json()
-                latest = data.get("latest_version", current)
+        async with aiohttp.ClientSession() as session, session.get(
+            manifest_url,
+            params={"current_version": current, "platform": "sensor"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status != 200:
                 return UpdateCheckResponse(
                     current_version=current,
-                    latest_version=latest,
-                    update_available=latest != current,
-                    message="Update available!" if latest != current else "Up to date.",
+                    message="Update check failed.",
                 )
+            data = await resp.json()
+            latest = data.get("latest_version", current)
+            return UpdateCheckResponse(
+                current_version=current,
+                latest_version=latest,
+                update_available=latest != current,
+                message="Update available!" if latest != current else "Up to date.",
+            )
     except Exception:
         return UpdateCheckResponse(
             current_version=current,

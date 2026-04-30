@@ -13,14 +13,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import aiosqlite
 
 from squirrelops_home_sensor.alerts.types import (
     AlertType,
-    Severity,
     severity_for_alert_type,
 )
 
@@ -121,7 +120,7 @@ class DecoyAlertHandler:
         source_ip = payload.get("source_ip", "unknown")
         dest_port = payload.get("dest_port", "?")
         decoy_id = payload.get("decoy_id")
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
         # Look up device to enrich with MAC, hostname, vendor
         device = await self._lookup_device(source_ip)

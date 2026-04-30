@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import aiosqlite
 import pytest
 
-
+from squirrelops_home_sensor.db.migrations import apply_migrations
 from squirrelops_home_sensor.db.schema import (
     SCHEMA_VERSION,
     get_all_table_names,
 )
-from squirrelops_home_sensor.db.migrations import apply_migrations
-
 
 # ---------------------------------------------------------------------------
 # Helpers

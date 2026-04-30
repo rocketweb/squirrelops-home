@@ -1,15 +1,12 @@
 """Integration tests for FastAPI app factory, DI, and auth middleware."""
 import asyncio
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from squirrelops_home_sensor import __version__
+from squirrelops_home_sensor.api.deps import get_config, get_db, get_event_bus, verify_client_cert
 from squirrelops_home_sensor.app import create_app
-from squirrelops_home_sensor.api.deps import get_db, get_event_bus, get_config, verify_client_cert
 
 
 class TestAppFactory:
@@ -77,6 +74,7 @@ class TestAuthMiddleware:
         """Without auth override, protected routes should return 403."""
         app = create_app(sensor_config)
         import aiosqlite
+
         from squirrelops_home_sensor.db.schema import create_all_tables
 
         _db = None
@@ -94,8 +92,8 @@ class TestAuthMiddleware:
             yield _db
 
         async def override_event_bus():
-            from squirrelops_home_sensor.events.log import EventLog
             from squirrelops_home_sensor.events.bus import EventBus
+            from squirrelops_home_sensor.events.log import EventLog
             return EventBus(EventLog(_db))
 
         async def override_config():
@@ -117,6 +115,7 @@ class TestAuthMiddleware:
         app = create_app(sensor_config)
 
         import aiosqlite
+
         from squirrelops_home_sensor.db.schema import create_all_tables
 
         _db = None
@@ -134,8 +133,8 @@ class TestAuthMiddleware:
             yield _db
 
         async def override_event_bus():
-            from squirrelops_home_sensor.events.log import EventLog
             from squirrelops_home_sensor.events.bus import EventBus
+            from squirrelops_home_sensor.events.log import EventLog
             return EventBus(EventLog(_db))
 
         async def override_config():

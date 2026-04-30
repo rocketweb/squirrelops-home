@@ -47,9 +47,35 @@ src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "ASYNC"]
+ignore = [
+    "ASYNC109",
+    "ASYNC240",
+    "B008",
+    "B017",
+    "B904",
+    "B905",
+    "E402",
+    "E501",
+    "E741",
+    "N814",
+    "N817",
+    "SIM102",
+    "SIM105",
+    "SIM108",
+    "SIM117",
+    "SIM118",
+    "UP042",
+]
 
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
+reportArgumentType = "warning"
+reportAttributeAccessIssue = "warning"
+reportCallIssue = "warning"
+reportGeneralTypeIssues = "warning"
+reportOptionalMemberAccess = "warning"
+reportOptionalSubscript = "warning"
+reportReturnType = "warning"

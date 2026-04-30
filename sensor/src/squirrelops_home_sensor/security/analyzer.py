@@ -12,12 +12,12 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
 
-from squirrelops_home_sensor.alerts.types import AlertType, Severity
+from squirrelops_home_sensor.alerts.types import AlertType
 from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.security.port_risks import (
     PortRisk,
@@ -191,7 +191,7 @@ class SecurityInsightAnalyzer:
         affected: list[dict],
     ) -> int:
         """Create a new grouped alert and publish alert.new event."""
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         n = len(affected)
         title = f"{finding.service_name} open on {n} device{'s' if n > 1 else ''}"
 
@@ -350,7 +350,7 @@ class SecurityInsightAnalyzer:
         self, device_id: int, insight_key: str, alert_id: int
     ) -> None:
         """Insert or update insight_state for a device+port."""
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         cursor = await self._db.execute(
             "SELECT id, resolved_at FROM security_insight_state "
             "WHERE device_id = ? AND insight_key = ?",
@@ -378,7 +378,7 @@ class SecurityInsightAnalyzer:
         self, active_per_device: dict[int, set[str]]
     ) -> None:
         """Resolve insight_state entries for ports no longer open."""
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         cursor = await self._db.execute(
             "SELECT id, device_id, insight_key FROM security_insight_state "
             "WHERE resolved_at IS NULL"

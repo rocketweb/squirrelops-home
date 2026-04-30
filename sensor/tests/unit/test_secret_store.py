@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
-import json
 import pathlib
-import re
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from squirrelops_home_sensor.secrets.store import SecretStore
 from squirrelops_home_sensor.secrets.encrypted_file import EncryptedFileStore
 from squirrelops_home_sensor.secrets.keychain import KeychainStore
-
+from squirrelops_home_sensor.secrets.store import SecretStore
 
 # ---------------------------------------------------------------------------
 # SecretStore ABC contract

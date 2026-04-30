@@ -12,14 +12,14 @@ domain socket JSON-RPC (see xpc.py).
 from __future__ import annotations
 
 import asyncio
-import sys
 import logging
 import socket
-import defusedxml.ElementTree as ET
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime
+
+import defusedxml.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 

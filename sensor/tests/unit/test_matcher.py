@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from squirrelops_home_sensor.fingerprint.composite import CompositeFingerprint
 from squirrelops_home_sensor.fingerprint.matcher import (
-    match_device,
-    levenshtein_similarity,
-    jaccard_similarity,
     KnownDevice,
+    jaccard_similarity,
+    levenshtein_similarity,
+    match_device,
 )
-
 
 # ---------------------------------------------------------------------------
 # Similarity function tests

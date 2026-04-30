@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json as json_mod
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -53,7 +53,7 @@ class DecoyDetail(BaseModel):
     connection_count: int
     credential_trip_count: int
     failure_count: int
-    last_failure_at: Optional[str] = None
+    last_failure_at: str | None = None
     created_at: str
     updated_at: str
 
@@ -62,11 +62,11 @@ class ConnectionEntry(BaseModel):
     id: int
     decoy_id: int
     source_ip: str
-    source_mac: Optional[str] = None
+    source_mac: str | None = None
     port: int
-    protocol: Optional[str] = None
-    request_path: Optional[str] = None
-    credential_used: Optional[str] = None
+    protocol: str | None = None
+    request_path: str | None = None
+    credential_used: str | None = None
     timestamp: str
 
 
@@ -82,14 +82,14 @@ class CredentialEntry(BaseModel):
     credential_type: str
     planted_location: str
     tripped: bool
-    first_tripped_at: Optional[str] = None
+    first_tripped_at: str | None = None
     created_at: str
 
 
 # ---------- Helpers ----------
 
 
-def _parse_config(raw: Optional[str]) -> Any:
+def _parse_config(raw: str | None) -> Any:
     if raw is None:
         return {}
     if isinstance(raw, str):
@@ -178,7 +178,7 @@ async def restart_decoy(
 ):
     """Restart a decoy service. Resets failure count and sets status to active."""
     await _get_decoy_or_404(db, decoy_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     await db.execute(
         """UPDATE decoys SET status = 'active', failure_count = 0,
@@ -201,7 +201,7 @@ async def enable_decoy(
 ):
     """Enable a stopped decoy. No-op if already active."""
     await _get_decoy_or_404(db, decoy_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         """UPDATE decoys SET status = 'active', failure_count = 0,
            last_failure_at = NULL, updated_at = ?
@@ -222,7 +222,7 @@ async def disable_decoy(
 ):
     """Disable an active decoy. No-op if already stopped."""
     await _get_decoy_or_404(db, decoy_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     await db.execute(
         "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
         (now, decoy_id),
@@ -247,7 +247,7 @@ async def update_decoy_config(
 
     # Merge: new keys overwrite, existing keys preserved
     merged = {**existing_config, **body}
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     await db.execute(
         "UPDATE decoys SET config = ?, updated_at = ? WHERE id = ?",

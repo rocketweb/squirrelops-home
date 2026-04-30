@@ -24,7 +24,6 @@ from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.events.log import EventLog
 from squirrelops_home_sensor.integrations.home_assistant import HAArea, HADevice
 
-
 SENSOR_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SIGNATURES_PATH = SENSOR_ROOT / "signatures" / "device_signatures.json"
 

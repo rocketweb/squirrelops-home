@@ -4,15 +4,13 @@ Verifies CanaryManager hostname matching, observation recording,
 and DNSMonitor event publishing via mocked privileged_ops.
 """
 
-import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from squirrelops_home_sensor.decoys.canary import CanaryManager
 from squirrelops_home_sensor.scanner.dns import DNSMonitor
-
 
 # ---------------------------------------------------------------------------
 # CanaryManager — hostname matching
@@ -181,7 +179,7 @@ class TestDNSMonitorPolling:
             MagicMock(
                 query_name="alert.canary.squirrelops.io",
                 source_ip="192.168.1.99",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             ),
         ])
 
@@ -209,7 +207,7 @@ class TestDNSMonitorPolling:
             MagicMock(
                 query_name="google.com",
                 source_ip="192.168.1.50",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             ),
         ])
 
@@ -231,7 +229,7 @@ class TestDNSMonitorPolling:
             MagicMock(
                 query_name="alert.canary.squirrelops.io",
                 source_ip="10.0.0.1",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             ),
         ])
 
@@ -256,11 +254,11 @@ class TestDNSMonitorPolling:
         privileged_ops = AsyncMock()
         privileged_ops.get_dns_queries = AsyncMock(return_value=[
             MagicMock(query_name="google.com", source_ip="10.0.0.1",
-                      timestamp=datetime.now(timezone.utc)),
+                      timestamp=datetime.now(UTC)),
             MagicMock(query_name="alert.canary.squirrelops.io", source_ip="10.0.0.2",
-                      timestamp=datetime.now(timezone.utc)),
+                      timestamp=datetime.now(UTC)),
             MagicMock(query_name="github.com", source_ip="10.0.0.3",
-                      timestamp=datetime.now(timezone.utc)),
+                      timestamp=datetime.now(UTC)),
         ])
 
         monitor = DNSMonitor(

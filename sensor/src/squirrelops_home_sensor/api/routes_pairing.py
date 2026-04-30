@@ -6,7 +6,7 @@ import hmac as hmac_mod
 import logging
 import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -17,14 +17,18 @@ _PAIRING_CODE_FILE = Path("/tmp/squirrelops-pairing-code")
 import aiosqlite
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey, SECP256R1, generate_private_key
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    SECP256R1,
+    EllipticCurvePrivateKey,
+    generate_private_key,
+)
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from squirrelops_home_sensor.api.deps import get_db, get_config, verify_client_cert
+from squirrelops_home_sensor.api.deps import get_config, get_db, verify_client_cert
 
 router = APIRouter(prefix="/pairing", tags=["pairing"])
 
@@ -95,8 +99,8 @@ def _generate_ca(sensor_name: str) -> tuple[EllipticCurvePrivateKey, x509.Certif
         .issuer_name(issuer)
         .public_key(ca_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=3650))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=3650))
         .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
         .sign(ca_key, hashes.SHA256())
     )
@@ -115,8 +119,8 @@ def _sign_client_cert(
         .issuer_name(ca_cert.subject)
         .public_key(csr.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=3650))
+        .not_valid_before(datetime.now(UTC))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=3650))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
         .sign(ca_key, hashes.SHA256())
@@ -319,7 +323,7 @@ async def complete_pairing(
     fingerprint = _get_cert_fingerprint(client_cert)
 
     # Store pairing record — mark as local if the request came from localhost
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     client_host = request.client.host if request.client else None
     is_local = 1 if client_host in ("127.0.0.1", "::1", "localhost") else 0
     await db.execute(

@@ -2,20 +2,20 @@
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
 from squirrelops_home_sensor import __version__
-from squirrelops_home_sensor.api.routes_system import router as system_router
-from squirrelops_home_sensor.api.routes_devices import router as devices_router
 from squirrelops_home_sensor.api.routes_alerts import router as alerts_router
-from squirrelops_home_sensor.api.routes_decoys import router as decoys_router
 from squirrelops_home_sensor.api.routes_config import router as config_router
+from squirrelops_home_sensor.api.routes_decoys import router as decoys_router
+from squirrelops_home_sensor.api.routes_devices import router as devices_router
 from squirrelops_home_sensor.api.routes_pairing import router as pairing_router
 from squirrelops_home_sensor.api.routes_ports import router as ports_router
 from squirrelops_home_sensor.api.routes_scouts import router as scouts_router
+from squirrelops_home_sensor.api.routes_system import router as system_router
 from squirrelops_home_sensor.api.ws import router as ws_router
 
 

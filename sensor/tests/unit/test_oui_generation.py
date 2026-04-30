@@ -18,13 +18,11 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from update_oui_db import (
-    MANUFACTURER_ALIASES,
     MANUFACTURER_TYPES,
     clean_manufacturer_name,
     generate_oui_module,
     parse_oui_csv,
 )
-
 
 # ---------------------------------------------------------------------------
 # clean_manufacturer_name

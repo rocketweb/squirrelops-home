@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,7 +17,6 @@ from squirrelops_home_sensor.devices.signatures import (
     SignatureDB,
 )
 from squirrelops_home_sensor.fingerprint.composite import CompositeFingerprint
-
 
 SENSOR_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SIGNATURES_PATH = SENSOR_ROOT / "signatures" / "device_signatures.json"

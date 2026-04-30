@@ -14,8 +14,6 @@ import os
 import random
 import secrets
 import string
-from typing import Optional
-
 
 # Word lists for password generation (adjective + noun pattern)
 _ADJECTIVES = [
@@ -75,7 +73,7 @@ class GeneratedCredential:
     credential_type: str
     credential_value: str
     planted_location: str
-    canary_hostname: Optional[str] = None
+    canary_hostname: str | None = None
 
 
 class CredentialGenerator:
@@ -120,7 +118,7 @@ class CredentialGenerator:
     # Canary hostname
     # -----------------------------------------------------------------
 
-    def generate_canary_hostname(self) -> Optional[str]:
+    def generate_canary_hostname(self) -> str | None:
         """Generate a unique DNS canary hostname, or ``None`` if disabled.
 
         Returns ``None`` when ``canary_enabled`` is ``False``.

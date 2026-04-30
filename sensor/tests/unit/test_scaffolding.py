@@ -2,9 +2,7 @@
 
 import importlib
 import pathlib
-
 import tomllib
-
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SENSOR_ROOT = REPO_ROOT / "sensor"

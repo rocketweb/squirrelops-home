@@ -7,10 +7,8 @@ headers, credential injection points, and mDNS advertisement info.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 
 from squirrelops_home_sensor.scouts.engine import ServiceProfile
 

@@ -1,10 +1,5 @@
 """Integration tests for config routes: get/set config, alert methods, ha-status."""
-import asyncio
-import json
 from unittest.mock import AsyncMock, patch
-
-import pytest
-from fastapi.testclient import TestClient
 
 
 class TestGetConfig:
@@ -92,7 +87,7 @@ class TestUpdateConfig:
     def test_update_rejects_protected_fields(self, client, sensor_config):
         """sensor_id and version should not be overwritable via config update."""
         original_id = sensor_config["sensor_id"]
-        response = client.put("/config", json={"sensor_id": "hacked-id"})
+        client.put("/config", json={"sensor_id": "hacked-id"})
         # The update should either reject or silently ignore the protected field
         get_response = client.get("/config")
         assert get_response.json()["sensor_id"] == original_id

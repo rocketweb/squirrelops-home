@@ -10,19 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from squirrelops_home_sensor.privileged.helper import (
-    PrivilegedOperations,
-    LinuxPrivilegedOps,
-    ServiceResult,
     DNSQuery,
+    LinuxPrivilegedOps,
+    PrivilegedOperations,
+    ServiceResult,
 )
 from squirrelops_home_sensor.privileged.xpc import MacOSPrivilegedOps
-
 
 # ---------------------------------------------------------------------------
 # ABC contract
@@ -68,7 +67,7 @@ class TestDNSQuery:
     """Verify DNSQuery dataclass."""
 
     def test_fields(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         q = DNSQuery(query_name="example.com", source_ip="192.168.1.50", timestamp=now)
         assert q.query_name == "example.com"
         assert q.source_ip == "192.168.1.50"
@@ -210,7 +209,7 @@ class TestLinuxPrivilegedOpsDNS:
             "scapy.all": MagicMock(),
         }):
             ops = LinuxPrivilegedOps()
-            since = datetime.now(timezone.utc)
+            since = datetime.now(UTC)
             queries = await ops.get_dns_queries(since)
             assert isinstance(queries, list)
 
@@ -330,7 +329,7 @@ class TestMacOSPrivilegedOpsDNS:
 
     @pytest.mark.asyncio
     async def test_get_dns_queries_via_socket(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         now_iso = now.isoformat()
         response = json.dumps({
             "jsonrpc": "2.0",

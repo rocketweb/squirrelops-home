@@ -7,9 +7,8 @@ non-baseline destination are silently ignored.
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
@@ -38,7 +37,7 @@ class BaselineCollector:
         destinations: list[tuple[str, int]],
     ) -> int:
         """Record observed connection destinations for a device. Returns count."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         count = 0
         for dest_ip, dest_port in destinations:
             await upsert_baseline_connection(
@@ -95,7 +94,7 @@ class AnomalyDetector:
                 if await self._already_alerted(device_id, dest_ip, dest_port):
                     continue
 
-                now = datetime.now(timezone.utc).isoformat()
+                now = datetime.now(UTC).isoformat()
                 severity = severity_for_alert_type(AlertType.BEHAVIORAL_ANOMALY)
 
                 incident_id = await insert_incident(

@@ -1,10 +1,10 @@
 """FastAPI dependency injection providers."""
 from __future__ import annotations
 
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import aiosqlite
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 
 from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
 

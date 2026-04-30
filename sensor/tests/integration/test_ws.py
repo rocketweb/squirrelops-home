@@ -1,10 +1,8 @@
 """Integration tests for WebSocket endpoint: auth, subscribe, live events, replay, keepalive."""
 import asyncio
 import json
-import time
 
 import pytest
-from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from tests.integration.conftest import seed_pairing

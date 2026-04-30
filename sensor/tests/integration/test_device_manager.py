@@ -5,8 +5,7 @@ discovery -> fingerprint -> match -> classify -> store -> events.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from datetime import datetime, timezone
+import pathlib
 
 import aiosqlite
 import pytest
@@ -17,11 +16,6 @@ from squirrelops_home_sensor.devices.manager import DeviceManager, ScanResult
 from squirrelops_home_sensor.devices.signatures import SignatureDB
 from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.events.log import EventLog
-from squirrelops_home_sensor.events.types import EventType
-from squirrelops_home_sensor.fingerprint.composite import CompositeFingerprint
-
-import pathlib
-
 
 SENSOR_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SIGNATURES_PATH = SENSOR_ROOT / "signatures" / "device_signatures.json"

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import dataclasses
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, Optional
 
 
 @dataclasses.dataclass(frozen=True)
@@ -32,8 +32,8 @@ class DecoyConnectionEvent:
     dest_port: int
     protocol: str
     timestamp: datetime
-    request_path: Optional[str] = None
-    credential_used: Optional[str] = None
+    request_path: str | None = None
+    credential_used: str | None = None
 
 
 class BaseDecoy(ABC):
@@ -62,15 +62,15 @@ class BaseDecoy(ABC):
         self.port = port
         self.bind_address = bind_address
         self.decoy_type = decoy_type
-        self._on_connection: Optional[Callable[[DecoyConnectionEvent], None]] = None
+        self._on_connection: Callable[[DecoyConnectionEvent], None] | None = None
 
     @property
-    def on_connection(self) -> Optional[Callable[[DecoyConnectionEvent], None]]:
+    def on_connection(self) -> Callable[[DecoyConnectionEvent], None] | None:
         """Get the registered connection callback."""
         return self._on_connection
 
     @on_connection.setter
-    def on_connection(self, callback: Optional[Callable[[DecoyConnectionEvent], None]]) -> None:
+    def on_connection(self, callback: Callable[[DecoyConnectionEvent], None] | None) -> None:
         """Set the connection callback invoked on every client connection."""
         self._on_connection = callback
 

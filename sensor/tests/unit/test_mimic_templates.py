@@ -5,10 +5,7 @@ import pytest
 
 from squirrelops_home_sensor.scouts.engine import ServiceProfile
 from squirrelops_home_sensor.scouts.templates import (
-    MimicTemplate,
     MimicTemplateGenerator,
-    _CREDENTIAL_STRATEGY,
-    _MDNS_SERVICES,
 )
 
 

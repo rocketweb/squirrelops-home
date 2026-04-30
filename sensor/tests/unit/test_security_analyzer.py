@@ -7,7 +7,7 @@ affected devices, rather than one alert per device+port.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import aiosqlite
@@ -19,7 +19,7 @@ from squirrelops_home_sensor.security.analyzer import SecurityInsightAnalyzer
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 async def _insert_test_device(

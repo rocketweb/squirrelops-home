@@ -12,12 +12,11 @@ Sequence numbers are never reused (AUTOINCREMENT).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 import pytest
 import pytest_asyncio
-
 
 # -- Schema ----------------------------------------------------------
 
@@ -128,7 +127,7 @@ async def db():
         yield conn
 
 
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 OLD = NOW - timedelta(days=100)  # 100 days ago -- beyond 90-day retention
 RECENT = NOW - timedelta(days=30)  # 30 days ago -- within retention
 

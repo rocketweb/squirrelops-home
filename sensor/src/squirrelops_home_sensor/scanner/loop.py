@@ -14,7 +14,7 @@ import asyncio
 import ipaddress
 import logging
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from squirrelops_home_sensor.devices.manager import DeviceManager, ScanResult
@@ -150,7 +150,9 @@ class ScanLoop:
                     or self._ha_config.get("url") != live_ha.get("url")
                     or self._ha_config.get("token") != live_ha.get("token")
                 ):
-                    from squirrelops_home_sensor.integrations.home_assistant import HomeAssistantClient
+                    from squirrelops_home_sensor.integrations.home_assistant import (
+                        HomeAssistantClient,
+                    )
                     self._ha_client = HomeAssistantClient(
                         url=live_ha["url"], token=live_ha["token"]
                     )
@@ -203,14 +205,14 @@ class ScanLoop:
                     shutdown_event.wait(),
                     timeout=self._scan_interval,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         logger.info("Scan loop stopped")
 
     async def run_single_scan(self) -> None:
         """Run a single three-phase scan cycle."""
-        scan_start = datetime.now(timezone.utc)
+        scan_start = datetime.now(UTC)
         logger.info("Starting scan cycle")
 
         # ---- Phase 1: ARP discovery + immediate device creation ----
@@ -392,5 +394,5 @@ class ScanLoop:
 
 def _elapsed_ms(start: datetime) -> int:
     """Return elapsed milliseconds since start."""
-    delta = datetime.now(timezone.utc) - start
+    delta = datetime.now(UTC) - start
     return int(delta.total_seconds() * 1000)

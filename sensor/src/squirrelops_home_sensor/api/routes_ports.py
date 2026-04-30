@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Optional
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,16 +19,16 @@ router = APIRouter(prefix="/ports", tags=["ports"])
 class NetworkPortDevice(BaseModel):
     device_id: int
     ip_address: str
-    hostname: Optional[str] = None
-    custom_name: Optional[str] = None
+    hostname: str | None = None
+    custom_name: str | None = None
     device_type: str
-    banner: Optional[str] = None
+    banner: str | None = None
 
 
 class NetworkPortEntry(BaseModel):
     port: int
     protocol: str
-    service_name: Optional[str] = None
+    service_name: str | None = None
     device_count: int
     devices: list[NetworkPortDevice]
 
@@ -48,8 +47,8 @@ class ProbeRequest(BaseModel):
 class ProbeResult(BaseModel):
     ip: str
     port: int
-    service_name: Optional[str] = None
-    banner: Optional[str] = None
+    service_name: str | None = None
+    banner: str | None = None
 
 
 # ---------- Routes ----------

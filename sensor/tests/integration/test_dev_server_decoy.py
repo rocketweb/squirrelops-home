@@ -5,18 +5,16 @@ routes, banners, connection logging, and credential detection.
 """
 
 import asyncio
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
 
-import pytest
 import httpx
+import pytest
 
-from squirrelops_home_sensor.decoys.types.dev_server import DevServerDecoy
-from squirrelops_home_sensor.decoys.types.base import DecoyConnectionEvent
 from squirrelops_home_sensor.decoys.credentials import (
     CredentialGenerator,
-    GeneratedCredential,
 )
+from squirrelops_home_sensor.decoys.types.base import DecoyConnectionEvent
+from squirrelops_home_sensor.decoys.types.dev_server import DevServerDecoy
 
 
 @pytest.fixture
@@ -77,7 +75,6 @@ class TestDevServerLifecycle:
             planted_credentials=credentials,
         )
         await d.start()
-        port = d.port
         await d.stop()
         assert d.is_running is False
 

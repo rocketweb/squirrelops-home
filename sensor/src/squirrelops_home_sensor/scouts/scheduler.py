@@ -11,8 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 import aiosqlite
 
@@ -114,7 +113,7 @@ class ScoutScheduler:
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=10)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+            except (TimeoutError, asyncio.CancelledError):
                 pass
             self._task = None
         logger.info("Scout scheduler stopped")
@@ -139,7 +138,7 @@ class ScoutScheduler:
                     timeout=5.0,
                 )
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 if self._shutdown.is_set():
                     return
 
@@ -150,7 +149,7 @@ class ScoutScheduler:
                 timeout=self._initial_delay,
             )
             return  # Shutdown during initial delay
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         # Run scout cycles
@@ -180,7 +179,7 @@ class ScoutScheduler:
                     return
                 if self._run_now_event.is_set():
                     self._run_now_event.clear()
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         logger.info("Scout scheduler loop ended")
@@ -206,7 +205,7 @@ class ScoutScheduler:
         count = await self._engine.scout_all(device_ports)
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
-        self._last_scout_at = datetime.now(timezone.utc)
+        self._last_scout_at = datetime.now(UTC)
         self._last_scout_duration_ms = elapsed_ms
         self._total_profiles = count
 

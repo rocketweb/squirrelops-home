@@ -1,10 +1,6 @@
 """Integration tests for system routes: health, status, profile, learning."""
 import asyncio
-import json
-import time
-
-import pytest
-from fastapi.testclient import TestClient
+from datetime import UTC
 
 from squirrelops_home_sensor import __version__
 
@@ -61,7 +57,7 @@ class TestStatusEndpoint:
         assert data["profile"] == sensor_config["profile"]
 
     def test_status_counts_reflect_database(self, client, db):
-        from tests.integration.conftest import seed_devices, seed_decoys, seed_alerts
+        from tests.integration.conftest import seed_alerts, seed_decoys, seed_devices
 
         asyncio.get_event_loop().run_until_complete(seed_devices(db, count=5))
         asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=3))
@@ -149,9 +145,9 @@ class TestLearningEndpoint:
         assert data["phase"] == "complete"
 
     def test_learning_mode_enabled_shows_progress(self, client, sensor_config):
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta
 
-        started = datetime.now(timezone.utc) - timedelta(hours=12)
+        started = datetime.now(UTC) - timedelta(hours=12)
         sensor_config["learning_mode"]["enabled"] = True
         sensor_config["learning_mode"]["started_at"] = started.isoformat()
         response = client.get("/system/learning")
@@ -162,9 +158,9 @@ class TestLearningEndpoint:
         assert data["phase"] == "learning"
 
     def test_learning_mode_past_48_hours_shows_complete(self, client, sensor_config):
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta
 
-        started = datetime.now(timezone.utc) - timedelta(hours=50)
+        started = datetime.now(UTC) - timedelta(hours=50)
         sensor_config["learning_mode"]["enabled"] = True
         sensor_config["learning_mode"]["started_at"] = started.isoformat()
         response = client.get("/system/learning")

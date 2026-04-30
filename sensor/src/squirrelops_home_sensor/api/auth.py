@@ -1,7 +1,6 @@
 """TLS client certificate authentication utilities."""
 from __future__ import annotations
 
-import hashlib
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 

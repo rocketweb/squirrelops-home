@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import aiosqlite
 import pytest
 
-from squirrelops_home_sensor.db.schema import SCHEMA_V1_SQL
 from squirrelops_home_sensor.db.queries import get_device_baseline, has_baseline
+from squirrelops_home_sensor.db.schema import SCHEMA_V1_SQL
 from squirrelops_home_sensor.devices.baseline import AnomalyDetector, BaselineCollector
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @pytest.fixture

@@ -15,9 +15,8 @@ import hashlib
 import json
 import logging
 import ssl
-import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import aiosqlite
 import httpx
@@ -244,7 +243,7 @@ class ScoutEngine:
     ) -> ServiceProfile:
         """Probe a single port with all applicable probes."""
         async with self._semaphore:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             profile = ServiceProfile(
                 device_id=device_id,
                 ip_address=ip,

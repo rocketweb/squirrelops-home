@@ -15,7 +15,6 @@ from squirrelops_home_sensor.devices.llm_classifier import (
 from squirrelops_home_sensor.devices.signatures import DeviceClassification
 from squirrelops_home_sensor.fingerprint.composite import CompositeFingerprint
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

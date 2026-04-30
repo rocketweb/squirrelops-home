@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 # -- Lightweight event bus stub --------------------------------------
 
 class StubEventBus:

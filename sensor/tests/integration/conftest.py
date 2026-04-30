@@ -1,17 +1,13 @@
 # sensor/tests/integration/conftest.py
-import asyncio
 import json
-from datetime import datetime, timezone
-from contextlib import asynccontextmanager
-from unittest.mock import AsyncMock, MagicMock
 
 import aiosqlite
 import pytest
 import pytest_asyncio
 
 from squirrelops_home_sensor.db.schema import create_all_tables
-from squirrelops_home_sensor.events.log import EventLog
 from squirrelops_home_sensor.events.bus import EventBus
+from squirrelops_home_sensor.events.log import EventLog
 
 
 @pytest_asyncio.fixture
@@ -59,8 +55,13 @@ def sensor_config():
 @pytest.fixture
 def app(db, event_bus, sensor_config):
     """Create a FastAPI app with dependency overrides for testing."""
+    from squirrelops_home_sensor.api.deps import (
+        get_config,
+        get_db,
+        get_event_bus,
+        verify_client_cert,
+    )
     from squirrelops_home_sensor.app import create_app
-    from squirrelops_home_sensor.api.deps import get_db, get_event_bus, get_config, verify_client_cert
 
     application = create_app(sensor_config, ca_key=None, ca_cert=None)
 

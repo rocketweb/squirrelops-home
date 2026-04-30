@@ -7,13 +7,12 @@ import hashlib
 import pytest
 
 from squirrelops_home_sensor.fingerprint.signals import (
+    hash_connection_pattern,
+    hash_dhcp_options,
+    hash_open_ports,
     normalize_mac,
     normalize_mdns,
-    hash_dhcp_options,
-    hash_connection_pattern,
-    hash_open_ports,
 )
-
 
 # ---------------------------------------------------------------------------
 # MAC normalization

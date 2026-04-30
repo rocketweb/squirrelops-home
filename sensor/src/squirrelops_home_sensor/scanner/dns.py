@@ -13,7 +13,7 @@ On a canary match, it:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol, runtime_checkable
 
 from squirrelops_home_sensor.decoys.canary import CanaryManager
@@ -62,7 +62,7 @@ class DNSMonitor:
         the last poll and checks each against the canary manager.
         """
         queries = await self._privileged_ops.get_dns_queries(since=self._last_poll)
-        self._last_poll = datetime.now(timezone.utc)
+        self._last_poll = datetime.now(UTC)
 
         for query in queries:
             query_name = query.query_name

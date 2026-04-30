@@ -7,12 +7,10 @@ for connection logging and credential detection.
 
 from __future__ import annotations
 
-import io
 import logging
-import socket
 import threading
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -120,15 +118,15 @@ class Emulator:
         self,
         bind_address: str = "127.0.0.1",
         port: int = 0,
-        routes: Optional[list[dict]] = None,
-        on_request: Optional[Callable] = None,
+        routes: list[dict] | None = None,
+        on_request: Callable | None = None,
     ) -> None:
         self._bind_address = bind_address
         self._port = port
         self._routes = routes or []
         self._on_request = on_request
-        self._server: Optional[ThreadingHTTPServer] = None
-        self._thread: Optional[threading.Thread] = None
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
         self._alive = False
 
     @property

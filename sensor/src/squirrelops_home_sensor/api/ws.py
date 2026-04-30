@@ -4,11 +4,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Optional
 
 import aiosqlite
 from fastapi import APIRouter
-from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
 
@@ -61,11 +60,11 @@ async def broadcast_event(seq: int, event_type: str, payload: dict) -> None:
 
 async def _authenticate(
     ws: WebSocket, db: aiosqlite.Connection
-) -> Optional[tuple[str, str]]:
+) -> tuple[str, str] | None:
     """Wait for auth frame and validate. Returns (client_name, fingerprint) or None."""
     try:
         raw = await asyncio.wait_for(ws.receive_json(), timeout=AUTH_TIMEOUT_SECONDS)
-    except (asyncio.TimeoutError, WebSocketDisconnect):
+    except (TimeoutError, WebSocketDisconnect):
         return None
 
     msg_type = raw.get("type")

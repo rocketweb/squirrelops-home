@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import aiosqlite
 
@@ -142,7 +142,7 @@ class VirtualIPManager:
             logger.warning("Failed to add IP alias %s on %s", ip, self._interface)
             return False
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await self._db.execute(
             """INSERT INTO virtual_ips (ip_address, interface, created_at)
                VALUES (?, ?, ?)
@@ -162,7 +162,7 @@ class VirtualIPManager:
         if not ok:
             logger.warning("Failed to remove IP alias %s", ip)
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await self._db.execute(
             "UPDATE virtual_ips SET released_at = ? WHERE ip_address = ?",
             (now, ip),
@@ -200,7 +200,7 @@ class VirtualIPManager:
                 logger.info("Restored virtual IP alias %s on %s", ip, iface)
             else:
                 # Clean up orphan — can't re-add, mark as released
-                now = datetime.now(timezone.utc).isoformat()
+                now = datetime.now(UTC).isoformat()
                 await self._db.execute(
                     "UPDATE virtual_ips SET released_at = ? WHERE ip_address = ?",
                     (now, ip),

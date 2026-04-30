@@ -1,14 +1,12 @@
 """Tests for port forwarding manager and port remapping logic."""
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from squirrelops_home_sensor.network.port_forward import (
     PORT_OFFSET,
-    PRIVILEGED_PORT_THRESHOLD,
     PortForwardManager,
     needs_remap,
     remap_port,

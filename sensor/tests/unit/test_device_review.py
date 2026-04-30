@@ -1,7 +1,7 @@
 """Tests for DeviceReviewService."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 import pytest
@@ -62,7 +62,7 @@ async def db():
 @pytest.mark.asyncio
 async def test_no_reminders_for_recent_devices(db):
     """Devices first seen less than 24h ago should not get reminders."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         "INSERT INTO devices (id, ip_address, device_type, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
         (1, "192.168.1.10", "unknown", _iso(now - timedelta(hours=12)), _iso(now)),
@@ -77,7 +77,7 @@ async def test_no_reminders_for_recent_devices(db):
 @pytest.mark.asyncio
 async def test_reminder_created_for_old_unknown_device(db):
     """Devices >24h old with no trust row should get a reminder."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         "INSERT INTO devices (id, ip_address, device_type, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
         (1, "192.168.1.10", "unknown", _iso(now - timedelta(hours=25)), _iso(now)),
@@ -99,7 +99,7 @@ async def test_reminder_created_for_old_unknown_device(db):
 @pytest.mark.asyncio
 async def test_no_reminder_for_approved_device(db):
     """Devices with trust status 'approved' should not get reminders."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         "INSERT INTO devices (id, ip_address, device_type, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
         (1, "192.168.1.10", "unknown", _iso(now - timedelta(hours=25)), _iso(now)),
@@ -118,7 +118,7 @@ async def test_no_reminder_for_approved_device(db):
 @pytest.mark.asyncio
 async def test_no_reminder_for_rejected_device(db):
     """Devices with trust status 'rejected' should not get reminders."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         "INSERT INTO devices (id, ip_address, device_type, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
         (1, "192.168.1.10", "unknown", _iso(now - timedelta(hours=25)), _iso(now)),
@@ -137,7 +137,7 @@ async def test_no_reminder_for_rejected_device(db):
 @pytest.mark.asyncio
 async def test_idempotent_no_duplicate_reminders(db):
     """Running check_for_reviews twice should not create duplicate reminders."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         "INSERT INTO devices (id, ip_address, device_type, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
         (1, "192.168.1.10", "unknown", _iso(now - timedelta(hours=25)), _iso(now)),
@@ -158,7 +158,7 @@ async def test_idempotent_no_duplicate_reminders(db):
 @pytest.mark.asyncio
 async def test_multiple_devices_get_individual_reminders(db):
     """Each uncategorized device should get its own reminder."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for i in range(3):
         await db.execute(
             "INSERT INTO devices (id, ip_address, device_type, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
@@ -174,7 +174,7 @@ async def test_multiple_devices_get_individual_reminders(db):
 @pytest.mark.asyncio
 async def test_explicit_unknown_trust_still_gets_reminder(db):
     """Devices with explicit trust status 'unknown' should still get reminders."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db.execute(
         "INSERT INTO devices (id, ip_address, device_type, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
         (1, "192.168.1.10", "unknown", _iso(now - timedelta(hours=25)), _iso(now)),
