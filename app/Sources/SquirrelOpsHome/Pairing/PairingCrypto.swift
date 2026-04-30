@@ -8,6 +8,7 @@ public enum PairingCryptoError: Error, LocalizedError {
     case invalidHexString
     case decryptionFailed
     case dataTooShort
+    case csrGenerationFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +18,8 @@ public enum PairingCryptoError: Error, LocalizedError {
             return "AES-GCM decryption failed"
         case .dataTooShort:
             return "Encrypted data is too short to contain nonce and ciphertext"
+        case .csrGenerationFailed(let reason):
+            return "CSR generation failed: \(reason)"
         }
     }
 }
@@ -111,6 +114,56 @@ public enum PairingCrypto {
         let csr = derSequence(certReqInfo + sigAlg + sigBitString)
 
         // PEM encode
+        let b64 = Data(csr).base64EncodedString(options: .lineLength64Characters)
+        return "-----BEGIN CERTIFICATE REQUEST-----\n\(b64)\n-----END CERTIFICATE REQUEST-----\n"
+    }
+
+    /// Generate a minimal DER-encoded PKCS#10 CSR using a Keychain-backed P-256 key.
+    public static func generateCSR(privateKey: SecKey, commonName: String) throws -> String {
+        guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
+            throw PairingCryptoError.csrGenerationFailed("missing public key")
+        }
+
+        var publicKeyError: Unmanaged<CFError>?
+        guard let publicKeyData = SecKeyCopyExternalRepresentation(publicKey, &publicKeyError) as Data? else {
+            let reason = publicKeyError?.takeRetainedValue().localizedDescription ?? "could not export public key"
+            throw PairingCryptoError.csrGenerationFailed(reason)
+        }
+
+        let cnOID: [UInt8] = [0x55, 0x04, 0x03]
+        let cnValue = derUTF8String(Array(commonName.utf8))
+        let atv = derSequence(derOID(cnOID) + cnValue)
+        let rdn = derSet(atv)
+        let subject = derSequence(rdn)
+
+        let ecOID: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01]
+        let p256OID: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07]
+        let algId = derSequence(derOID(ecOID) + derOID(p256OID))
+        let spki = derSequence(algId + derBitString(Array(publicKeyData)))
+
+        let certReqInfo = derSequence([0x02, 0x01, 0x00] + subject + spki + [0xA0, 0x00])
+        let certReqData = Data(certReqInfo)
+
+        let algorithm = SecKeyAlgorithm.ecdsaSignatureMessageX962SHA256
+        guard SecKeyIsAlgorithmSupported(privateKey, .sign, algorithm) else {
+            throw PairingCryptoError.csrGenerationFailed("private key does not support ECDSA/SHA-256 signing")
+        }
+
+        var signingError: Unmanaged<CFError>?
+        guard let signature = SecKeyCreateSignature(
+            privateKey,
+            algorithm,
+            certReqData as CFData,
+            &signingError
+        ) as Data? else {
+            let reason = signingError?.takeRetainedValue().localizedDescription ?? "signature failed"
+            throw PairingCryptoError.csrGenerationFailed(reason)
+        }
+
+        let sigAlgOID: [UInt8] = [0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02]
+        let sigAlg = derSequence(derOID(sigAlgOID))
+        let csr = derSequence(certReqInfo + sigAlg + derBitString(Array(signature)))
+
         let b64 = Data(csr).base64EncodedString(options: .lineLength64Characters)
         return "-----BEGIN CERTIFICATE REQUEST-----\n\(b64)\n-----END CERTIFICATE REQUEST-----\n"
     }

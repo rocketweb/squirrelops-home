@@ -100,4 +100,31 @@ struct KeychainStoreTests {
     func deleteCertificateIgnoresNotFound() throws {
         try KeychainStore.deleteCertificate(label: "nonexistent-cert-\(testID)")
     }
+
+    // MARK: - Client Identity Key Tests
+
+    @Test("Create client private key stores discoverable Keychain key")
+    func createClientPrivateKeyStoresDiscoverableKey() throws {
+        let privateKeyLabel = "test-client-key-\(testID)"
+        defer {
+            try? KeychainStore.deleteClientIdentity(
+                certificateLabel: "test-client-cert-\(testID)",
+                privateKeyLabel: privateKeyLabel
+            )
+        }
+
+        let privateKey = try KeychainStore.createClientPrivateKey(privateKeyLabel: privateKeyLabel)
+        #expect(SecKeyCopyPublicKey(privateKey) != nil)
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrLabel as String: privateKeyLabel,
+            kSecReturnRef as String: true,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        #expect(status == errSecSuccess)
+        #expect(result != nil)
+    }
 }

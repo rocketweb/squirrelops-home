@@ -146,6 +146,7 @@ extension SensorClient: PairingClientProtocol {
 
 public enum PairingError: Error, LocalizedError, Sendable {
     case noHostResolved
+    case csrGenerationFailed(String)
     case decryptionFailed(String)
     case invalidCertificateData
     case keychainStoreFailed(String)
@@ -154,6 +155,8 @@ public enum PairingError: Error, LocalizedError, Sendable {
         switch self {
         case .noHostResolved:
             return "Could not resolve host and port from discovered sensor"
+        case .csrGenerationFailed(let detail):
+            return "Failed to generate client certificate request: \(detail)"
         case .decryptionFailed(let detail):
             return "Decryption failed: \(detail)"
         case .invalidCertificateData:
@@ -471,9 +474,20 @@ public final class PairingManager: @unchecked Sendable {
             throw PairingError.decryptionFailed("CA certificate: \(error.localizedDescription)")
         }
 
-        // Step 8: Generate P-256 key pair and create a PEM CSR
-        let privateKey = P256.Signing.PrivateKey()
-        let csrPem = PairingCrypto.generateCSR(privateKey: privateKey, commonName: clientName)
+        let sensorIdInt = Int(challengeResponse.sensorId) ?? challengeResponse.sensorId.hashValue
+        let caLabel = "io.squirrelops.home.ca.\(sensorIdInt)"
+        let clientLabel = "io.squirrelops.home.client.\(sensorIdInt)"
+        let privateKeyAccount = "io.squirrelops.home.key.\(sensorIdInt)"
+
+        // Step 8: Generate a Keychain-backed P-256 key pair and create a PEM CSR.
+        let privateKey: SecKey
+        let csrPem: String
+        do {
+            privateKey = try KeychainStore.createClientPrivateKey(privateKeyLabel: privateKeyAccount)
+            csrPem = try PairingCrypto.generateCSR(privateKey: privateKey, commonName: clientName)
+        } catch {
+            throw PairingError.csrGenerationFailed(error.localizedDescription)
+        }
 
         let encryptedCsr: Data
         do {
@@ -501,22 +515,12 @@ public final class PairingManager: @unchecked Sendable {
             throw PairingError.decryptionFailed("Client certificate: \(error.localizedDescription)")
         }
 
-        // Step 11: Store CA + client cert + private key in Keychain
-        let sensorIdInt = Int(challengeResponse.sensorId) ?? challengeResponse.sensorId.hashValue
-        let caLabel = "io.squirrelops.home.ca.\(sensorIdInt)"
-        let clientLabel = "io.squirrelops.home.client.\(sensorIdInt)"
-        let privateKeyAccount = "io.squirrelops.home.key.\(sensorIdInt)"
-
+        // Step 11: Store CA + client cert and bind the cert to the private key.
         do {
             try KeychainStore.storeCertificate(caCertData, label: caLabel)
             try KeychainStore.storeCertificate(clientCertData, label: clientLabel)
-            try KeychainStore.storePassword(
-                PairingCrypto.hexEncode(privateKey.x963Representation),
-                account: privateKeyAccount
-            )
             try KeychainStore.storeClientIdentity(
                 certificateData: clientCertData,
-                privateKeyData: privateKey.x963Representation,
                 certificateLabel: clientLabel,
                 privateKeyLabel: privateKeyAccount
             )

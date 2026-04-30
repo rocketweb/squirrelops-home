@@ -129,16 +129,9 @@ public struct KeychainStore {
 
     // MARK: - Client Certificate Identity Operations
 
-    /// Store a paired client certificate and private key as a Keychain identity.
-    @discardableResult
-    public static func storeClientIdentity(
-        certificateData: Data,
-        privateKeyData: Data,
-        certificateLabel: String,
-        privateKeyLabel: String
-    ) throws -> SecIdentity {
-        try? deleteClientIdentity(certificateLabel: certificateLabel, privateKeyLabel: privateKeyLabel)
-
+    /// Generate and store a P-256 client private key that can later be paired
+    /// with the signed client certificate as a SecIdentity.
+    public static func createClientPrivateKey(privateKeyLabel: String) throws -> SecKey {
         let keyTag = keyApplicationTag(privateKeyLabel)
         let keyQuery: [String: Any] = [
             kSecClass as String: kSecClassKey,
@@ -151,7 +144,6 @@ public struct KeychainStore {
 
         let keyAttributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
             kSecAttrKeySizeInBits as String: 256,
             kSecAttrIsPermanent as String: true,
             kSecAttrApplicationTag as String: keyTag,
@@ -160,18 +152,54 @@ public struct KeychainStore {
         ]
 
         var keyError: Unmanaged<CFError>?
-        guard SecKeyCreateWithData(
-            privateKeyData as CFData,
-            keyAttributes as CFDictionary,
-            &keyError
-        ) != nil else {
-            let reason = keyError?.takeRetainedValue().localizedDescription ?? "unknown key import error"
+        guard let privateKey = SecKeyCreateRandomKey(keyAttributes as CFDictionary, &keyError) else {
+            let reason = keyError?.takeRetainedValue().localizedDescription ?? "unknown key generation error"
             throw KeychainError.identityCreationFailed(reason)
+        }
+        return privateKey
+    }
+
+    /// Store a paired client certificate and return the Keychain identity that
+    /// combines it with an existing permanent private key.
+    @discardableResult
+    public static func storeClientIdentity(
+        certificateData: Data,
+        certificateLabel: String,
+        privateKeyLabel: String
+    ) throws -> SecIdentity {
+        let keyLookupQuery: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: keyApplicationTag(privateKeyLabel),
+            kSecReturnRef as String: true,
+        ]
+        var keyResult: AnyObject?
+        let keyLookupStatus = SecItemCopyMatching(keyLookupQuery as CFDictionary, &keyResult)
+        guard keyLookupStatus == errSecSuccess else {
+            throw KeychainError.unexpectedStatus(keyLookupStatus)
         }
 
         guard let derData = certificateDERData(from: certificateData),
               let certificate = SecCertificateCreateWithData(nil, derData as CFData) else {
             throw KeychainError.certificateCreationFailed
+        }
+
+        let certificateQuery: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: certificateLabel,
+        ]
+        let certificateDeleteStatus = SecItemDelete(certificateQuery as CFDictionary)
+        guard certificateDeleteStatus == errSecSuccess || certificateDeleteStatus == errSecItemNotFound else {
+            throw KeychainError.unexpectedStatus(certificateDeleteStatus)
+        }
+
+        let certificateAddQuery: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: certificateLabel,
+            kSecValueRef as String: certificate,
+        ]
+        let certificateAddStatus = SecItemAdd(certificateAddQuery as CFDictionary, nil)
+        guard certificateAddStatus == errSecSuccess || certificateAddStatus == errSecDuplicateItem else {
+            throw KeychainError.unexpectedStatus(certificateAddStatus)
         }
 
         var identity: SecIdentity?
@@ -188,11 +216,8 @@ public struct KeychainStore {
         privateKeyLabel: String
     ) throws -> SecIdentity {
         let certificateData = try loadCertificateData(label: certificateLabel)
-        let privateKeyHex = try loadPassword(account: privateKeyLabel)
-        let privateKeyData = try PairingCrypto.hexDecode(privateKeyHex)
         return try storeClientIdentity(
             certificateData: certificateData,
-            privateKeyData: privateKeyData,
             certificateLabel: certificateLabel,
             privateKeyLabel: privateKeyLabel
         )
@@ -203,7 +228,15 @@ public struct KeychainStore {
         certificateLabel: String,
         privateKeyLabel: String
     ) throws {
-        _ = certificateLabel
+        let certificateQuery: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: certificateLabel,
+        ]
+        let certificateStatus = SecItemDelete(certificateQuery as CFDictionary)
+        if certificateStatus != errSecSuccess && certificateStatus != errSecItemNotFound {
+            throw KeychainError.unexpectedStatus(certificateStatus)
+        }
+
         let keyQuery: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: keyApplicationTag(privateKeyLabel),
