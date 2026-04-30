@@ -44,11 +44,31 @@ public enum FontRegistration {
     }
 
     private static func fontBundleURL(for fontName: String) -> URL? {
+        for bundle in resourceBundles() {
+            if let url = bundle.url(forResource: fontName, withExtension: "ttf", subdirectory: "Fonts") {
+                return url
+            }
+        }
+
+        return nil
+    }
+
+    private static func resourceBundles() -> [Bundle] {
+        var bundles: [Bundle] = []
+
+        if let appResourceBundleURL = Bundle.main.url(
+            forResource: "SquirrelOpsHome_SquirrelOpsHome",
+            withExtension: "bundle"
+        ),
+           let appResourceBundle = Bundle(url: appResourceBundleURL) {
+            bundles.append(appResourceBundle)
+        }
+
         #if SWIFT_PACKAGE
-        let bundle = Bundle.module
-        #else
-        let bundle = Bundle.main
+        bundles.append(Bundle.module)
         #endif
-        return bundle.url(forResource: fontName, withExtension: "ttf", subdirectory: "Fonts")
+
+        bundles.append(Bundle.main)
+        return bundles
     }
 }
