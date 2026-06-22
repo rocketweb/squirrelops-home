@@ -285,35 +285,63 @@ public final class PairingManager: @unchecked Sendable {
         FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/com.squirrelops.sensor.plist")
     }
 
-    /// Auto-pair with a local sensor by fetching the pairing code from the
-    /// localhost-only endpoint and running the full challenge-response flow.
+    /// Path to the sensor's peer-verified local-pairing Unix socket.
+    private static let localPairingSocketPath = "/tmp/squirrelops-pairing.sock"
+
+    /// Auto-pair with a local sensor by fetching the pairing code over the
+    /// sensor's peer-verified Unix socket, then running the full challenge
+    /// response flow. The socket replaces the old loopback-TCP endpoint that
+    /// disclosed the code to any local process; the sensor checks our peer
+    /// credentials (and code signature, if configured) before responding.
     public func autoLocalPair(sensor: DiscoveredSensor) async throws -> PairedSensor {
-        let port = PairingManager.localSensorPort
-        guard let url = URL(string: "https://localhost:\(port)/pairing/local/code") else {
-            throw PairingError.noHostResolved
+        let socketPath = PairingManager.localPairingSocketPath
+        let code = try await Task.detached(priority: .userInitiated) {
+            try PairingManager.fetchLocalPairingCode(socketPath: socketPath)
+        }.value
+        return try await pair(sensor: sensor, code: code)
+    }
+
+    /// Connect to the local-pairing Unix socket and read the JSON
+    /// {"code": "..."} line. Blocking I/O bounded by a receive timeout.
+    private static func fetchLocalPairingCode(socketPath: String, timeout: Int = 5) throws -> String {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw PairingError.noHostResolved }
+        defer { close(fd) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let pathSet = socketPath.withCString { (src: UnsafePointer<CChar>) -> Bool in
+            guard strlen(src) < 104 else { return false }
+            return withUnsafeMutablePointer(to: &addr.sun_path) { rawPtr -> Bool in
+                let dst = UnsafeMutableRawPointer(rawPtr).bindMemory(to: CChar.self, capacity: 104)
+                _ = strlcpy(dst, src, 104)
+                return true
+            }
+        }
+        guard pathSet else { throw PairingError.noHostResolved }
+
+        var tv = timeval(tv_sec: timeout, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+
+        let connectResult = withUnsafePointer(to: &addr) { p -> Int32 in
+            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sp in
+                connect(fd, sp, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connectResult == 0 else { throw PairingError.noHostResolved }
+
+        var buffer = [UInt8]()
+        var byte: UInt8 = 0
+        while buffer.count < 4096 {
+            let n = read(fd, &byte, 1)
+            if n <= 0 { break }
+            if byte == 0x0A { break }
+            buffer.append(byte)
         }
 
-        // Fetch the code from the localhost-only endpoint
-        let delegate = TLSPinningDelegate(caCertData: nil)
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 5
-        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-
-        struct LocalCodeResponse: Decodable {
-            let code: String
-        }
-
-        let (data, response) = try await session.data(from: url)
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode) else {
-            throw PairingError.noHostResolved
-        }
-
-        let localCode = try JSONDecoder().decode(LocalCodeResponse.self, from: data)
-
-        // Run the full pairing protocol with the fetched code
-        return try await pair(sensor: sensor, code: localCode.code)
+        struct LocalCodeResponse: Decodable { let code: String }
+        let decoded = try JSONDecoder().decode(LocalCodeResponse.self, from: Data(buffer))
+        return decoded.code
     }
 
     // MARK: - Discovery

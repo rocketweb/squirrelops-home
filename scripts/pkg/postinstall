@@ -28,6 +28,48 @@ PLIST_NAME="com.squirrelops.sensor"
 PLIST_TEMPLATE="$INSTALL_DIR/com.squirrelops.sensor.plist"
 PLIST_DEST="/Library/LaunchDaemons/${PLIST_NAME}.plist"
 
+# Dedicated non-root service account the sensor daemon runs as, so an RCE in the
+# network-facing sensor is not root. The privileged helper authorizes this
+# account (see SquirrelOpsHelper/main.swift serviceAccountUID()).
+SENSOR_USER="_squirrelops"
+SENSOR_GROUP="_squirrelops"
+
+# ---------------------------------------------------------------------------
+# Step 0: Create the dedicated service account (idempotent)
+# ---------------------------------------------------------------------------
+create_service_account() {
+    if dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
+        echo "[postinstall] Service account ${SENSOR_USER} already exists."
+        return 0
+    fi
+    echo "[postinstall] Creating service account ${SENSOR_USER}..."
+    # Pick a free UID/GID in the hidden system-service range (300-499).
+    local new_id=""
+    for candidate in $(seq 300 499); do
+        if ! dscl . -list /Users UniqueID | awk '{print $2}' | grep -qx "$candidate"; then
+            new_id="$candidate"
+            break
+        fi
+    done
+    if [ -z "$new_id" ]; then
+        echo "[postinstall] WARNING: no free service UID found; sensor will run as root."
+        return 1
+    fi
+    dscl . -create "/Groups/${SENSOR_GROUP}" 2>/dev/null || true
+    dscl . -create "/Groups/${SENSOR_GROUP}" PrimaryGroupID "$new_id"
+    dscl . -create "/Users/${SENSOR_USER}"
+    dscl . -create "/Users/${SENSOR_USER}" RealName "SquirrelOps Sensor"
+    dscl . -create "/Users/${SENSOR_USER}" UserShell /usr/bin/false
+    dscl . -create "/Users/${SENSOR_USER}" UniqueID "$new_id"
+    dscl . -create "/Users/${SENSOR_USER}" PrimaryGroupID "$new_id"
+    dscl . -create "/Users/${SENSOR_USER}" NFSHomeDirectory /var/empty
+    dscl . -create "/Users/${SENSOR_USER}" IsHidden 1
+    echo "[postinstall] Created ${SENSOR_USER} (uid/gid ${new_id})."
+}
+
+RUN_AS_SERVICE_ACCOUNT=1
+create_service_account || RUN_AS_SERVICE_ACCOUNT=0
+
 # ---------------------------------------------------------------------------
 # Step 1: Create data directories
 # ---------------------------------------------------------------------------
@@ -134,6 +176,24 @@ else
     echo "[postinstall] WARNING: Plist template not found at $PLIST_TEMPLATE"
     echo "[postinstall] Sensor service will not be started automatically."
     exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Step 3b: Run the daemon as the non-root service account
+# ---------------------------------------------------------------------------
+# The plist template carries no UserName (it is shared with the per-user
+# LaunchAgent install). For the root .pkg deployment we inject it here and give
+# the account ownership of the directories it must read/write.
+if [ "$RUN_AS_SERVICE_ACCOUNT" = "1" ]; then
+    echo "[postinstall] Configuring daemon to run as ${SENSOR_USER}..."
+    /usr/libexec/PlistBuddy -c "Add :UserName string ${SENSOR_USER}" "$PLIST_DEST" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Set :UserName ${SENSOR_USER}" "$PLIST_DEST" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Add :GroupName string ${SENSOR_GROUP}" "$PLIST_DEST" 2>/dev/null \
+        || /usr/libexec/PlistBuddy -c "Set :GroupName ${SENSOR_GROUP}" "$PLIST_DEST" 2>/dev/null || true
+    # The sensor writes the DB, certs, secret store, and logs; the venv/python
+    # stays root-owned (read+execute only).
+    chown -R "${SENSOR_USER}:${SENSOR_GROUP}" "$DATA_DIR" "$LOG_DIR" 2>/dev/null || true
+    chown "${SENSOR_USER}:${SENSOR_GROUP}" "$CONFIG_FILE" 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------

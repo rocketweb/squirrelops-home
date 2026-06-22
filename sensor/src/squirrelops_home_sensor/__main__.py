@@ -759,7 +759,10 @@ async def run_sensor(
     await mdns.start()
 
     # Generate pairing code at startup so it's visible before the app connects
-    from squirrelops_home_sensor.api.routes_pairing import _init_pairing_state
+    from squirrelops_home_sensor.api.routes_pairing import (
+        _init_pairing_state,
+        _maybe_regenerate_code,
+    )
     _init_pairing_state(app.state, config)
 
     # Display the pairing code prominently and write to file
@@ -767,12 +770,36 @@ async def run_sensor(
     if isinstance(pairing_code, str) and pairing_code:
         _display_pairing_code(pairing_code, config)
 
+    # 9b. Local pairing over a peer-credential-verified Unix socket. Replaces the
+    # old loopback-TCP /pairing/local/code, which disclosed the code to any
+    # local process. The connecting app must be root or the console user (and,
+    # if a codesign requirement is configured, satisfy it).
+    from squirrelops_home_sensor.api.local_pairing import LocalPairingServer
+
+    def _get_local_pairing_code() -> str:
+        state = _init_pairing_state(app.state, config)
+        _maybe_regenerate_code(state)
+        return state["code"]
+
+    local_pairing = LocalPairingServer(
+        config.get("pairing", {}).get("socket_path", "/tmp/squirrelops-pairing.sock"),
+        _get_local_pairing_code,
+        code_requirement=config.get("pairing", {}).get("local_peer_requirement"),
+    )
+    try:
+        await local_pairing.start()
+    except Exception:
+        logger.warning("Failed to start local pairing socket", exc_info=True)
+
     try:
         await server.serve()
     except asyncio.CancelledError:
         logger.info("Shutdown signal received -- stopping sensor")
     finally:
         # Graceful shutdown: stop mDNS, scan loop, scouts, decoys, close DB
+        logger.info("Stopping local pairing socket...")
+        await local_pairing.stop()
+
         logger.info("Stopping mDNS advertisement...")
         await mdns.stop()
 

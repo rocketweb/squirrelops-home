@@ -967,11 +967,14 @@ public struct DecoyCredentialEntry: Codable, Sendable, Identifiable, Equatable, 
 }
 
 public struct HealthResponse: Codable, Sendable {
-    public let version: String
-    public let sensorId: String
+    // version and sensor_id are no longer returned by the unauthenticated
+    // /system/health probe (they are not disclosed before authentication), so
+    // they are optional here. Sensor identity comes from the pairing challenge.
+    public let version: String?
+    public let sensorId: String?
     public let uptimeSeconds: Double
 
-    public init(version: String, sensorId: String, uptimeSeconds: Double) {
+    public init(version: String? = nil, sensorId: String? = nil, uptimeSeconds: Double) {
         self.version = version
         self.sensorId = sensorId
         self.uptimeSeconds = uptimeSeconds
