@@ -2,32 +2,25 @@
 import asyncio
 from datetime import UTC
 
-from squirrelops_home_sensor import __version__
-
 
 class TestHealthEndpoint:
-    """GET /system/health -- no auth required."""
+    """GET /system/health -- unauthenticated liveness probe only."""
 
     def test_health_returns_200(self, client):
         response = client.get("/system/health")
         assert response.status_code == 200
 
-    def test_health_contains_required_fields(self, client):
+    def test_health_is_liveness_only(self, client):
         response = client.get("/system/health")
         data = response.json()
-        assert "version" in data
-        assert "sensor_id" in data
+        assert data["status"] == "ok"
         assert "uptime_seconds" in data
 
-    def test_health_version_matches_config(self, client, sensor_config):
-        response = client.get("/system/health")
-        data = response.json()
-        assert data["version"] == __version__
-
-    def test_health_sensor_id_matches_config(self, client, sensor_config):
-        response = client.get("/system/health")
-        data = response.json()
-        assert data["sensor_id"] == sensor_config["sensor_id"]
+    def test_health_does_not_leak_version_or_sensor_id(self, client):
+        """Unauthenticated callers must not learn the version or sensor_id."""
+        data = client.get("/system/health").json()
+        assert "version" not in data
+        assert "sensor_id" not in data
 
     def test_health_uptime_is_non_negative(self, client):
         response = client.get("/system/health")

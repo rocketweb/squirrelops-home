@@ -190,20 +190,17 @@ async def get_local_code(
     request: Request,
     config: dict = Depends(get_config),
 ):
-    """Return the pairing code, but ONLY to localhost clients.
+    """Deprecated and disabled.
 
-    This allows the co-installed macOS app to auto-pair without the user
-    having to manually read a 6-digit code from the sensor logs.
+    This used to disclose the pairing code to any loopback TCP client, which let
+    any local process self-pair. Loopback TCP cannot carry peer credentials, so
+    local auto-pairing now happens over a peer-verified Unix socket (see
+    api/local_pairing.py). Always returns 403.
     """
-    client_host = request.client.host if request.client else None
-    if client_host not in ("127.0.0.1", "::1", "localhost"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This endpoint is only available from localhost.",
-        )
-    ps = _init_pairing_state(request.app.state, config)
-    _maybe_regenerate_code(ps)
-    return LocalCodeResponse(code=ps["code"])
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Local pairing has moved to the verified pairing socket.",
+    )
 
 
 @router.get("/code/challenge", response_model=ChallengeResponse)

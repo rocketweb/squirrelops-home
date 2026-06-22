@@ -529,7 +529,7 @@ struct SettingsView: View {
                 infoRow("URL", value: sensor.baseURL.absoluteString)
             }
             if let info = appState.sensorInfo {
-                infoRow("Sensor Version", value: info.version)
+                infoRow("Sensor Version", value: info.version ?? "Unknown")
                 infoRow("Uptime", value: formatUptime(info.uptimeSeconds))
             }
         }

@@ -3,6 +3,11 @@ import Foundation
 import Darwin
 #endif
 import os
+import SystemConfiguration
+
+// Optional dedicated service account the sensor may run as (provisioned by the
+// installer for a non-root .pkg deployment). Resolved at startup if present.
+let sensorServiceAccount = "_squirrelops"
 
 let logger = Logger(subsystem: "com.squirrelops.helper", category: "main")
 
@@ -43,10 +48,12 @@ guard bindResult == 0 else {
     exit(1)
 }
 
-// Restrict socket access: owner (root) + group only, no world access. The
-// legitimate caller is the SquirrelOps sensor, which runs as a root
-// LaunchDaemon, so root is the only identity that ever needs to connect.
-chmod(socketPath, 0o660)
+// The sensor runs either as root (system LaunchDaemon / .pkg install) or as the
+// logged-in console user (per-user LaunchAgent / dev install), so the socket
+// must be connectable by a non-root process. Authorization is enforced per
+// connection by the peer-UID check below (root, the current console user, or a
+// provisioned service account), NOT by these filesystem bits.
+chmod(socketPath, 0o666)
 
 guard listen(serverFd, 5) == 0 else {
     logger.error("Failed to listen: \(String(cString: strerror(errno)))")
@@ -69,10 +76,10 @@ while true {
         continue
     }
 
-    // Verify peer credentials: the only legitimate caller is the root sensor,
-    // so accept root (UID 0) exclusively. This is the application-layer gate
-    // that backs the 0660 socket permissions; even if those were ever loosened,
-    // a non-root local process still could not drive privileged operations.
+    // Verify peer credentials. Authorize only the identities the sensor can run
+    // as: root, the current console (logged-in) user, or a provisioned service
+    // account. This supports both the root daemon and the per-user agent
+    // deployments while still rejecting other local accounts and daemons.
     var peerUID: uid_t = 0
     var peerGID: gid_t = 0
     guard getpeereid(clientFd, &peerUID, &peerGID) == 0 else {
@@ -80,7 +87,7 @@ while true {
         close(clientFd)
         continue
     }
-    guard peerUID == 0 else {
+    guard isAuthorizedPeer(peerUID) else {
         logger.warning("Rejected RPC connection from unauthorized UID \(peerUID)")
         close(clientFd)
         continue
@@ -113,6 +120,32 @@ while true {
     // Write response and close.
     sendAll(fd: clientFd, data: response)
     close(clientFd)
+}
+
+/// UID of the current console (logged-in) user, or nil if no user is at the
+/// login window. The per-user LaunchAgent sensor runs as this user.
+func currentConsoleUID() -> uid_t? {
+    var uid: uid_t = 0
+    let name = SCDynamicStoreCopyConsoleUser(nil, &uid, nil) as String?
+    guard let name, !name.isEmpty, name != "loginwindow", uid != 0 else {
+        return nil
+    }
+    return uid
+}
+
+/// UID of the optional dedicated service account, if it has been provisioned.
+func serviceAccountUID() -> uid_t? {
+    guard let pw = getpwnam(sensorServiceAccount) else { return nil }
+    return pw.pointee.pw_uid
+}
+
+/// Whether a connecting peer UID is allowed to drive privileged operations.
+/// Permits root, the current console user, and a provisioned service account.
+func isAuthorizedPeer(_ uid: uid_t) -> Bool {
+    if uid == 0 { return true }
+    if let console = currentConsoleUID(), uid == console { return true }
+    if let svc = serviceAccountUID(), uid == svc { return true }
+    return false
 }
 
 /// Read bytes until newline from a socket fd (max 64 KB). Returns nil on EOF,

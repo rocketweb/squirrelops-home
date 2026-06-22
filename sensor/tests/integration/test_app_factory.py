@@ -28,13 +28,15 @@ class TestAppFactory:
         assert "/ws/events" in route_paths
 
     def test_health_endpoint_no_auth_required(self, client):
-        """Health endpoint must work without authentication."""
+        """Health endpoint must work without authentication, liveness only."""
         response = client.get("/system/health")
         assert response.status_code == 200
         data = response.json()
-        assert "version" in data
-        assert "sensor_id" in data
+        assert data["status"] == "ok"
         assert "uptime_seconds" in data
+        # No identifying details are leaked to unauthenticated callers.
+        assert "version" not in data
+        assert "sensor_id" not in data
 
 
 class TestDefaultDenyAuth:

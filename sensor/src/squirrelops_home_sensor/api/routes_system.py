@@ -49,8 +49,10 @@ class ProfileUpdateRequest(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    version: str
-    sensor_id: str
+    # Unauthenticated liveness probe. Deliberately omits version and sensor_id
+    # so a LAN host cannot fingerprint the sensor before authenticating; the
+    # app reads sensor identity from the (authenticated) pairing challenge.
+    status: str = "ok"
     uptime_seconds: float
 
 
@@ -86,15 +88,11 @@ class UpdateCheckResponse(BaseModel):
 # ---------- Routes ----------
 
 @router.get("/health", response_model=HealthResponse)
-async def health(request: Request, config: dict = Depends(get_config)):
-    """Health check endpoint. No authentication required."""
+async def health(request: Request):
+    """Unauthenticated liveness probe. Returns status and uptime only."""
     start_time = getattr(request.app.state, "start_time", time.time())
     uptime = time.time() - start_time
-    return HealthResponse(
-        version=__version__,
-        sensor_id=config.get("sensor_id", "unknown"),
-        uptime_seconds=round(uptime, 2),
-    )
+    return HealthResponse(status="ok", uptime_seconds=round(uptime, 2))
 
 
 @router.get("/status", response_model=StatusResponse)
