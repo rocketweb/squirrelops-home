@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from fastapi import APIRouter, Depends
 from squirrelops_home_sensor.api.deps import get_config, verify_client_cert
 from squirrelops_home_sensor.config import _FLAT_KEY_MAP
 from squirrelops_home_sensor.integrations.home_assistant import HomeAssistantClient
+from squirrelops_home_sensor.netvalidation import is_safe_lan_url
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,12 @@ router = APIRouter(prefix="/config", tags=["config"])
 
 # Fields that cannot be overwritten by PUT /config
 PROTECTED_FIELDS = {"sensor_id", "version"}
+
+# Keys inside the "sensor" section that are immutable at runtime: they decide
+# where the DB, CA, and encrypted secret store live (data_dir) or are the secret
+# key material itself (secret_passphrase). Allowing a paired client to change
+# them would relocate or expose trust state.
+IMMUTABLE_SENSOR_KEYS = {"data_dir", "secret_passphrase", "sensor_id"}
 
 # Keys that are runtime-only and should not be persisted
 RUNTIME_ONLY_FIELDS = {"sensor"}
@@ -33,6 +41,14 @@ ALLOWED_CONFIG_KEYS = {
     "sensor_name", "profile", "learning_mode", "scan_interval_seconds",
     "max_decoys", "alert_methods", "subnet", "credential_filename",
 }
+
+
+def _safe_filename(value: Any) -> str:
+    """Reduce a user-supplied value to a bare filename (no path components)."""
+    base = os.path.basename(str(value))
+    if not base or base in (".", "..") or "/" in base or "\\" in base:
+        return "passwords.txt"
+    return base
 
 
 def _persist_config(config: dict[str, Any]) -> None:
@@ -90,6 +106,21 @@ async def update_config(
     for key, value in body.items():
         if key in PROTECTED_FIELDS or key not in ALLOWED_CONFIG_KEYS:
             continue
+        # Merge the "sensor" section sub-key by sub-key (never whole-replace) and
+        # drop immutable path/secret fields, so data_dir and secret_passphrase
+        # cannot be changed at runtime.
+        if key == "sensor":
+            if isinstance(value, dict):
+                section = config.setdefault("sensor", {})
+                for sub_key, sub_val in value.items():
+                    if sub_key in IMMUTABLE_SENSOR_KEYS:
+                        continue
+                    section[sub_key] = sub_val
+            continue
+        # The credential filename is planted on disk by decoys; force it to a
+        # bare filename so it cannot become a path-traversal write target.
+        if key == "credential_filename":
+            value = _safe_filename(value)
         # Map legacy flat keys into the nested config structure so they
         # actually take effect at runtime (the Settings model only reads
         # nested keys like network.subnet, not top-level "subnet").
@@ -137,6 +168,12 @@ async def get_ha_status(
     """Return Home Assistant connection status."""
     ha_cfg = config.get("home_assistant", {})
     if not ha_cfg.get("enabled") or not ha_cfg.get("url") or not ha_cfg.get("token"):
+        return {"connected": False, "device_count": 0}
+
+    # SSRF guard: only fetch from a private LAN host. A config-supplied URL must
+    # never let the sensor reach public or cloud-metadata endpoints.
+    if not is_safe_lan_url(ha_cfg["url"]):
+        logger.warning("Blocked Home Assistant status fetch to non-LAN URL: %s", ha_cfg["url"])
         return {"connected": False, "device_count": 0}
 
     client = HomeAssistantClient(url=ha_cfg["url"], token=ha_cfg["token"])

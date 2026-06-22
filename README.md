@@ -97,19 +97,35 @@ The sensor adapts to available resources:
 
 ### Sensor — Linux/NAS (Docker)
 
+Install from a pinned release and verify its checksum before running it, rather than piping an unverified script straight into a root shell. Each release publishes `install.sh` and `install.sh.sha256` on the [Releases page](https://github.com/rocketweb/squirrelops-home/releases).
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rocketweb/squirrelops-home/main/scripts/install.sh | sudo bash
+VERSION=v1.1.3   # pick a released version
+base="https://github.com/rocketweb/squirrelops-home/releases/download/${VERSION}"
+curl -fsSLO "${base}/install.sh"
+curl -fsSLO "${base}/install.sh.sha256"
+shasum -a 256 -c install.sh.sha256   # must print: install.sh: OK
+less install.sh                      # review before running
+sudo bash install.sh
 ```
 
 Installs the sensor only on any Linux host with Docker (ARM64 and x86_64). The dashboard/control plane is the macOS app and is installed separately on a Mac. The sensor exposes port 8443 with TLS.
 
 ### Sensor — macOS (launchd)
 
+Same verify-then-run flow. Requires Python 3.11+. Installs as a launchd agent under `~/.squirrelops/sensor/`.
+
 ```bash
-curl -fsSL https://get.squirrelops.io/install-macos.sh | sh
+VERSION=v1.1.3
+base="https://github.com/rocketweb/squirrelops-home/releases/download/${VERSION}"
+curl -fsSLO "${base}/install-macos.sh"
+curl -fsSLO "${base}/install-macos.sh.sha256"
+shasum -a 256 -c install-macos.sh.sha256   # must print: install-macos.sh: OK
+less install-macos.sh                       # review before running
+bash install-macos.sh
 ```
 
-Requires Python 3.11+. Installs as a launchd user agent at `~/.squirrelops/sensor/`.
+Prefer a notarized, code-signed `.pkg` from the Releases page when available, since macOS verifies its signature automatically.
 
 ### macOS App
 

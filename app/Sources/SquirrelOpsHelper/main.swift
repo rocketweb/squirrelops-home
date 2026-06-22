@@ -43,8 +43,9 @@ guard bindResult == 0 else {
     exit(1)
 }
 
-// Restrict socket access: owner (root) + group only, no world access.
-// On macOS, real user accounts (UID >= 500) in the "staff" group can connect.
+// Restrict socket access: owner (root) + group only, no world access. The
+// legitimate caller is the SquirrelOps sensor, which runs as a root
+// LaunchDaemon, so root is the only identity that ever needs to connect.
 chmod(socketPath, 0o660)
 
 guard listen(serverFd, 5) == 0 else {
@@ -68,7 +69,10 @@ while true {
         continue
     }
 
-    // Verify peer credentials: only allow root (UID 0) and real user accounts (UID >= 500)
+    // Verify peer credentials: the only legitimate caller is the root sensor,
+    // so accept root (UID 0) exclusively. This is the application-layer gate
+    // that backs the 0660 socket permissions; even if those were ever loosened,
+    // a non-root local process still could not drive privileged operations.
     var peerUID: uid_t = 0
     var peerGID: gid_t = 0
     guard getpeereid(clientFd, &peerUID, &peerGID) == 0 else {
@@ -76,15 +80,22 @@ while true {
         close(clientFd)
         continue
     }
-    guard peerUID == 0 || peerUID >= 500 else {
+    guard peerUID == 0 else {
         logger.warning("Rejected RPC connection from unauthorized UID \(peerUID)")
         close(clientFd)
         continue
     }
 
-    // Read one line
-    let fileHandle = FileHandle(fileDescriptor: clientFd, closeOnDealloc: true)
-    guard let data = readLine(from: fileHandle) else {
+    // Bound how long a single connection can hold the (synchronous) server.
+    // A receive timeout means a client that connects and never sends a full
+    // line is dropped after CLIENT_READ_TIMEOUT_SECONDS instead of stalling
+    // the accept loop forever.
+    var tv = timeval(tv_sec: 10, tv_usec: 0)
+    setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+
+    // Read one line directly from the fd (recv), so a read timeout surfaces as
+    // a clean nil rather than a FileHandle exception.
+    guard let data = readLineFromSocket(fd: clientFd) else {
         close(clientFd)
         continue
     }
@@ -99,19 +110,37 @@ while true {
         response = rpcErrorResponse(id: nil, error: .invalidRequest)
     }
 
-    // Write response
-    fileHandle.write(response)
+    // Write response and close.
+    sendAll(fd: clientFd, data: response)
+    close(clientFd)
 }
 
-/// Read bytes until newline from a file handle (max 64 KB).
-func readLine(from handle: FileHandle) -> Data? {
+/// Read bytes until newline from a socket fd (max 64 KB). Returns nil on EOF,
+/// error, receive timeout, or an over-long line.
+func readLineFromSocket(fd: Int32) -> Data? {
     let maxLineLength = 65536
     var buffer = Data()
+    var byte: UInt8 = 0
     while true {
-        let chunk = handle.readData(ofLength: 1)
-        if chunk.isEmpty { return buffer.isEmpty ? nil : buffer }
-        if chunk[0] == 0x0A { return buffer } // newline
-        buffer.append(chunk)
+        let n = recv(fd, &byte, 1, 0)
+        if n == 0 { return buffer.isEmpty ? nil : buffer } // EOF
+        if n < 0 { return nil } // error or SO_RCVTIMEO timeout (EAGAIN)
+        if byte == 0x0A { return buffer } // newline
+        buffer.append(byte)
         if buffer.count > maxLineLength { return nil }
+    }
+}
+
+/// Write all bytes of ``data`` to a socket fd, handling partial sends.
+func sendAll(fd: Int32, data: Data) {
+    data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+        guard var ptr = raw.baseAddress else { return }
+        var remaining = raw.count
+        while remaining > 0 {
+            let n = send(fd, ptr, remaining, 0)
+            if n <= 0 { return }
+            ptr = ptr.advanced(by: n)
+            remaining -= n
+        }
     }
 }

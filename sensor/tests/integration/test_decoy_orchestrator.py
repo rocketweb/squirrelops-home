@@ -379,6 +379,43 @@ class TestConnectionHandler:
         assert len(trip_calls) >= 1
 
     @pytest.mark.asyncio
+    async def test_connection_from_worker_thread_publishes_trip_event(self, orchestrator):
+        """A connection raised on a non-event-loop thread (as the HTTP-emulator
+        decoys do via ThreadingHTTPServer) must still publish decoy.trip.
+
+        Regression test: the orchestrator previously scheduled the async handler
+        with asyncio.get_event_loop().create_task(), which raises RuntimeError on
+        a thread with no running loop. The emulator swallows callback exceptions,
+        so the trip was silently dropped and no alert ever fired.
+        """
+        decoy = FakeDecoy(decoy_id=1, name="test", port=9999)
+        await orchestrator.deploy_decoy(decoy)
+
+        event = DecoyConnectionEvent(
+            source_ip="192.168.1.99",
+            source_port=54321,
+            dest_port=9999,
+            protocol="tcp",
+            timestamp=datetime.now(UTC),
+            request_path="/api/health",
+        )
+
+        def _worker():
+            # Mirror clownpeanuts emulator: callback runs on a worker thread and
+            # any exception it raises is caught and swallowed.
+            try:
+                decoy._notify_connection(event)
+            except Exception:
+                pass
+
+        await asyncio.to_thread(_worker)
+        await asyncio.sleep(0.1)
+
+        calls = orchestrator._event_bus.publish.call_args_list
+        trip_calls = [c for c in calls if c[0][0] == "decoy.trip"]
+        assert len(trip_calls) >= 1
+
+    @pytest.mark.asyncio
     async def test_credential_trip_publishes_credential_event(self, orchestrator):
         """A connection with credential_used should publish decoy.credential_trip."""
         decoy = FakeDecoy(decoy_id=1, name="test", port=9999)

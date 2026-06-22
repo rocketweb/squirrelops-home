@@ -195,6 +195,11 @@ class DecoyOrchestrator:
         self._canary_domain = canary_domain
         self._credential_filename = credential_filename or "passwords.txt"
         self._records: dict[int, DecoyRecord] = {}
+        # The event loop that owns this orchestrator. Captured on deploy (which
+        # always runs on the loop) so connection callbacks raised on non-loop
+        # threads (HTTP-emulator decoys use ThreadingHTTPServer) can schedule
+        # the async handler back onto the loop thread-safely.
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # -----------------------------------------------------------------
     # Selection
@@ -430,6 +435,9 @@ class DecoyOrchestrator:
         Args:
             decoy: The BaseDecoy instance to deploy.
         """
+        # Capture the running loop so threaded decoy callbacks can reach it.
+        self._loop = asyncio.get_running_loop()
+
         # Register connection callback (closure captures decoy identity)
         decoy.on_connection = lambda event, _did=decoy.decoy_id, _dname=decoy.name: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
 
@@ -616,6 +624,9 @@ class DecoyOrchestrator:
         if record is None:
             raise KeyError(f"Decoy {decoy_id} not found")
 
+        # Ensure the loop is captured for threaded connection callbacks.
+        self._loop = asyncio.get_running_loop()
+
         await record.decoy.stop()
 
         # Rebuild from DB to pick up any config changes
@@ -666,8 +677,26 @@ class DecoyOrchestrator:
         Publishes decoy.trip for all connections, and additionally
         decoy.credential_trip if a planted credential was detected.
         Runs event publishing in a fire-and-forget task.
+
+        This is invoked synchronously from the decoy's connection callback,
+        which for HTTP-emulator decoys runs on a ThreadingHTTPServer worker
+        thread with no event loop. We therefore schedule the async handler
+        onto the captured orchestrator loop with run_coroutine_threadsafe,
+        which is safe to call from any thread (including the loop thread).
         """
-        asyncio.get_event_loop().create_task(self._async_handle_connection(event, decoy_id=decoy_id, decoy_name=decoy_name))
+        loop = self._loop
+        if loop is None:
+            logger.error(
+                "Decoy connection received before orchestrator loop was captured; "
+                "dropping trip (decoy_id=%s, decoy_name=%s)",
+                decoy_id,
+                decoy_name,
+            )
+            return
+        asyncio.run_coroutine_threadsafe(
+            self._async_handle_connection(event, decoy_id=decoy_id, decoy_name=decoy_name),
+            loop,
+        )
 
     async def _async_handle_connection(self, event: DecoyConnectionEvent, *, decoy_id: int | None = None, decoy_name: str | None = None) -> None:
         """Async handler for connection events."""
@@ -680,6 +709,7 @@ class DecoyOrchestrator:
                 "dest_port": event.dest_port,
                 "protocol": event.protocol,
                 "request_path": event.request_path,
+                "credential_used": event.credential_used,
                 "timestamp": event.timestamp.isoformat(),
                 "decoy_id": decoy_id,
                 "decoy_name": decoy_name,

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from squirrelops_home_sensor.api.deps import get_db, get_privileged_ops, verify_client_cert
+from squirrelops_home_sensor.netvalidation import is_safe_scan_target
 from squirrelops_home_sensor.scanner.service_names import get_service_name
 
 router = APIRouter(prefix="/ports", tags=["ports"])
@@ -131,6 +132,21 @@ async def probe_ports(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Maximum 50 ports per probe request",
+        )
+
+    # The target reaches nmap argv in the privileged layer. Only allow a
+    # private LAN IPv4 address: this blocks option-injection (leading '-'),
+    # hostnames, and off-LAN / cloud-metadata SSRF amplification.
+    if not is_safe_scan_target(body.ip_address):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ip_address must be a private LAN IPv4 address",
+        )
+
+    if any(not (1 <= p <= 65535) for p in body.ports):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ports must be in the range 1-65535",
         )
 
     results = await priv_ops.service_scan(

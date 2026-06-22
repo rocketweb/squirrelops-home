@@ -180,6 +180,16 @@ class TestLinuxPrivilegedOpsServiceScan:
 
         assert results == []
 
+    @pytest.mark.asyncio
+    async def test_service_scan_rejects_argument_injection_target(self) -> None:
+        """A non-IPv4 target (e.g. an nmap option) must be rejected before exec."""
+        ops = LinuxPrivilegedOps()
+        with patch("asyncio.create_subprocess_exec") as spawn:
+            for bad in ("--script=http-vuln", "-oG/tmp/x", "evil.example.com"):
+                with pytest.raises(ValueError):
+                    await ops.service_scan(targets=[bad], ports=[80])
+            spawn.assert_not_called()
+
 
 class TestLinuxPrivilegedOpsDNS:
     """Test DNS sniffing with mocked scapy."""

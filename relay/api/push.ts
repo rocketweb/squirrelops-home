@@ -90,23 +90,46 @@ function validateBody(
     return { ok: false, error: "Request body must be a JSON object" };
   }
   const rec = obj as Record<string, unknown>;
-  if (typeof rec.device_token !== "string" || rec.device_token.length === 0) {
-    return { ok: false, error: "Missing or empty 'device_token'" };
+  // An APNs device token is hex. Validating it (rather than interpolating it
+  // raw into the APNs URL path) prevents path/option injection into the
+  // upstream request.
+  if (
+    typeof rec.device_token !== "string" ||
+    !/^[0-9a-fA-F]{32,200}$/.test(rec.device_token)
+  ) {
+    return { ok: false, error: "Missing or invalid 'device_token'" };
   }
   if (typeof rec.title !== "string" || rec.title.length === 0) {
     return { ok: false, error: "Missing or empty 'title'" };
   }
+  // Cap attacker-controlled text fields so a single push cannot be inflated.
+  const cap = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s);
   return {
     ok: true,
     data: {
       device_token: rec.device_token,
-      title: rec.title,
-      body: typeof rec.body === "string" ? rec.body : undefined,
-      category: typeof rec.category === "string" ? rec.category : undefined,
-      severity: typeof rec.severity === "string" ? rec.severity : undefined,
+      title: cap(rec.title, 256),
+      body: typeof rec.body === "string" ? cap(rec.body, 1024) : undefined,
+      category: typeof rec.category === "string" ? cap(rec.category, 64) : undefined,
+      severity: typeof rec.severity === "string" ? cap(rec.severity, 32) : undefined,
     },
   };
 }
+
+/** Constant-time string comparison to avoid leaking the secret via timing. */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
+// Reject bodies larger than this before parsing (defense in depth atop the
+// platform limit). APNs alert payloads are well under 4 KB.
+const MAX_BODY_BYTES = 8 * 1024;
 
 // ---------------------------------------------------------------------------
 // Edge Function handler
@@ -134,9 +157,18 @@ export default async function handler(request: Request): Promise<Response> {
   const token = authHeader.startsWith("Bearer ")
     ? authHeader.slice(7)
     : "";
-  if (token !== relaySecret) {
+  if (!timingSafeEqual(token, relaySecret)) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  // Reject oversized bodies before reading them into memory.
+  const contentLength = Number(request.headers.get("Content-Length") ?? "0");
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    return new Response(JSON.stringify({ error: "Payload too large" }), {
+      status: 413,
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -222,11 +254,10 @@ export default async function handler(request: Request): Promise<Response> {
       body: JSON.stringify(apnsPayload),
     });
   } catch (err) {
+    // Log the detail server-side only; do not leak upstream internals.
+    console.error("APNs request failed:", err instanceof Error ? err.message : String(err));
     return new Response(
-      JSON.stringify({
-        error: "APNs request failed",
-        detail: err instanceof Error ? err.message : String(err),
-      }),
+      JSON.stringify({ error: "Upstream push failed" }),
       { status: 502, headers: { "Content-Type": "application/json" } },
     );
   }
@@ -234,17 +265,15 @@ export default async function handler(request: Request): Promise<Response> {
   if (!apnsResp.ok) {
     let apnsError: string;
     try {
-      const errBody = await apnsResp.text();
-      apnsError = errBody;
+      apnsError = await apnsResp.text();
     } catch {
       apnsError = `HTTP ${apnsResp.status}`;
     }
+    // Log the APNs reason (BadDeviceToken, etc.) server-side only; return a
+    // generic error so the caller cannot use the relay as a token oracle.
+    console.error("APNs rejected push:", apnsResp.status, apnsError);
     return new Response(
-      JSON.stringify({
-        error: "APNs rejected the push",
-        status: apnsResp.status,
-        detail: apnsError,
-      }),
+      JSON.stringify({ error: "Upstream push rejected" }),
       { status: 502, headers: { "Content-Type": "application/json" } },
     );
   }

@@ -98,8 +98,12 @@ async def _authenticate(
     token = raw.get("token")
 
     if fingerprint:
+        # A cert fingerprint is an identifier derived from the public client
+        # cert, not a secret, so it only authenticates a locally-paired client
+        # over the non-TLS dev path. Require is_local=1 to match deps.py and the
+        # token path below (previously this path omitted the constraint).
         cursor = await db.execute(
-            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ?",
+            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ? AND is_local = 1",
             (fingerprint,),
         )
         row = await cursor.fetchone()
