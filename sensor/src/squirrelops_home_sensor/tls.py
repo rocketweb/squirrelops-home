@@ -25,6 +25,8 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 )
 from cryptography.x509.oid import NameOID
 
+from squirrelops_home_sensor.fsutil import write_text_atomic
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -210,12 +212,12 @@ async def ensure_tls_certs(
     ca_path = data_dir / "ca.crt"
 
     data_dir.mkdir(parents=True, exist_ok=True)
-    cert_path.write_text(_cert_to_pem(server_cert))
-    key_path.write_text(_key_to_pem(server_key))
-    ca_path.write_text(_cert_to_pem(ca_cert))
-    # Restrict key file permissions
-    key_path.chmod(0o600)
-    ca_path.chmod(0o644)
+    # Write the private key atomically with owner-only perms from the start, so
+    # it is never briefly world-readable in the window between write and chmod.
+    # Certificates are public, so 0644 is fine.
+    write_text_atomic(key_path, _key_to_pem(server_key), mode=0o600)
+    write_text_atomic(cert_path, _cert_to_pem(server_cert), mode=0o644)
+    write_text_atomic(ca_path, _cert_to_pem(ca_cert), mode=0o644)
 
     logger.info("TLS PEM files written to %s", data_dir)
     return cert_path, key_path, ca_key, ca_cert

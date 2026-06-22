@@ -131,6 +131,25 @@ class VirtualIPManager:
         """Currently active virtual IPs (for scan loop exclusion)."""
         return set(self._active)
 
+    async def refresh_active_ips(self) -> None:
+        """Refresh the allocator's exclusion set from currently-online devices.
+
+        Without this, the allocator only excludes the gateway, sensor, and
+        already-allocated virtual IPs, so it could hand a mimic a virtual IP
+        already owned by a real statically-addressed host (NAS, NVR), causing an
+        ARP/IP conflict. Called before each allocation. Resilient by design: a
+        DB hiccup must never block decoy deployment.
+        """
+        try:
+            cursor = await self._db.execute(
+                "SELECT ip_address, mac_address FROM devices WHERE is_online = 1"
+            )
+            rows = await cursor.fetchall()
+            arp_like = [(row["ip_address"], row["mac_address"] or "") for row in rows]
+            self._allocator.set_active_ips(arp_like)
+        except Exception:
+            logger.warning("Failed to refresh active IPs from devices", exc_info=True)
+
     async def is_available(self) -> bool:
         """Check if the privileged backend is available for IP alias operations."""
         return await self._ops.is_available()

@@ -209,23 +209,43 @@ def create_secret_store(config: dict[str, Any]) -> Any:
     """Create the platform-appropriate secret store.
 
     Passphrase resolution order:
-    1. Explicit ``sensor.secret_passphrase`` in config (if not the legacy default)
-    2. Auto-generated passphrase file (``data_dir/.secret_passphrase``)
-    3. Fresh install: generate a cryptographically random passphrase and persist it
-    4. Legacy install (secrets.enc exists but no passphrase file): fall back to
-       the old default with a warning so existing data remains accessible
+    1. ``SQUIRRELOPS_SECRET_PASSPHRASE`` environment variable. Preferred for
+       production: the key is injected at service start (launchd/systemd
+       credential) and never written to the data directory beside the
+       ciphertext it protects.
+    2. Explicit ``sensor.secret_passphrase`` in config (if not the legacy default).
+    3. Auto-generated passphrase file (``data_dir/.secret_passphrase``).
+    4. Fresh install: generate a cryptographically random passphrase and persist it.
+    5. Legacy install (secrets.enc exists but no passphrase file): the store is
+       migrated off the old hardcoded default by re-encrypting it under a fresh
+       random passphrase. If it cannot be decrypted with the legacy default, we
+       fail closed rather than silently using a constant key.
     """
+    import os as _os
     import secrets as _secrets
 
-    from squirrelops_home_sensor.secrets.encrypted_file import EncryptedFileStore
+    from cryptography.fernet import InvalidToken
+
+    from squirrelops_home_sensor.fsutil import write_text_atomic
+    from squirrelops_home_sensor.secrets.encrypted_file import (
+        EncryptedFileStore,
+        reencrypt_store,
+    )
 
     data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
     secrets_file = data_dir / "secrets.enc"
     passphrase_file = data_dir / ".secret_passphrase"
 
+    env_passphrase = _os.environ.get("SQUIRRELOPS_SECRET_PASSPHRASE")
     explicit = config.get("sensor", {}).get("secret_passphrase")
 
-    if explicit and explicit != "squirrelops-default":
+    def _persist_passphrase(value: str) -> None:
+        write_text_atomic(passphrase_file, value, mode=0o600)
+
+    if env_passphrase:
+        # Injected at runtime; do not persist it next to the ciphertext.
+        passphrase = env_passphrase
+    elif explicit and explicit != "squirrelops-default":
         # User provided an explicit passphrase — use it directly
         passphrase = explicit
     elif passphrase_file.exists():
@@ -234,18 +254,29 @@ def create_secret_store(config: dict[str, Any]) -> Any:
     elif not secrets_file.exists():
         # Fresh install — generate a strong passphrase and persist it
         passphrase = _secrets.token_urlsafe(32)
-        passphrase_file.parent.mkdir(parents=True, exist_ok=True)
-        passphrase_file.write_text(passphrase)
-        passphrase_file.chmod(0o600)
+        _persist_passphrase(passphrase)
         logger.info("Generated new secret store passphrase at %s", passphrase_file)
     else:
-        # Legacy install: secrets.enc exists but no passphrase file.
-        # Fall back to the old default so existing encrypted data stays accessible.
-        passphrase = "squirrelops-default"
+        # Legacy install: secrets.enc exists but no passphrase file. Migrate it
+        # off the old hardcoded default key onto a fresh random passphrase.
+        new_passphrase = _secrets.token_urlsafe(32)
+        try:
+            reencrypt_store(
+                secrets_file,
+                old_password="squirrelops-default",
+                new_password=new_passphrase,
+            )
+        except InvalidToken as exc:
+            raise RuntimeError(
+                f"Existing secret store at {secrets_file} cannot be decrypted "
+                "and no passphrase is available. Set SQUIRRELOPS_SECRET_PASSPHRASE "
+                "or sensor.secret_passphrase, or remove the file to re-pair."
+            ) from exc
+        _persist_passphrase(new_passphrase)
+        passphrase = new_passphrase
         logger.warning(
-            "Using legacy default passphrase for secret store. "
-            "Set sensor.secret_passphrase in config or delete %s "
-            "to auto-generate a secure passphrase on next restart.",
+            "Migrated legacy secret store at %s off the default passphrase onto "
+            "a freshly generated one.",
             secrets_file,
         )
 

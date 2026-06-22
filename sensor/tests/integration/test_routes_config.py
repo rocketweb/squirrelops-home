@@ -96,6 +96,24 @@ class TestUpdateConfig:
         response = client.put("/config", json={})
         assert response.status_code == 200
 
+    def test_update_cannot_change_sensor_data_dir(self, client):
+        """data_dir governs where the DB, CA, and secret store live and must be
+        immutable at runtime (otherwise a paired client redirects trust state)."""
+        resp = client.put("/config", json={"sensor": {"data_dir": "/etc/evil"}})
+        assert resp.status_code == 200
+        assert resp.json().get("sensor", {}).get("data_dir") != "/etc/evil"
+
+    def test_update_cannot_set_secret_passphrase(self, client):
+        resp = client.put("/config", json={"sensor": {"secret_passphrase": "attacker"}})
+        assert "secret_passphrase" not in resp.json().get("sensor", {})
+
+    def test_update_sanitizes_credential_filename_path_traversal(self, client):
+        resp = client.put("/config", json={"credential_filename": "../../etc/passwd"})
+        # Persisted as a bare filename, never a traversal path.
+        cfg = resp.json()
+        cred = cfg.get("decoys", {}).get("credential_filename") or cfg.get("credential_filename")
+        assert cred is None or ("/" not in cred and ".." not in cred)
+
 
 class TestGetAlertMethods:
     """GET /config/alert-methods -- configured notification methods."""
@@ -227,6 +245,19 @@ class TestHAStatus:
         data = response.json()
         assert data["connected"] is True
         assert data["device_count"] == 3
+
+    @patch("squirrelops_home_sensor.api.routes_config.HomeAssistantClient")
+    def test_ha_status_blocks_ssrf_to_non_lan_url(self, mock_client_cls, client, sensor_config):
+        """A public / metadata HA URL must be refused before any server-side fetch."""
+        sensor_config["home_assistant"] = {
+            "enabled": True,
+            "url": "http://169.254.169.254/latest/meta-data",
+            "token": "test-token",
+        }
+        response = client.get("/config/ha-status")
+        data = response.json()
+        assert data["connected"] is False
+        mock_client_cls.assert_not_called()
 
     @patch("squirrelops_home_sensor.api.routes_config.HomeAssistantClient")
     def test_ha_status_connection_failed(self, mock_client_cls, client, sensor_config):

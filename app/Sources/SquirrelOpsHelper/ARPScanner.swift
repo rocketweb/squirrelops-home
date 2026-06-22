@@ -72,7 +72,7 @@ enum ARPScanner {
         }
 
         let octets = parts[0].split(separator: ".").compactMap { UInt32($0) }
-        guard octets.count == 4 else {
+        guard octets.count == 4, octets.allSatisfy({ $0 <= 255 }) else {
             throw RPCError.internalError("Invalid IP in CIDR: \(cidr)")
         }
 

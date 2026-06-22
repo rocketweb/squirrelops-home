@@ -135,6 +135,97 @@ class TestEncryptedFileStore:
 
 
 # ---------------------------------------------------------------------------
+# EncryptedFileStore hardening: per-store salt, file perms, legacy migration
+# ---------------------------------------------------------------------------
+
+class TestEncryptedFileStoreHardening:
+    """Per-store random salt, owner-only perms, and legacy-format migration."""
+
+    @pytest.mark.asyncio
+    async def test_two_stores_same_password_use_distinct_salts(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        from squirrelops_home_sensor.secrets.encrypted_file import _MAGIC, _SALT_LEN
+
+        s1 = EncryptedFileStore(tmp_path / "a.enc", master_password="same-pw")
+        s2 = EncryptedFileStore(tmp_path / "b.enc", master_password="same-pw")
+        await s1.set("k", "v")
+        await s2.set("k", "v")
+
+        raw1 = (tmp_path / "a.enc").read_bytes()
+        raw2 = (tmp_path / "b.enc").read_bytes()
+        assert raw1.startswith(_MAGIC) and raw2.startswith(_MAGIC)
+        salt1 = raw1[len(_MAGIC):len(_MAGIC) + _SALT_LEN]
+        salt2 = raw2[len(_MAGIC):len(_MAGIC) + _SALT_LEN]
+        assert salt1 != salt2
+
+    @pytest.mark.asyncio
+    async def test_written_file_is_owner_only(self, tmp_path: pathlib.Path) -> None:
+        import stat
+
+        path = tmp_path / "secrets.enc"
+        store = EncryptedFileStore(path, master_password="pw")
+        await store.set("k", "v")
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    @pytest.mark.asyncio
+    async def test_reads_and_migrates_legacy_fixed_salt_format(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        import base64
+        import json
+
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+        from squirrelops_home_sensor.secrets.encrypted_file import (
+            _ITERATIONS,
+            _LEGACY_SALT,
+            _MAGIC,
+        )
+
+        # Hand-write a store in the legacy raw-Fernet (fixed salt) format.
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
+                         salt=_LEGACY_SALT, iterations=_ITERATIONS)
+        key = base64.urlsafe_b64encode(kdf.derive(b"legacy-pw"))
+        legacy_ct = Fernet(key).encrypt(json.dumps({"old": "secret"}).encode())
+        path = tmp_path / "secrets.enc"
+        path.write_bytes(legacy_ct)
+
+        store = EncryptedFileStore(path, master_password="legacy-pw")
+        # Legacy data is readable...
+        assert await store.get("old") == "secret"
+        # ...and the next write migrates to the salted format.
+        await store.set("new", "value")
+        assert path.read_bytes().startswith(_MAGIC)
+        assert await store.get("old") == "secret"
+        assert await store.get("new") == "value"
+
+    @pytest.mark.asyncio
+    async def test_reencrypt_store_rekeys_under_new_password(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        from cryptography.fernet import InvalidToken
+
+        from squirrelops_home_sensor.secrets.encrypted_file import reencrypt_store
+
+        path = tmp_path / "secrets.enc"
+        old = EncryptedFileStore(path, master_password="old-pw")
+        await old.set("k", "v")
+
+        migrated = reencrypt_store(path, old_password="old-pw", new_password="new-pw")
+        assert migrated is True
+
+        new = EncryptedFileStore(path, master_password="new-pw")
+        assert await new.get("k") == "v"
+
+        stale = EncryptedFileStore(path, master_password="old-pw")
+        with pytest.raises(InvalidToken):
+            await stale.get("k")
+
+
+# ---------------------------------------------------------------------------
 # KeychainStore (mocked macOS security CLI)
 # ---------------------------------------------------------------------------
 

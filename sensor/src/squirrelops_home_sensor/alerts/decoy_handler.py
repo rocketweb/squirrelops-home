@@ -22,6 +22,13 @@ from squirrelops_home_sensor.alerts.types import (
     AlertType,
     severity_for_alert_type,
 )
+from squirrelops_home_sensor.db.queries import (
+    get_credential_by_value,
+    increment_decoy_connection_count,
+    increment_decoy_credential_trip_count,
+    insert_decoy_connection,
+    mark_credential_tripped,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +100,63 @@ class DecoyAlertHandler:
 
         except Exception:
             logger.exception("Failed to create alert for %s event", event_type)
+
+        # Persist the forensic connection record and counters independently, so
+        # a persistence failure can never suppress the alert created above.
+        try:
+            await self._persist_event(event_type, payload)
+        except Exception:
+            logger.exception("Failed to persist decoy %s record", event_type)
+
+    async def _persist_event(self, event_type: str, payload: dict[str, Any]) -> None:
+        """Record decoy hits in decoy_connections and update trip counters.
+
+        A ``decoy.trip`` records one connection row and increments the decoy's
+        connection_count. A ``decoy.credential_trip`` increments the credential
+        trip count and marks the matching planted credential as tripped. For
+        HTTP decoys both events fire for a single connection; only ``decoy.trip``
+        writes the connection row so there is no duplicate.
+        """
+        decoy_id = payload.get("decoy_id")
+        credential_used = payload.get("credential_used")
+        timestamp = payload.get("timestamp") or datetime.now(UTC).strftime(
+            "%Y-%m-%dT%H:%M:%S.%fZ"
+        )
+
+        if event_type == "decoy.trip":
+            if decoy_id is None:
+                return
+            source_ip = payload.get("source_ip", "unknown")
+            device = await self._lookup_device(source_ip)
+            source_mac = device["mac_address"] if device else None
+            credential_id = None
+            if credential_used:
+                cred = await get_credential_by_value(self._db, credential_used)
+                if cred:
+                    credential_id = cred["id"]
+            await insert_decoy_connection(
+                self._db,
+                decoy_id=decoy_id,
+                source_ip=source_ip,
+                port=int(payload.get("dest_port") or 0),
+                timestamp=timestamp,
+                source_mac=source_mac,
+                protocol=payload.get("protocol"),
+                request_path=payload.get("request_path"),
+                credential_used=credential_used,
+                credential_id=credential_id,
+            )
+            await increment_decoy_connection_count(self._db, decoy_id)
+
+        elif event_type == "decoy.credential_trip":
+            if decoy_id is not None:
+                await increment_decoy_credential_trip_count(self._db, decoy_id)
+            if credential_used:
+                cred = await get_credential_by_value(self._db, credential_used)
+                if cred:
+                    await mark_credential_tripped(
+                        self._db, cred["id"], tripped_at=timestamp
+                    )
 
     async def _lookup_device(self, source_ip: str) -> dict[str, Any] | None:
         """Look up a device record by IP address. Returns dict or None."""

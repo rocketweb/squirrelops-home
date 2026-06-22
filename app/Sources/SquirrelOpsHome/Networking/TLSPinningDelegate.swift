@@ -62,9 +62,16 @@ public final class TLSPinningDelegate: NSObject, URLSessionDelegate, @unchecked 
             return
         }
 
-        // Pin against stored CA cert. Sensor certificates are generated on
-        // local networks where users may connect by mDNS name, LAN IP, or
-        // localhost, so this validates the CA chain without hostname binding.
+        // Pin against the stored CA cert. Hostname/SAN binding is intentionally
+        // relaxed because users reach the sensor by mDNS name, LAN IP, or
+        // localhost while the server cert SAN only covers localhost, so a
+        // hostname policy would reject legitimate connections. The compensating
+        // controls that make this safe: the CA is generated per install, is
+        // unique, signs exactly one server certificate (no issuance path an
+        // attacker can use to mint another accepted leaf), its private key never
+        // touches disk in plaintext, and the channel is additionally protected
+        // by mutual TLS. A future hardening is to also pin the expected leaf
+        // public key (SPKI) captured at pairing time.
         guard let caDERData = Self.certificateDERData(from: caCertData),
               let caCert = SecCertificateCreateWithData(nil, caDERData as CFData) else {
             completionHandler(.cancelAuthenticationChallenge, nil)

@@ -315,7 +315,11 @@ class TestPromptConstruction:
     def test_empty_fingerprint_has_header_only(self) -> None:
         fp = CompositeFingerprint()
         prompt = _build_user_prompt(fp)
-        assert prompt == "Classify this network device based on the following signals:"
+        # Header is the classification instruction plus the untrusted-data
+        # guardrail; no signal lines for an empty fingerprint.
+        lines = prompt.split("\n")
+        assert lines[0].startswith("Classify this network device")
+        assert all(not line.startswith("- ") for line in lines)
 
 
 # ---------------------------------------------------------------------------

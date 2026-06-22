@@ -37,6 +37,35 @@ class TestAppFactory:
         assert "uptime_seconds" in data
 
 
+class TestDefaultDenyAuth:
+    """Protected routers must require auth even with no per-route override."""
+
+    def _app_without_auth_override(self, db, sensor_config):
+        app = create_app(sensor_config, ca_key=None, ca_cert=None)
+
+        async def override_db():
+            yield db
+
+        async def override_config():
+            return sensor_config
+
+        app.dependency_overrides[get_db] = override_db
+        app.dependency_overrides[get_config] = override_config
+        # verify_client_cert intentionally NOT overridden, so real auth runs.
+        return app
+
+    def test_public_endpoints_stay_open(self, db, sensor_config):
+        client = TestClient(self._app_without_auth_override(db, sensor_config))
+        assert client.get("/system/health").status_code == 200
+        assert client.get("/pairing/code/challenge").status_code == 200
+
+    def test_protected_endpoints_denied_without_client_cert(self, db, sensor_config):
+        client = TestClient(self._app_without_auth_override(db, sensor_config))
+        # No TLS client cert and no bearer -> verify_client_cert raises 403.
+        assert client.get("/devices").status_code == 403
+        assert client.get("/alerts").status_code == 403
+
+
 class TestDependencyInjection:
     """Test that FastAPI dependency injection is wired correctly."""
 

@@ -261,12 +261,16 @@ async def seed_grouped_alerts(db, count=2):
     return ids
 
 
-async def seed_pairing(db):
-    """Insert a test pairing record. Returns pairing ID."""
+async def seed_pairing(db, *, is_local: int = 1):
+    """Insert a test pairing record. Returns pairing ID.
+
+    Defaults to is_local=1 because tests authenticate over the non-TLS
+    cert_fingerprint fallback, which is reserved for local clients.
+    """
     cursor = await db.execute(
         """INSERT INTO pairing (client_name, client_cert_fingerprint, is_local, paired_at)
            VALUES (?, ?, ?, ?)""",
-        ("test-client", "sha256:testfp", 0, "2026-02-22T00:00:00Z"),
+        ("test-client", "sha256:testfp", is_local, "2026-02-22T00:00:00Z"),
     )
     await db.commit()
     return cursor.lastrowid

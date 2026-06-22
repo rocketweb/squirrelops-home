@@ -193,7 +193,9 @@ class MimicOrchestrator:
             logger.info("No HTTP routes or banners for device %d, skipping mimic", device_id)
             return False
 
-        # Allocate virtual IP
+        # Refresh the exclusion set from live devices so we never allocate a
+        # virtual IP already owned by a real host, then allocate.
+        await self._ip_manager.refresh_active_ips()
         ips = self._ip_manager._allocator.allocate(1)
         if not ips:
             logger.warning("No virtual IPs available for mimic deployment")

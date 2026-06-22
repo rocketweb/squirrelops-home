@@ -239,14 +239,30 @@ class LinuxPrivilegedOps(PrivilegedOperations):
     async def service_scan(
         self, targets: list[str], ports: list[int]
     ) -> list[ServiceResult]:
-        """Perform service scan using nmap subprocess."""
+        """Perform service scan using nmap subprocess.
+
+        Runs as root in the container, so it never trusts caller input: each
+        target must be a valid IPv4 address (rejecting option-injection like a
+        leading ``-`` or ``--script=``) and ports must be in range. The ``--``
+        separator additionally stops nmap from treating any target as an option.
+        """
+        from squirrelops_home_sensor.netvalidation import is_valid_ipv4
+
         if not targets or not ports:
             return []
 
+        for target in targets:
+            if not is_valid_ipv4(target):
+                raise ValueError(f"Invalid scan target: {target!r}")
+        for port in ports:
+            if not (1 <= int(port) <= 65535):
+                raise ValueError(f"Invalid port: {port!r}")
+
         port_str = ",".join(str(p) for p in ports)
 
+        # All options (including "-oX -") must precede "--"; targets follow it.
         proc = await asyncio.create_subprocess_exec(
-            "nmap", "-sV", "-p", port_str, *targets, "-oX", "-",
+            "nmap", "-sV", "-p", port_str, "-oX", "-", "--", *targets,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

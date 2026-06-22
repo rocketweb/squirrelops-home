@@ -283,11 +283,15 @@ class ScoutEngine:
         scheme = "https" if use_tls else "http"
         base_url = f"{scheme}://{ip}:{port}"
 
+        # Do NOT follow redirects: the target is an untrusted LAN device, and a
+        # 302 Location is a fingerprinting signal to record, not a URL to chase.
+        # Following it (with verify=False) would let a rogue device redirect the
+        # probe to loopback or off-LAN endpoints (SSRF). The sibling SSDP path is
+        # already hardened this way.
         async with httpx.AsyncClient(
             timeout=self._http_timeout,
             verify=False,
-            follow_redirects=True,
-            max_redirects=2,
+            follow_redirects=False,
             headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
         ) as client:
             # GET /

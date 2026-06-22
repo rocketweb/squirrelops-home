@@ -329,6 +329,69 @@ class TestDecoyIdPropagation:
         assert alert_new_events[0]["source_mac"] == "11:22:33:44:55:66"
 
 
+class TestDecoyPersistence:
+    """Decoy events should persist forensic records and increment counters."""
+
+    @pytest.mark.asyncio
+    async def test_trip_records_connection_and_increments_count(self, handler, bus, db):
+        from squirrelops_home_sensor.db import queries as q
+
+        decoy_id = await q.insert_decoy(
+            db, name="Share", decoy_type="file_share", bind_address="0.0.0.0",
+            port=445, created_at="2026-03-02T00:00:00Z", updated_at="2026-03-02T00:00:00Z",
+        )
+
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.5",
+            "source_port": 54321,
+            "dest_port": 445,
+            "protocol": "tcp",
+            "request_path": "/passwords.txt",
+            "timestamp": "2026-03-02T12:00:00Z",
+            "decoy_id": decoy_id,
+        })
+
+        conns = await q.list_decoy_connections(db, decoy_id=decoy_id)
+        assert len(conns) == 1
+        assert conns[0]["source_ip"] == "10.0.0.5"
+        assert conns[0]["port"] == 445
+
+        decoy = await q.get_decoy(db, decoy_id)
+        assert decoy["connection_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_credential_trip_increments_count_and_marks_credential(self, handler, bus, db):
+        from squirrelops_home_sensor.db import queries as q
+
+        decoy_id = await q.insert_decoy(
+            db, name="Share", decoy_type="file_share", bind_address="0.0.0.0",
+            port=445, created_at="2026-03-02T00:00:00Z", updated_at="2026-03-02T00:00:00Z",
+        )
+        cred_id = await q.insert_planted_credential(
+            db, credential_type="password", credential_value="admin:P@ssw0rd",
+            planted_location="/passwords.txt", created_at="2026-03-02T00:00:00Z",
+            decoy_id=decoy_id,
+        )
+
+        await bus.deliver("decoy.credential_trip", {
+            "source_ip": "10.0.0.99",
+            "source_port": 12345,
+            "dest_port": 445,
+            "credential_used": "admin:P@ssw0rd",
+            "request_path": "/passwords.txt",
+            "timestamp": "2026-03-02T12:05:00Z",
+            "detection_method": "decoy_http",
+            "decoy_id": decoy_id,
+        })
+
+        decoy = await q.get_decoy(db, decoy_id)
+        assert decoy["credential_trip_count"] == 1
+
+        cred = await q.get_planted_credential(db, cred_id)
+        assert cred["tripped"] == 1
+        assert cred["first_tripped_at"] is not None
+
+
 class TestNoIncidentGrouper:
     """Handler works without an incident grouper."""
 
