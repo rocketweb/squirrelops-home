@@ -17,6 +17,8 @@ class TestPairingChallenge:
     def test_challenge_returns_required_fields(self, client):
         response = client.get("/pairing/code/challenge")
         data = response.json()
+        assert data["protocol_version"] == 2
+        assert len(bytes.fromhex(data["challenge_id"])) == 16
         assert "challenge" in data
         assert "sensor_id" in data
         assert "sensor_name" in data
@@ -42,6 +44,18 @@ class TestPairingChallenge:
         r2 = client.get("/pairing/code/challenge")
         assert r1.json()["challenge"] != r2.json()["challenge"]
 
+    def test_setup_key_has_100_bits_of_random_material(self, client, app):
+        client.get("/pairing/code/challenge")
+        key = app.state.pairing_state["code"]
+        groups = key.split("-")
+        assert len(groups) == 5
+        assert all(len(group) == 4 for group in groups)
+
+    def test_challenge_creation_is_rate_limited_per_source(self, client):
+        for _ in range(10):
+            assert client.get("/pairing/code/challenge").status_code == 200
+        assert client.get("/pairing/code/challenge").status_code == 429
+
 
 class TestPairingVerify:
     """POST /pairing/verify -- HMAC verification and HKDF key derivation."""
@@ -50,39 +64,47 @@ class TestPairingVerify:
         """Helper: get challenge and extract the current pairing code from app state."""
         response = client.get("/pairing/code/challenge")
         data = response.json()
-        challenge_hex = data["challenge"]
         # Access the pairing code from the app's pairing state
         pairing_state = app.state.pairing_state
         code = pairing_state["code"]
-        return challenge_hex, code
+        return data, code
 
-    def _compute_hmac(self, challenge_hex: str, code: str) -> str:
-        challenge_bytes = bytes.fromhex(challenge_hex)
+    def _compute_hmac(self, challenge: dict, client_nonce: bytes, code: str) -> str:
+        transcript = (
+            b"squirrelops-pairing-v2\0"
+            + bytes.fromhex(challenge["challenge"])
+            + client_nonce
+            + challenge["sensor_id"].encode()
+        )
         return hmac.new(
-            code.encode("utf-8"), challenge_bytes, hashlib.sha256
+            code.encode("utf-8"), transcript, hashlib.sha256
         ).hexdigest()
 
     def test_verify_correct_hmac_returns_200(self, client, app):
-        challenge_hex, code = self._get_challenge_and_code(client, app)
-        hmac_response = self._compute_hmac(challenge_hex, code)
+        challenge, code = self._get_challenge_and_code(client, app)
+        client_nonce = os.urandom(32)
+        hmac_response = self._compute_hmac(challenge, client_nonce, code)
         response = client.post(
             "/pairing/verify",
             json={
+                "challenge_id": challenge["challenge_id"],
                 "response": hmac_response,
-                "client_nonce": os.urandom(32).hex(),
+                "client_nonce": client_nonce.hex(),
                 "client_name": "Test MacBook",
             },
         )
         assert response.status_code == 200
 
     def test_verify_returns_encrypted_ca_cert(self, client, app):
-        challenge_hex, code = self._get_challenge_and_code(client, app)
-        hmac_response = self._compute_hmac(challenge_hex, code)
+        challenge, code = self._get_challenge_and_code(client, app)
+        client_nonce = os.urandom(32)
+        hmac_response = self._compute_hmac(challenge, client_nonce, code)
         response = client.post(
             "/pairing/verify",
             json={
+                "challenge_id": challenge["challenge_id"],
                 "response": hmac_response,
-                "client_nonce": os.urandom(32).hex(),
+                "client_nonce": client_nonce.hex(),
                 "client_name": "Test MacBook",
             },
         )
@@ -91,13 +113,15 @@ class TestPairingVerify:
         assert "server_nonce" in data
 
     def test_verify_server_nonce_is_32_bytes(self, client, app):
-        challenge_hex, code = self._get_challenge_and_code(client, app)
-        hmac_response = self._compute_hmac(challenge_hex, code)
+        challenge, code = self._get_challenge_and_code(client, app)
+        client_nonce = os.urandom(32)
+        hmac_response = self._compute_hmac(challenge, client_nonce, code)
         response = client.post(
             "/pairing/verify",
             json={
+                "challenge_id": challenge["challenge_id"],
                 "response": hmac_response,
-                "client_nonce": os.urandom(32).hex(),
+                "client_nonce": client_nonce.hex(),
                 "client_name": "Test MacBook",
             },
         )
@@ -106,10 +130,11 @@ class TestPairingVerify:
         assert len(nonce_bytes) == 32
 
     def test_verify_wrong_hmac_returns_403(self, client, app):
-        client.get("/pairing/code/challenge")
+        challenge = client.get("/pairing/code/challenge").json()
         response = client.post(
             "/pairing/verify",
             json={
+                "challenge_id": challenge["challenge_id"],
                 "response": "0" * 64,
                 "client_nonce": os.urandom(32).hex(),
                 "client_name": "Test MacBook",
@@ -118,45 +143,77 @@ class TestPairingVerify:
         assert response.status_code == 403
 
     def test_verify_increments_failure_count(self, client, app):
-        client.get("/pairing/code/challenge")
+        challenge = client.get("/pairing/code/challenge").json()
         for _ in range(3):
             client.post(
                 "/pairing/verify",
                 json={
+                    "challenge_id": challenge["challenge_id"],
+                    "response": "0" * 64,
+                    "client_nonce": os.urandom(32).hex(),
+                    "client_name": "Test MacBook",
+                },
+            )
+        session = app.state.pairing_state["sessions"][challenge["challenge_id"]]
+        assert session["failed_attempts"] == 3
+
+    def test_verify_max_5_failures_closes_only_that_session(self, client, app):
+        challenge = client.get("/pairing/code/challenge").json()
+        original_code = app.state.pairing_state["code"]
+        for _ in range(5):
+            client.post(
+                "/pairing/verify",
+                json={
+                    "challenge_id": challenge["challenge_id"],
                     "response": "0" * 64,
                     "client_nonce": os.urandom(32).hex(),
                     "client_name": "Test MacBook",
                 },
             )
         pairing_state = app.state.pairing_state
-        assert pairing_state["failed_attempts"] >= 3
-
-    def test_verify_max_5_failures_regenerates_code(self, client, app):
-        client.get("/pairing/code/challenge")
-        original_code = app.state.pairing_state["code"]
-        for _ in range(5):
-            client.post(
-                "/pairing/verify",
-                json={
-                    "response": "0" * 64,
-                    "client_nonce": os.urandom(32).hex(),
-                    "client_name": "Test MacBook",
-                },
-            )
-        new_code = app.state.pairing_state["code"]
-        assert new_code != original_code
+        assert pairing_state["code"] == original_code
+        assert challenge["challenge_id"] not in pairing_state["sessions"]
 
     def test_verify_without_challenge_returns_400(self, client, app):
         """Verify should fail if no challenge was issued."""
-        # Clear any existing pairing state challenge
-        if hasattr(app.state, "pairing_state"):
-            app.state.pairing_state["challenge"] = None
         response = client.post(
             "/pairing/verify",
             json={
+                "challenge_id": "0" * 32,
                 "response": "0" * 64,
                 "client_nonce": os.urandom(32).hex(),
                 "client_name": "Test MacBook",
+            },
+        )
+        assert response.status_code == 400
+
+    def test_parallel_challenges_do_not_overwrite_each_other(self, client, app):
+        first = client.get("/pairing/code/challenge").json()
+        second = client.get("/pairing/code/challenge").json()
+        nonce = os.urandom(32)
+        proof = self._compute_hmac(first, nonce, app.state.pairing_state["code"])
+
+        response = client.post(
+            "/pairing/verify",
+            json={
+                "challenge_id": first["challenge_id"],
+                "response": proof,
+                "client_nonce": nonce.hex(),
+                "client_name": "First Client",
+            },
+        )
+        assert response.status_code == 200
+        assert second["challenge_id"] in app.state.pairing_state["sessions"]
+
+    def test_invalid_nonce_is_a_bounded_client_error(self, client):
+        challenge = client.get("/pairing/code/challenge").json()
+        response = client.post(
+            "/pairing/verify",
+            json={
+                "challenge_id": challenge["challenge_id"],
+                "response": "0" * 64,
+                "client_nonce": "00",
+                "client_name": "Bad Client",
             },
         )
         assert response.status_code == 400
@@ -172,19 +229,25 @@ class TestPairingComplete:
 
         # Step 1: challenge
         challenge_resp = client.get("/pairing/code/challenge")
-        challenge_hex = challenge_resp.json()["challenge"]
-        sensor_id = challenge_resp.json()["sensor_id"]
+        challenge = challenge_resp.json()
+        challenge_hex = challenge["challenge"]
+        sensor_id = challenge["sensor_id"]
         code = app.state.pairing_state["code"]
 
         # Step 2: verify
         client_nonce = os.urandom(32)
-        hmac_response = hmac.new(
-            code.encode("utf-8"), bytes.fromhex(challenge_hex), hashlib.sha256
-        ).hexdigest()
+        transcript = (
+            b"squirrelops-pairing-v2\0"
+            + bytes.fromhex(challenge_hex)
+            + client_nonce
+            + sensor_id.encode()
+        )
+        hmac_response = hmac.new(code.encode(), transcript, hashlib.sha256).hexdigest()
 
         verify_resp = client.post(
             "/pairing/verify",
             json={
+                "challenge_id": challenge["challenge_id"],
                 "response": hmac_response,
                 "client_nonce": client_nonce.hex(),
                 "client_name": "Test MacBook",
@@ -199,10 +262,10 @@ class TestPairingComplete:
             algorithm=hashes.SHA256(),
             length=32,
             salt=sensor_id.encode("utf-8"),
-            info=b"squirrelops-pairing-v1",
+            info=b"squirrelops-pairing-v2",
         ).derive(ikm)
 
-        return shared_key, verify_resp.json()
+        return shared_key, {**verify_resp.json(), "challenge_id": challenge["challenge_id"]}
 
     def test_complete_returns_200(self, client, app):
         from cryptography import x509
@@ -229,7 +292,10 @@ class TestPairingComplete:
 
         response = client.post(
             "/pairing/complete",
-            json={"encrypted_csr": (nonce + encrypted_csr).hex()},
+            json={
+                "challenge_id": verify_data["challenge_id"],
+                "encrypted_csr": (nonce + encrypted_csr).hex(),
+            },
         )
         assert response.status_code == 200
 
@@ -256,7 +322,10 @@ class TestPairingComplete:
 
         response = client.post(
             "/pairing/complete",
-            json={"encrypted_csr": (nonce + encrypted_csr).hex()},
+            json={
+                "challenge_id": verify_data["challenge_id"],
+                "encrypted_csr": (nonce + encrypted_csr).hex(),
+            },
         )
         data = response.json()
         assert "encrypted_client_cert" in data
@@ -284,7 +353,10 @@ class TestPairingComplete:
 
         response = client.post(
             "/pairing/complete",
-            json={"encrypted_csr": (nonce + encrypted_csr).hex()},
+            json={
+                "challenge_id": verify_data["challenge_id"],
+                "encrypted_csr": (nonce + encrypted_csr).hex(),
+            },
         )
         data = response.json()
 
@@ -319,7 +391,10 @@ class TestPairingComplete:
 
         client.post(
             "/pairing/complete",
-            json={"encrypted_csr": (nonce + encrypted_csr).hex()},
+            json={
+                "challenge_id": verify_data["challenge_id"],
+                "encrypted_csr": (nonce + encrypted_csr).hex(),
+            },
         )
 
         # Verify pairing record was stored
@@ -354,7 +429,10 @@ class TestPairingComplete:
 
         client.post(
             "/pairing/complete",
-            json={"encrypted_csr": (nonce + encrypted_csr).hex()},
+            json={
+                "challenge_id": verify_data["challenge_id"],
+                "encrypted_csr": (nonce + encrypted_csr).hex(),
+            },
         )
 
         # The code should be invalidated -- a new challenge should give a fresh code
@@ -376,19 +454,25 @@ class TestPairingFullFlow:
         # Step 1: Challenge
         challenge_resp = client.get("/pairing/code/challenge")
         assert challenge_resp.status_code == 200
-        challenge_hex = challenge_resp.json()["challenge"]
-        sensor_id = challenge_resp.json()["sensor_id"]
+        challenge = challenge_resp.json()
+        challenge_hex = challenge["challenge"]
+        sensor_id = challenge["sensor_id"]
         code = app.state.pairing_state["code"]
 
         # Step 2: Verify
         client_nonce = os.urandom(32)
-        hmac_response = hmac.new(
-            code.encode("utf-8"), bytes.fromhex(challenge_hex), hashlib.sha256
-        ).hexdigest()
+        transcript = (
+            b"squirrelops-pairing-v2\0"
+            + bytes.fromhex(challenge_hex)
+            + client_nonce
+            + sensor_id.encode()
+        )
+        hmac_response = hmac.new(code.encode(), transcript, hashlib.sha256).hexdigest()
 
         verify_resp = client.post(
             "/pairing/verify",
             json={
+                "challenge_id": challenge["challenge_id"],
                 "response": hmac_response,
                 "client_nonce": client_nonce.hex(),
                 "client_name": "Test MacBook",
@@ -402,7 +486,7 @@ class TestPairingFullFlow:
             algorithm=hashes.SHA256(),
             length=32,
             salt=sensor_id.encode("utf-8"),
-            info=b"squirrelops-pairing-v1",
+            info=b"squirrelops-pairing-v2",
         ).derive(ikm)
 
         # Decrypt CA cert
@@ -425,9 +509,13 @@ class TestPairingFullFlow:
 
         complete_resp = client.post(
             "/pairing/complete",
-            json={"encrypted_csr": (nonce + encrypted_csr).hex()},
+            json={
+                "challenge_id": challenge["challenge_id"],
+                "encrypted_csr": (nonce + encrypted_csr).hex(),
+            },
         )
         assert complete_resp.status_code == 200
+        assert complete_resp.json()["pairing_id"] > 0
 
         # Decrypt client cert
         encrypted_cert = bytes.fromhex(complete_resp.json()["encrypted_client_cert"])

@@ -30,11 +30,18 @@ def event_bus(db):
 
 
 @pytest.fixture
-def sensor_config():
+def sensor_config(tmp_path):
     """Return a test sensor configuration dict."""
     return {
         "sensor_id": "test-sensor-001",
         "sensor_name": "SquirrelOps-TEST",
+        "sensor": {
+            "id": "test-sensor-001",
+            "name": "SquirrelOps-TEST",
+            "data_dir": str(tmp_path / "sensor-data"),
+            "port": 8443,
+            "tls": {"enabled": True},
+        },
         "version": "0.1.0",
         "profile": "standard",
         "learning_mode": {
@@ -89,7 +96,7 @@ def app(db, event_bus, sensor_config):
 def client(app):
     """Create a TestClient for the FastAPI app."""
     from fastapi.testclient import TestClient
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 async def seed_devices(db, count=3):

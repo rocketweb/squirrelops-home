@@ -52,9 +52,18 @@ PBS_PYTHON="3.12.12"
 
 # Map macOS arch names to python-build-standalone arch names
 case "$BUILD_ARCH" in
-    arm64|universal)  PBS_ARCH="aarch64" ;;
-    x86_64)           PBS_ARCH="x86_64" ;;
-    *)                PBS_ARCH="aarch64" ;;
+    arm64|universal)
+        PBS_ARCH="aarch64"
+        PBS_SHA256="20d98bd10cf59e3c16dc4e44b57be351b250fc1089e95b2839f440f79413ed47"
+        ;;
+    x86_64)
+        PBS_ARCH="x86_64"
+        PBS_SHA256="bc2a04a4afbb761f58c1df242f486dd9d3066f9eaf52ad422734eac2ccd41e67"
+        ;;
+    *)
+        echo "Unsupported build architecture: $BUILD_ARCH" >&2
+        exit 1
+        ;;
 esac
 
 PBS_FILENAME="cpython-${PBS_PYTHON}+${PBS_RELEASE}-${PBS_ARCH}-apple-darwin-install_only.tar.gz"
@@ -166,6 +175,11 @@ else
             error "Failed to download standalone Python from: $PBS_URL"
         }
     fi
+
+    info "Verifying standalone Python SHA-256..."
+    printf '%s  %s\n' "$PBS_SHA256" "$TARBALL" | shasum -a 256 -c - || {
+        error "Standalone Python checksum verification failed."
+    }
 
     info "Extracting standalone Python..."
     # The tarball extracts to a python/ directory

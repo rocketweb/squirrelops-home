@@ -291,6 +291,21 @@ class TestEntryPointStartup:
         mock_subsystems["uvicorn_server_cls"].assert_called_once()
         mock_subsystems["uvicorn_server"].serve.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_disabled_tls_is_forced_to_loopback(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+        await run_sensor(config_path=str(config_file), port=9443, no_tls=False)
+
+        uvicorn_config = mock_subsystems["uvicorn_server_cls"].call_args.args[0]
+        assert uvicorn_config.host == "127.0.0.1"
+
 
 # ---------------------------------------------------------------------------
 # Shutdown tests

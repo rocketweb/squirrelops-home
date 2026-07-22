@@ -150,6 +150,7 @@ public enum PairingError: Error, LocalizedError, Sendable {
     case decryptionFailed(String)
     case invalidCertificateData
     case keychainStoreFailed(String)
+    case unsupportedProtocol(Int)
 
     public var errorDescription: String? {
         switch self {
@@ -163,6 +164,8 @@ public enum PairingError: Error, LocalizedError, Sendable {
             return "Invalid certificate data received from sensor"
         case .keychainStoreFailed(let detail):
             return "Failed to store credentials in Keychain: \(detail)"
+        case .unsupportedProtocol(let version):
+            return "The sensor uses unsupported pairing protocol version \(version)"
         }
     }
 }
@@ -203,12 +206,35 @@ public final class PairingManager: @unchecked Sendable {
         public let name: String
         public let baseURL: URL
         public let certFingerprint: String
+        public let credentialIdentifier: String
 
-        public init(id: Int, name: String, baseURL: URL, certFingerprint: String) {
+        public init(
+            id: Int,
+            name: String,
+            baseURL: URL,
+            certFingerprint: String,
+            credentialIdentifier: String? = nil
+        ) {
             self.id = id
             self.name = name
             self.baseURL = baseURL
             self.certFingerprint = certFingerprint
+            self.credentialIdentifier = credentialIdentifier ?? String(id)
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, baseURL, certFingerprint, credentialIdentifier
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(Int.self, forKey: .id)
+            name = try values.decode(String.self, forKey: .name)
+            baseURL = try values.decode(URL.self, forKey: .baseURL)
+            certFingerprint = try values.decode(String.self, forKey: .certFingerprint)
+            credentialIdentifier = try values.decodeIfPresent(
+                String.self, forKey: .credentialIdentifier
+            ) ?? String(id)
         }
     }
 
@@ -285,8 +311,14 @@ public final class PairingManager: @unchecked Sendable {
         FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/com.squirrelops.sensor.plist")
     }
 
-    /// Path to the sensor's peer-verified local-pairing Unix socket.
-    private static let localPairingSocketPath = "/tmp/squirrelops-pairing.sock"
+    /// Candidate paths for system and source-development sensor installs.
+    private static var localPairingSocketPaths: [String] {
+        [
+            "/Library/SquirrelOps/sensor/run/pairing.sock",
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".squirrelops/sensor/run/pairing.sock").path,
+        ]
+    }
 
     /// Auto-pair with a local sensor by fetching the pairing code over the
     /// sensor's peer-verified Unix socket, then running the full challenge
@@ -294,7 +326,11 @@ public final class PairingManager: @unchecked Sendable {
     /// disclosed the code to any local process; the sensor checks our peer
     /// credentials (and code signature, if configured) before responding.
     public func autoLocalPair(sensor: DiscoveredSensor) async throws -> PairedSensor {
-        let socketPath = PairingManager.localPairingSocketPath
+        guard let socketPath = PairingManager.localPairingSocketPaths.first(where: {
+            FileManager.default.fileExists(atPath: $0)
+        }) else {
+            throw PairingError.noHostResolved
+        }
         let code = try await Task.detached(priority: .userInitiated) {
             try PairingManager.fetchLocalPairingCode(socketPath: socketPath)
         }.value
@@ -459,21 +495,29 @@ public final class PairingManager: @unchecked Sendable {
         // Step 2: GET challenge
         let challengeResponse = try await client.fetchChallenge(baseURL: baseURL)
 
-        // Step 3: Compute HMAC(challenge, code)
-        let challengeData = try PairingCrypto.hexDecode(challengeResponse.challenge)
-        let hmac = PairingCrypto.computeHMAC(challenge: challengeData, code: code)
-        let hmacHex = PairingCrypto.hexEncode(hmac)
+        guard challengeResponse.protocolVersion == 2 else {
+            throw PairingError.unsupportedProtocol(challengeResponse.protocolVersion)
+        }
 
-        // Step 4: Generate 32-byte client nonce
+        // Step 3: Generate nonce and authenticate the v2 pairing transcript.
+        let challengeData = try PairingCrypto.hexDecode(challengeResponse.challenge)
         var clientNonce = Data(count: 32)
         clientNonce.withUnsafeMutableBytes { buffer in
             _ = SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
         }
         let clientNonceHex = PairingCrypto.hexEncode(clientNonce)
+        let hmac = PairingCrypto.computeHMAC(
+            challenge: challengeData,
+            clientNonce: clientNonce,
+            sensorId: challengeResponse.sensorId,
+            code: code
+        )
+        let hmacHex = PairingCrypto.hexEncode(hmac)
 
         // Step 5: POST verify
         let clientName = Host.current().localizedName ?? "SquirrelOps Mac"
         let verifyBody = VerifyRequest(
+            challengeId: challengeResponse.challengeId,
             response: hmacHex,
             clientNonce: clientNonceHex,
             clientName: clientName
@@ -502,10 +546,13 @@ public final class PairingManager: @unchecked Sendable {
             throw PairingError.decryptionFailed("CA certificate: \(error.localizedDescription)")
         }
 
-        let sensorIdInt = Int(challengeResponse.sensorId) ?? challengeResponse.sensorId.hashValue
-        let caLabel = "io.squirrelops.home.ca.\(sensorIdInt)"
-        let clientLabel = "io.squirrelops.home.client.\(sensorIdInt)"
-        let privateKeyAccount = "io.squirrelops.home.key.\(sensorIdInt)"
+        let sensorDigest = SHA256.hash(data: Data(challengeResponse.sensorId.utf8))
+        let credentialIdentifier = sensorDigest.prefix(12).map {
+            String(format: "%02x", $0)
+        }.joined()
+        let caLabel = "io.squirrelops.home.ca.\(credentialIdentifier)"
+        let clientLabel = "io.squirrelops.home.client.\(credentialIdentifier)"
+        let privateKeyAccount = "io.squirrelops.home.key.\(credentialIdentifier)"
 
         // Step 8: Generate a Keychain-backed P-256 key pair and create a PEM CSR.
         let privateKey: SecKey
@@ -526,7 +573,10 @@ public final class PairingManager: @unchecked Sendable {
         let encryptedCsrHex = PairingCrypto.hexEncode(encryptedCsr)
 
         // Step 9: POST complete
-        let completeBody = CompleteRequest(encryptedCsr: encryptedCsrHex)
+        let completeBody = CompleteRequest(
+            challengeId: challengeResponse.challengeId,
+            encryptedCsr: encryptedCsrHex
+        )
         let completeResponse = try await client.postComplete(baseURL: baseURL, body: completeBody)
 
         // Step 10: Decrypt client cert (sensor sends hex-encoded nonce + ciphertext)
@@ -571,10 +621,11 @@ public final class PairingManager: @unchecked Sendable {
 
         // Step 12: Return PairedSensor
         return PairedSensor(
-            id: sensorIdInt,
+            id: completeResponse.pairingId,
             name: challengeResponse.sensorName,
             baseURL: baseURL,
-            certFingerprint: certFingerprint
+            certFingerprint: certFingerprint,
+            credentialIdentifier: credentialIdentifier
         )
     }
 
@@ -585,9 +636,9 @@ public final class PairingManager: @unchecked Sendable {
         try await client.deleteUnpair(baseURL: sensor.baseURL, id: sensor.id)
 
         // Clean up Keychain entries
-        let caLabel = "io.squirrelops.home.ca.\(sensor.id)"
-        let clientLabel = "io.squirrelops.home.client.\(sensor.id)"
-        let privateKeyAccount = "io.squirrelops.home.key.\(sensor.id)"
+        let caLabel = "io.squirrelops.home.ca.\(sensor.credentialIdentifier)"
+        let clientLabel = "io.squirrelops.home.client.\(sensor.credentialIdentifier)"
+        let privateKeyAccount = "io.squirrelops.home.key.\(sensor.credentialIdentifier)"
 
         try KeychainStore.deleteCertificate(label: caLabel)
         try KeychainStore.deleteCertificate(label: clientLabel)
@@ -630,9 +681,9 @@ public final class PairingManager: @unchecked Sendable {
     }
 
     public static func deleteStoredCredentials(for sensor: PairedSensor) throws {
-        let caLabel = "io.squirrelops.home.ca.\(sensor.id)"
-        let clientLabel = "io.squirrelops.home.client.\(sensor.id)"
-        let privateKeyAccount = "io.squirrelops.home.key.\(sensor.id)"
+        let caLabel = "io.squirrelops.home.ca.\(sensor.credentialIdentifier)"
+        let clientLabel = "io.squirrelops.home.client.\(sensor.credentialIdentifier)"
+        let privateKeyAccount = "io.squirrelops.home.key.\(sensor.credentialIdentifier)"
 
         try KeychainStore.deleteCertificate(label: caLabel)
         try KeychainStore.deleteCertificate(label: clientLabel)
@@ -645,13 +696,15 @@ public final class PairingManager: @unchecked Sendable {
     }
 
     public static func loadCACertificateData(for sensor: PairedSensor) -> Data? {
-        try? KeychainStore.loadCertificateData(label: "io.squirrelops.home.ca.\(sensor.id)")
+        try? KeychainStore.loadCertificateData(
+            label: "io.squirrelops.home.ca.\(sensor.credentialIdentifier)"
+        )
     }
 
     public static func loadClientIdentity(for sensor: PairedSensor) -> SecIdentity? {
         try? KeychainStore.loadClientIdentity(
-            certificateLabel: "io.squirrelops.home.client.\(sensor.id)",
-            privateKeyLabel: "io.squirrelops.home.key.\(sensor.id)"
+            certificateLabel: "io.squirrelops.home.client.\(sensor.credentialIdentifier)",
+            privateKeyLabel: "io.squirrelops.home.key.\(sensor.credentialIdentifier)"
         )
     }
 

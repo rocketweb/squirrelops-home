@@ -12,9 +12,14 @@ struct PairingCryptoTests {
     @Test("HMAC produces deterministic output for same inputs")
     func hmacDeterministic() {
         let challenge = Data("test-challenge-123".utf8)
-        let code = "482910"
-        let result1 = PairingCrypto.computeHMAC(challenge: challenge, code: code)
-        let result2 = PairingCrypto.computeHMAC(challenge: challenge, code: code)
+        let nonce = Data(repeating: 0xAA, count: 32)
+        let code = "ABCD-EFGH-JKMP-QRST-VWXY"
+        let result1 = PairingCrypto.computeHMAC(
+            challenge: challenge, clientNonce: nonce, sensorId: "sensor-1", code: code
+        )
+        let result2 = PairingCrypto.computeHMAC(
+            challenge: challenge, clientNonce: nonce, sensorId: "sensor-1", code: code
+        )
         #expect(result1 == result2)
         #expect(result1.count == 32)
     }
@@ -22,16 +27,28 @@ struct PairingCryptoTests {
     @Test("HMAC produces different output for different codes")
     func hmacDifferentCodes() {
         let challenge = Data("same-challenge".utf8)
-        let result1 = PairingCrypto.computeHMAC(challenge: challenge, code: "111111")
-        let result2 = PairingCrypto.computeHMAC(challenge: challenge, code: "222222")
+        let nonce = Data(repeating: 0xAA, count: 32)
+        let result1 = PairingCrypto.computeHMAC(
+            challenge: challenge, clientNonce: nonce, sensorId: "sensor-1", code: "KEY1"
+        )
+        let result2 = PairingCrypto.computeHMAC(
+            challenge: challenge, clientNonce: nonce, sensorId: "sensor-1", code: "KEY2"
+        )
         #expect(result1 != result2)
     }
 
     @Test("HMAC produces different output for different challenges")
     func hmacDifferentChallenges() {
-        let code = "482910"
-        let result1 = PairingCrypto.computeHMAC(challenge: Data("challenge-a".utf8), code: code)
-        let result2 = PairingCrypto.computeHMAC(challenge: Data("challenge-b".utf8), code: code)
+        let code = "ABCD-EFGH-JKMP-QRST-VWXY"
+        let nonce = Data(repeating: 0xAA, count: 32)
+        let result1 = PairingCrypto.computeHMAC(
+            challenge: Data("challenge-a".utf8), clientNonce: nonce,
+            sensorId: "sensor-1", code: code
+        )
+        let result2 = PairingCrypto.computeHMAC(
+            challenge: Data("challenge-b".utf8), clientNonce: nonce,
+            sensorId: "sensor-1", code: code
+        )
         #expect(result1 != result2)
     }
 

@@ -8,8 +8,13 @@ Tests cover:
 """
 from __future__ import annotations
 
+import httpx
+import pytest
+
 from squirrelops_home_sensor.scanner.ssdp_scanner import (
+    MAX_XML_BYTES,
     SSDPResult,
+    SSDPScanner,
     parse_ssdp_response,
     parse_upnp_xml,
 )
@@ -134,6 +139,57 @@ class TestParseUPnPXML:
           <specVersion><major>1</major></specVersion>
         </root>"""
         assert parse_upnp_xml(xml) is None
+
+    def test_rejects_xml_entities(self) -> None:
+        xml = """<!DOCTYPE root [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+        <root><device><friendlyName>&xxe;</friendlyName></device></root>"""
+        assert parse_upnp_xml(xml) is None
+
+
+class TestLocationSecurity:
+    @pytest.mark.parametrize(
+        ("url", "source"),
+        [
+            ("http://127.0.0.1/desc.xml", "192.168.1.20"),
+            ("http://169.254.169.254/latest", "192.168.1.20"),
+            ("http://device.local/desc.xml", "192.168.1.20"),
+            ("http://192.168.1.21/desc.xml", "192.168.1.20"),
+            ("http://user@192.168.1.20/desc.xml", "192.168.1.20"),
+        ],
+    )
+    def test_rejects_ssrf_targets_not_bound_to_udp_source(self, url, source) -> None:
+        assert SSDPScanner._is_safe_location_url(url, source) is False
+
+    def test_allows_exact_private_udp_source(self) -> None:
+        assert SSDPScanner._is_safe_location_url(
+            "http://192.168.1.20:49152/desc.xml", "192.168.1.20"
+        )
+
+    @pytest.mark.asyncio
+    async def test_does_not_follow_redirects(self) -> None:
+        requests: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            return httpx.Response(302, headers={"location": "http://127.0.0.1/private"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await SSDPScanner()._fetch_xml(
+                client, "http://192.168.1.20/desc.xml", "192.168.1.20"
+            )
+        assert result is None
+        assert requests == ["http://192.168.1.20/desc.xml"]
+
+    @pytest.mark.asyncio
+    async def test_caps_description_body_without_content_length(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=b"x" * (MAX_XML_BYTES + 1))
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            result = await SSDPScanner()._fetch_xml(
+                client, "http://192.168.1.20/desc.xml", "192.168.1.20"
+            )
+        assert result is None
 
 
 # ---------------------------------------------------------------------------

@@ -33,13 +33,13 @@ squirrelops-home/
 
 ### 1. Install the Privileged Helper
 
-The sensor delegates all privileged operations to a Swift helper daemon that runs as root. Without it, ARP scanning, virtual IP aliases, and port forwarding will all fail silently.
+The packaged sensor delegates privileged operations to a Swift helper daemon that runs as root. The helper accepts RPC only from root and the dedicated `_squirrelops` service account. A sensor run directly as your login user cannot use the helper, so ARP scanning, virtual IP aliases, and port forwarding are unavailable in that mode and are reported as unavailable.
 
 ```bash
 sudo bash scripts/dev-install-helper.sh
 ```
 
-This builds the helper from `app/` via Swift Package Manager and installs it as a system launchd daemon:
+This builds the helper from `app/` via Swift Package Manager and installs it as a system launchd daemon for root-level RPC testing. Full end-to-end helper testing requires the `.pkg` service account setup:
 
 | Item | Path |
 |------|------|
@@ -88,7 +88,7 @@ Useful flags:
 |------|-------------|
 | `--port 8443` | API port (default 8443) |
 | `--config path/to/config.yaml` | Custom config file |
-| `--no-tls` | Disable TLS (for quick testing) |
+| `--no-tls` | Disable TLS and force a loopback-only bind (for quick testing) |
 
 ### macOS App
 
@@ -123,7 +123,7 @@ The helper (`SquirrelOpsHelper`) is a Swift binary that runs as root via launchd
 ```
 ┌──────────────────────┐         JSON-RPC / Unix socket
 │  Python Sensor       │ ─────────────────────────────────►  ┌──────────────────┐
-│  (runs as your user) │   /var/run/squirrelops-helper.sock  │  SquirrelOpsHelper│
+│  (runs as _squirrelops)│  /var/run/squirrelops-helper.sock │  SquirrelOpsHelper│
 │                      │ ◄─────────────────────────────────  │  (runs as root)  │
 └──────────────────────┘                                     └──────────────────┘
 ```
@@ -142,7 +142,7 @@ The helper (`SquirrelOpsHelper`) is a Swift binary that runs as root via launchd
 | `stopDNSSniff` | Stop DNS capture |
 | `getDNSQueries` | Retrieve captured DNS queries |
 
-**Why a helper?** macOS requires root for raw sockets (ARP), `ifconfig` alias manipulation, and `pfctl` rules. Rather than running the entire sensor as root, only the helper runs privileged — the sensor connects over a socket.
+**Why a helper?** macOS requires root for raw sockets (ARP), `ifconfig` alias manipulation, and `pfctl` rules. Rather than running the entire sensor as root, only the helper runs privileged. Its socket is `root:_squirrelops` mode `0660`, and peer credentials are checked again after connection.
 
 **On Linux/Docker**, the sensor runs as root with `CAP_NET_RAW` and `CAP_NET_ADMIN`, so it performs these operations directly using scapy and iptables. No helper needed.
 
@@ -173,7 +173,7 @@ sudo bash scripts/dev-install-helper.sh
 
 ```bash
 echo '{"jsonrpc":"2.0","method":"runARPScan","params":{"subnet":"192.168.1.0/24"},"id":1}' \
-  | nc -U /var/run/squirrelops-helper.sock
+  | sudo nc -U /var/run/squirrelops-helper.sock
 ```
 
 ### Sensor shows 0 devices

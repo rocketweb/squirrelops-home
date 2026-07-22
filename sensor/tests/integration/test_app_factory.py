@@ -23,9 +23,10 @@ class TestAppFactory:
 
     def test_app_includes_all_routers(self, sensor_config):
         app = create_app(sensor_config)
-        route_paths = [route.path for route in app.routes]
-        assert "/system/health" in route_paths
-        assert "/ws/events" in route_paths
+        # FastAPI 0.139 keeps included routers lazy, so app.routes contains
+        # wrapper objects rather than a flattened list of path-bearing routes.
+        assert "/system/health" in app.openapi()["paths"]
+        assert str(app.url_path_for("ws_events")) == "/ws/events"
 
     def test_health_endpoint_no_auth_required(self, client):
         """Health endpoint must work without authentication, liveness only."""

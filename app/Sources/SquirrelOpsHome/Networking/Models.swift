@@ -1054,17 +1054,29 @@ public struct ConfigResponse: Codable, Sendable {
 }
 
 public struct ChallengeResponse: Codable, Sendable {
+    public let protocolVersion: Int
+    public let challengeId: String
     public let challenge: String
     public let sensorId: String
     public let sensorName: String
 
-    public init(challenge: String, sensorId: String, sensorName: String) {
+    public init(
+        protocolVersion: Int = 2,
+        challengeId: String = "test-challenge",
+        challenge: String,
+        sensorId: String,
+        sensorName: String
+    ) {
+        self.protocolVersion = protocolVersion
+        self.challengeId = challengeId
         self.challenge = challenge
         self.sensorId = sensorId
         self.sensorName = sensorName
     }
 
     enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol_version"
+        case challengeId = "challenge_id"
         case challenge
         case sensorId = "sensor_id"
         case sensorName = "sensor_name"
@@ -1072,17 +1084,25 @@ public struct ChallengeResponse: Codable, Sendable {
 }
 
 public struct VerifyRequest: Encodable, Sendable {
+    public let challengeId: String
     public let response: String
     public let clientNonce: String
     public let clientName: String
 
-    public init(response: String, clientNonce: String, clientName: String) {
+    public init(
+        challengeId: String = "test-challenge",
+        response: String,
+        clientNonce: String,
+        clientName: String
+    ) {
+        self.challengeId = challengeId
         self.response = response
         self.clientNonce = clientNonce
         self.clientName = clientName
     }
 
     enum CodingKeys: String, CodingKey {
+        case challengeId = "challenge_id"
         case response
         case clientNonce = "client_nonce"
         case clientName = "client_name"
@@ -1105,26 +1125,32 @@ public struct VerifyResponse: Codable, Sendable {
 }
 
 public struct CompleteRequest: Encodable, Sendable {
+    public let challengeId: String
     public let encryptedCsr: String
 
-    public init(encryptedCsr: String) {
+    public init(challengeId: String = "test-challenge", encryptedCsr: String) {
+        self.challengeId = challengeId
         self.encryptedCsr = encryptedCsr
     }
 
     enum CodingKeys: String, CodingKey {
+        case challengeId = "challenge_id"
         case encryptedCsr = "encrypted_csr"
     }
 }
 
 public struct CompleteResponse: Codable, Sendable {
     public let encryptedClientCert: String
+    public let pairingId: Int
 
-    public init(encryptedClientCert: String) {
+    public init(encryptedClientCert: String, pairingId: Int = 0) {
         self.encryptedClientCert = encryptedClientCert
+        self.pairingId = pairingId
     }
 
     enum CodingKeys: String, CodingKey {
         case encryptedClientCert = "encrypted_client_cert"
+        case pairingId = "pairing_id"
     }
 }
 

@@ -288,10 +288,14 @@ class ScoutEngine:
         # Following it (with verify=False) would let a rogue device redirect the
         # probe to loopback or off-LAN endpoints (SSRF). The sibling SSDP path is
         # already hardened this way.
-        async with httpx.AsyncClient(
+        # Scouting intentionally fingerprints self-signed LAN services. These
+        # requests contain no credentials and redirects stay disabled, so TLS
+        # certificate identity is not used as an authorization boundary.
+        async with httpx.AsyncClient(  # nosec B501
             timeout=self._http_timeout,
             verify=False,
             follow_redirects=False,
+            trust_env=False,
             headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
         ) as client:
             # GET /
@@ -310,7 +314,10 @@ class ScoutEngine:
             try:
                 favicon_resp = await client.get(f"{base_url}/favicon.ico")
                 if favicon_resp.status_code == 200 and len(favicon_resp.content) > 0:
-                    profile.favicon_hash = hashlib.md5(favicon_resp.content).hexdigest()
+                    profile.favicon_hash = hashlib.md5(
+                        favicon_resp.content,
+                        usedforsecurity=False,
+                    ).hexdigest()
             except Exception:
                 pass  # favicon is optional
 

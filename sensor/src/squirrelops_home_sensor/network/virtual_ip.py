@@ -180,6 +180,7 @@ class VirtualIPManager:
         ok = await self._ops.remove_ip_alias(ip, interface=self._interface)
         if not ok:
             logger.warning("Failed to remove IP alias %s", ip)
+            return False
 
         now = datetime.now(UTC).isoformat()
         await self._db.execute(
@@ -196,8 +197,8 @@ class VirtualIPManager:
         """Remove all active virtual IP aliases (shutdown cleanup)."""
         removed = 0
         for ip in list(self._active):
-            await self.remove_alias(ip)
-            removed += 1
+            if await self.remove_alias(ip):
+                removed += 1
         return removed
 
     async def load_from_db(self) -> int:
@@ -218,13 +219,11 @@ class VirtualIPManager:
                 restored += 1
                 logger.info("Restored virtual IP alias %s on %s", ip, iface)
             else:
-                # Clean up orphan — can't re-add, mark as released
-                now = datetime.now(UTC).isoformat()
-                await self._db.execute(
-                    "UPDATE virtual_ips SET released_at = ? WHERE ip_address = ?",
-                    (now, ip),
-                )
-                await self._db.commit()
-                logger.warning("Cleaned up orphaned virtual IP %s", ip)
+                # Keep the record active because the OS state is unknown. A
+                # later retry can restore or explicitly remove the alias. Keep
+                # the address reserved, but do not claim the alias is live or
+                # start a mimic on an address the host may not own.
+                self._allocator.mark_allocated(ip)
+                logger.error("Failed to restore virtual IP %s; retaining reservation", ip)
 
         return restored

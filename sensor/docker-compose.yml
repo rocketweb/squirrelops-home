@@ -2,7 +2,7 @@
 #
 # Usage:
 #   docker compose up -d          # start sensor
-#   docker compose logs -f        # view logs (pairing code is here)
+#   docker compose logs -f        # view logs (setup key is here)
 #   docker compose down           # stop sensor
 #
 # The sensor needs host networking for full network visibility (ARP

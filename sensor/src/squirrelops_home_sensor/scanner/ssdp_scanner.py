@@ -12,15 +12,19 @@ import logging
 import socket
 from dataclasses import dataclass
 from urllib.parse import urlparse
-from xml.etree import ElementTree
 
+import defusedxml.ElementTree as ElementTree
 import httpx
+from defusedxml.common import DefusedXmlException
 
 logger = logging.getLogger(__name__)
 
 SSDP_ADDR = "239.255.255.250"
 SSDP_PORT = 1900
 UPNP_NS = "urn:schemas-upnp-org:device-1-0"
+MAX_SSDP_RESPONSES = 256
+MAX_LOCATION_URLS = 64
+MAX_XML_BYTES = 1024 * 1024
 
 M_SEARCH_REQUEST = (
     "M-SEARCH * HTTP/1.1\r\n"
@@ -80,7 +84,7 @@ def parse_upnp_xml(xml_text: str) -> dict | None:
 
     try:
         root = ElementTree.fromstring(xml_text)
-    except ElementTree.ParseError:
+    except (ElementTree.ParseError, DefusedXmlException):
         return None
 
     # Try with UPnP namespace first, then without
@@ -137,19 +141,35 @@ class SSDPScanner:
         seen_locations: set[str] = set()
         for raw, source_ip in responses:
             result = parse_ssdp_response(raw, source_ip)
-            if result and result["location"] not in seen_locations:
+            if (
+                result
+                and result["location"] not in seen_locations
+                and self._is_safe_location_url(result["location"], result["source_ip"])
+            ):
                 seen_locations.add(result["location"])
                 parsed.append(result)
+                if len(parsed) >= MAX_LOCATION_URLS:
+                    break
 
         # Fetch and parse XML descriptions
         results: list[SSDPResult] = []
         xml_cache: dict[str, dict | None] = {}
 
-        async with httpx.AsyncClient(timeout=self._xml_fetch_timeout, verify=False) as client:
+        # UPnP devices commonly use self-signed certificates. The request sends
+        # no secrets, is pinned to the UDP responder's private IP, and cannot
+        # follow redirects, so PKI identity is not the trust boundary here.
+        async with httpx.AsyncClient(  # nosec B501
+            timeout=self._xml_fetch_timeout,
+            verify=False,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
             for resp in parsed:
                 location = resp["location"]
                 if location not in xml_cache:
-                    xml_cache[location] = await self._fetch_xml(client, location)
+                    xml_cache[location] = await self._fetch_xml(
+                        client, location, resp["source_ip"]
+                    )
 
                 xml_data = xml_cache[location]
                 source_ip = resp["source_ip"]
@@ -204,6 +224,8 @@ class SSDPScanner:
                         timeout=min(remaining, 0.5),
                     )
                     responses.append((data.decode("utf-8", errors="replace"), addr[0]))
+                    if len(responses) >= MAX_SSDP_RESPONSES:
+                        break
                 except (TimeoutError, OSError):
                     continue
 
@@ -215,11 +237,12 @@ class SSDPScanner:
         return responses
 
     @staticmethod
-    def _is_safe_location_url(url: str) -> bool:
+    def _is_safe_location_url(url: str, source_ip: str) -> bool:
         """Validate that an SSDP LOCATION URL is safe to fetch.
 
-        Only allows http/https URLs pointing to private/link-local IPs
-        or ``.local`` hostnames, preventing SSRF against public endpoints.
+        The URL must point directly to the private IPv4 address that sent the
+        UDP response. Disallowing DNS and redirects prevents re-resolution,
+        rebinding, and pivots from an untrusted SSDP datagram to another host.
         """
         try:
             parsed = urlparse(url)
@@ -228,31 +251,52 @@ class SSDPScanner:
 
         if parsed.scheme not in ("http", "https"):
             return False
+        if parsed.username is not None or parsed.password is not None or parsed.fragment:
+            return False
 
         hostname = parsed.hostname
         if not hostname:
             return False
 
         try:
-            addr = ipaddress.ip_address(hostname)
-            return addr.is_private or addr.is_link_local
-        except ValueError:
-            # Non-IP hostname — only allow .local mDNS names
-            return hostname.endswith(".local")
+            target = ipaddress.ip_address(hostname)
+            source = ipaddress.ip_address(source_ip)
+            _ = parsed.port
+        except (ValueError, TypeError):
+            return False
+        return (
+            target.version == 4
+            and target == source
+            and target.is_private
+            and not target.is_loopback
+            and not target.is_link_local
+            and not target.is_multicast
+            and not target.is_unspecified
+        )
 
-    async def _fetch_xml(self, client: httpx.AsyncClient, url: str) -> dict | None:
+    async def _fetch_xml(
+        self, client: httpx.AsyncClient, url: str, source_ip: str
+    ) -> dict | None:
         """Fetch and parse a UPnP device description XML.
 
         Validates the URL against SSRF before fetching.
         """
-        if not self._is_safe_location_url(url):
+        if not self._is_safe_location_url(url, source_ip):
             logger.warning("Blocked SSDP LOCATION fetch to non-local URL: %s", url)
             return None
 
         try:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return parse_upnp_xml(resp.text)
+            async with client.stream("GET", url, follow_redirects=False) as resp:
+                resp.raise_for_status()
+                declared_length = resp.headers.get("content-length")
+                if declared_length is not None and int(declared_length) > MAX_XML_BYTES:
+                    return None
+                body = bytearray()
+                async for chunk in resp.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > MAX_XML_BYTES:
+                        return None
+            return parse_upnp_xml(body.decode("utf-8", errors="replace"))
         except Exception:
             logger.debug("Failed to fetch UPnP XML from %s", url, exc_info=True)
             return None

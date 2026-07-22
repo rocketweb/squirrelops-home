@@ -45,8 +45,12 @@ There are three installation paths. Choose the one that fits your setup.
 
 This is the recommended path if you have an always-on Linux device (Raspberry Pi, NAS, server). This installs the sensor only. The dashboard/control plane is always the macOS app and must be installed separately on a Mac.
 
+Download `install.sh` and `install.sh.sha256` from a pinned [GitHub release](https://github.com/rocketweb/squirrelops-home/releases), then verify before running:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/rocketweb/squirrelops-home/main/scripts/install.sh | sudo bash
+shasum -a 256 -c install.sh.sha256
+less install.sh
+sudo bash install.sh
 ```
 
 The script will:
@@ -56,7 +60,7 @@ The script will:
 4. Pull `ghcr.io/rocketweb/squirrelops-sensor:latest`
 5. Start the sensor container
 
-After installation, view the sensor logs (including your pairing code) with:
+After installation, view the sensor logs (including your one-time setup key) with:
 
 ```bash
 docker compose -f /opt/squirrelops/docker-compose.yml logs -f
@@ -74,8 +78,12 @@ docker compose -f /opt/squirrelops/docker-compose.yml logs -f
 
 If you don't have a separate always-on device, the sensor can run directly on your Mac as a background launchd service.
 
+Download `install-macos.sh` and `install-macos.sh.sha256` from a pinned release, then verify before running:
+
 ```bash
-curl -fsSL https://get.squirrelops.io/install-macos.sh | bash
+shasum -a 256 -c install-macos.sh.sha256
+less install-macos.sh
+bash install-macos.sh
 ```
 
 The script will:
@@ -113,7 +121,7 @@ On macOS, ARP network scanning, virtual IP aliases, and port forwarding require 
 
 **If you install via the .pkg installer (recommended):** The helper is bundled inside the macOS app. On first launch, the app prompts for your admin password and installs the helper automatically via macOS system services. It persists across reboots.
 
-**If you install the sensor standalone (Path B):** You also need the macOS app (Path C below) to install the helper. Without it, the sensor can start but cannot perform ARP scans (no device discovery), deploy mimic decoys, or set up port forwarding.
+**If you install the sensor standalone (Path B):** It runs as your login user and cannot call the root helper. The sensor can start, but ARP scanning, virtual IP aliases, mimic decoys, and port forwarding are unavailable. Use the signed `.pkg` for the full macOS feature set; it runs the sensor as the dedicated `_squirrelops` service account authorized by the helper.
 
 **Helper file locations:**
 
@@ -129,7 +137,7 @@ On macOS, ARP network scanning, virtual IP aliases, and port forwarding require 
 Download the macOS app from [GitHub Releases](https://github.com/rocketweb/squirrelops-home/releases). On first launch, the app will:
 
 1. Prompt for your admin password to install the privileged helper
-2. Guide you through sensor pairing (see [Finding Your Pairing Code](#finding-your-pairing-code) below)
+2. Guide you through sensor pairing (see [Finding Your Setup Key](#finding-your-setup-key) below)
 
 ---
 
@@ -142,21 +150,21 @@ Every sensor — whether on a remote device (Path A) or the same Mac (Path B) �
 **The pairing flow:**
 
 1. Open the macOS app — it automatically discovers the sensor via mDNS on your local network
-2. The app shows the setup screen and asks for a **6-digit pairing code**
-3. Enter the code (see [Finding Your Pairing Code](#finding-your-pairing-code) below)
+2. The app shows the setup screen and asks for a **one-time setup key**
+3. Enter the key (see [Finding Your Setup Key](#finding-your-setup-key) below). A signed app and local `.pkg` sensor can exchange it automatically over an authenticated Unix socket
 4. The app and sensor exchange TLS certificates
-5. You're connected — you won't need the pairing code again
+5. You're connected. The setup key is invalidated and is not needed again
 
-### Finding Your Pairing Code
+### Finding Your Setup Key
 
-When the sensor starts, it generates a 6-digit pairing code and displays it prominently. The code expires after **10 minutes** or **5 failed attempts**, then a new code is generated automatically.
+When the sensor starts, it generates a 20-character, 100-bit setup key and displays it prominently. The key expires after **10 minutes** or after successful use. Five failed proofs close that pairing session without rotating the key, which prevents an unauthenticated device from forcing repeated key changes.
 
 **Docker sensor (Path A):**
 
-The pairing code appears in the container logs as a large banner. View it with:
+The setup key appears in the container logs as a large banner. View it with:
 
 ```bash
-docker compose -f /opt/squirrelops/docker-compose.yml logs | grep "Pairing Code"
+docker compose -f /opt/squirrelops/docker-compose.yml logs | grep "Setup Key"
 ```
 
 Or view the full banner by scrolling through recent logs:
@@ -167,27 +175,37 @@ docker compose -f /opt/squirrelops/docker-compose.yml logs --tail 50
 
 **macOS native sensor (Path B):**
 
-The simplest way to retrieve the pairing code is to read it from a well-known file that the sensor writes at startup:
-
-```bash
-cat /tmp/squirrelops-pairing-code
-```
-
-Alternatively, use the built-in CLI command:
+Use the built-in CLI command. The key is stored mode `0600` inside the sensor data directory, never in `/tmp`:
 
 ```bash
 ~/.squirrelops/sensor/venv/bin/python -m squirrelops_home_sensor --show-pairing-code
 ```
 
-The code also appears in the sensor log file:
+The key also appears in the startup banner captured by the sensor log:
 
 ```bash
-grep "Pairing Code" ~/.squirrelops/sensor/logs/squirrelops-sensor.log
+grep "Setup Key" ~/.squirrelops/sensor/logs/squirrelops-sensor.log
 ```
 
-**If the code has expired:** Simply restart the sensor to generate a new code. For Docker, use `docker compose restart`. For macOS, use `launchctl kickstart gui/$(id -u)/com.squirrelops.sensor`.
+For a `.pkg` system install, automatic local pairing is preferred. An administrator can retrieve the key with the packaged Python executable and `--show-pairing-code`. If the key has expired, restart the sensor to generate a new one. For Docker, use `docker compose restart`. For standalone macOS, use `launchctl kickstart gui/$(id -u)/com.squirrelops.sensor`.
 
 After successful pairing, the app stores the sensor's TLS certificate in your macOS Keychain. All subsequent connections are authenticated automatically.
+
+### Pairing and Local Trust Configuration
+
+Production defaults are fail-closed. The local pairing socket accepts only the exact installed SquirrelOps app binary after code-signature verification. The default socket is a sibling of the private data directory, for example `/Library/SquirrelOps/sensor/run/pairing.sock` or `~/.squirrelops/sensor/run/pairing.sock`.
+
+```yaml
+pairing:
+  socket_path: null
+  allowed_app_path: "/Applications/SquirrelOps Home.app/Contents/MacOS/SquirrelOpsHome"
+  allowed_app_requirement: 'identifier "com.squirrelops.home" and anchor apple generic'
+  allow_unsigned_local: false
+```
+
+Set `allow_unsigned_local: true` only for source development. It permits any process running as the logged-in user to retrieve the setup key. Remote pairing still uses the same one-time setup key, isolated challenge sessions, encrypted certificate exchange, and mutual TLS.
+
+`--no-tls` is also development-only. It always forces the API to bind to loopback, and non-TLS bearer or fingerprint authentication is rejected for non-loopback peers.
 
 ### Learning Mode (48 hours)
 
@@ -624,22 +642,22 @@ docker compose -f /opt/squirrelops/docker-compose.yml logs -f
 tail -f ~/.squirrelops/sensor/logs/squirrelops-sensor.log
 ```
 
-### Can't Find the Pairing Code
+### Can't Find the Setup Key
 
-**Symptoms:** The app is asking for a 6-digit code but you don't know where to find it.
+**Symptoms:** The app is asking for a setup key but you don't know where to find it.
 
-See [Finding Your Pairing Code](#finding-your-pairing-code) for detailed instructions. The quickest methods:
+See [Finding Your Setup Key](#finding-your-setup-key) for detailed instructions. The quickest methods:
 
-- **Docker:** `docker compose -f /opt/squirrelops/docker-compose.yml logs | grep "Pairing Code"`
-- **macOS:** `cat /tmp/squirrelops-pairing-code`
+- **Docker:** `docker compose -f /opt/squirrelops/docker-compose.yml logs | grep "Setup Key"`
+- **Standalone macOS:** `~/.squirrelops/sensor/venv/bin/python -m squirrelops_home_sensor --show-pairing-code`
 
 If neither works, the sensor may not be running. Check the sensor status first.
 
-### Pairing Code Expired
+### Setup Key Expired
 
 **Symptoms:** The code was rejected even though you entered it correctly.
 
-The pairing code expires after 10 minutes or 5 failed attempts, then a new one is generated automatically. Restart the sensor to generate a fresh code:
+The setup key expires after 10 minutes or successful use. Restart the sensor to generate a fresh key:
 
 - **Docker:** `docker compose -f /opt/squirrelops/docker-compose.yml restart`
 - **macOS:** `launchctl kickstart gui/$(id -u)/com.squirrelops.sensor`
