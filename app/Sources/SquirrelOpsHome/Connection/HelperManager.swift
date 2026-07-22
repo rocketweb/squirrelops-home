@@ -9,7 +9,8 @@ enum HelperManager {
     /// Install the helper if not already installed or if outdated.
     static func installIfNeeded() {
         #if os(macOS)
-        // Check if helper is already running by attempting connection
+        // The desktop app is intentionally not authorized to connect. Check
+        // launchd state instead of probing the privileged RPC socket.
         if isHelperResponding() {
             return
         }
@@ -18,29 +19,20 @@ enum HelperManager {
         #endif
     }
 
-    /// Check if the helper is responding on its socket.
+    /// Check whether launchd reports the helper as loaded.
     private static func isHelperResponding() -> Bool {
-        let socketPath = "/var/run/squirrelops-helper.sock"
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { close(fd) }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-            let pathPtr = UnsafeMutableRawPointer(ptr).bindMemory(to: CChar.self, capacity: 104)
-            socketPath.withCString { src in
-                _ = strlcpy(pathPtr, src, 104)
-            }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", "system/\(helperLabel)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
         }
-
-        let result = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                Darwin.connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-
-        return result == 0
     }
 
     /// Install the helper via SMAppService.

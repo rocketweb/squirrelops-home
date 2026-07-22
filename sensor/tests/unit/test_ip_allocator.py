@@ -220,6 +220,23 @@ class TestVirtualIPManager:
         assert row["released_at"] is not None
 
     @pytest.mark.asyncio
+    async def test_failed_remove_remains_active_and_unreleased(self, db) -> None:
+        ops = AsyncMock()
+        ops.add_ip_alias = AsyncMock(return_value=True)
+        ops.remove_ip_alias = AsyncMock(return_value=False)
+        alloc = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.50")
+        mgr = VirtualIPManager(ops, alloc, db)
+        await mgr.add_alias("192.168.1.200")
+
+        assert await mgr.remove_alias("192.168.1.200") is False
+        assert "192.168.1.200" in mgr.active_ips
+        cursor = await db.execute(
+            "SELECT released_at FROM virtual_ips WHERE ip_address = '192.168.1.200'"
+        )
+        row = await cursor.fetchone()
+        assert row["released_at"] is None
+
+    @pytest.mark.asyncio
     async def test_remove_all(self, db) -> None:
         """remove_all should stop all aliases."""
         ops = AsyncMock()
@@ -261,8 +278,8 @@ class TestVirtualIPManager:
         assert "192.168.1.221" not in mgr.active_ips
 
     @pytest.mark.asyncio
-    async def test_load_from_db_cleans_orphans(self, db) -> None:
-        """If re-adding fails, the orphan should be marked released."""
+    async def test_load_from_db_retains_failed_alias_for_retry(self, db) -> None:
+        """A failed OS operation must not be recorded as a successful release."""
         await db.execute(
             "INSERT INTO virtual_ips (ip_address, interface, created_at) "
             "VALUES ('192.168.1.230', 'en0', '2026-01-01T00:00:00Z')"
@@ -271,13 +288,20 @@ class TestVirtualIPManager:
 
         ops = AsyncMock()
         ops.add_ip_alias = AsyncMock(return_value=False)
-        alloc = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.50")
+        alloc = IPAllocator(
+            "192.168.1.0/24",
+            "192.168.1.1",
+            "192.168.1.50",
+            range_start=230,
+            range_end=230,
+        )
         mgr = VirtualIPManager(ops, alloc, db)
 
         restored = await mgr.load_from_db()
         assert restored == 0
         assert "192.168.1.230" not in mgr.active_ips
+        assert alloc.allocate(1) == []
 
         cursor = await db.execute("SELECT released_at FROM virtual_ips WHERE ip_address = '192.168.1.230'")
         row = await cursor.fetchone()
-        assert row["released_at"] is not None
+        assert row["released_at"] is None

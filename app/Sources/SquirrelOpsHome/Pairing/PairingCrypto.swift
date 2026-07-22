@@ -28,15 +28,22 @@ public enum PairingCryptoError: Error, LocalizedError {
 
 public enum PairingCrypto {
 
-    /// Compute HMAC-SHA256 of the challenge using the pairing code as the key.
-    public static func computeHMAC(challenge: Data, code: String) -> Data {
+    /// Compute the v2 transcript proof using the one-time setup key.
+    public static func computeHMAC(
+        challenge: Data,
+        clientNonce: Data,
+        sensorId: String,
+        code: String
+    ) -> Data {
+        let domain = Data("squirrelops-pairing-v2\0".utf8)
+        let transcript = domain + challenge + clientNonce + Data(sensorId.utf8)
         let key = SymmetricKey(data: Data(code.utf8))
-        let mac = HMAC<SHA256>.authenticationCode(for: challenge, using: key)
+        let mac = HMAC<SHA256>.authenticationCode(for: transcript, using: key)
         return Data(mac)
     }
 
     /// Derive a shared symmetric key using HKDF-SHA256.
-    /// Must match sensor: IKM = code + challenge + clientNonce, salt = sensorId, info = "squirrelops-pairing-v1"
+    /// Must match sensor: IKM = setupKey + challenge + clientNonce.
     public static func deriveSharedKey(
         code: String,
         challenge: Data,
@@ -46,7 +53,7 @@ public enum PairingCrypto {
         let ikm = Data(code.utf8) + challenge + clientNonce
         let inputKeyMaterial = SymmetricKey(data: ikm)
         let salt = Data(sensorId.utf8)
-        let info = Data("squirrelops-pairing-v1".utf8)
+        let info = Data("squirrelops-pairing-v2".utf8)
 
         return HKDF<SHA256>.deriveKey(
             inputKeyMaterial: inputKeyMaterial,

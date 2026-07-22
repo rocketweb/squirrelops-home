@@ -262,6 +262,7 @@ struct ModelsTests {
     @Test("Encode VerifyRequest produces snake_case keys")
     func encodeVerifyRequestSnakeCase() throws {
         let request = VerifyRequest(
+            challengeId: "challenge-123",
             response: "hmac_response_hex",
             clientNonce: "abc123nonce",
             clientName: "Matt's MacBook Pro"
@@ -271,6 +272,7 @@ struct ModelsTests {
         let data = try encoder.encode(request)
         let jsonObject = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
+        #expect(jsonObject["challenge_id"] as? String == "challenge-123")
         #expect(jsonObject["response"] as? String == "hmac_response_hex")
         #expect(jsonObject["client_nonce"] as? String == "abc123nonce")
         #expect(jsonObject["client_name"] as? String == "Matt's MacBook Pro")
@@ -284,12 +286,15 @@ struct ModelsTests {
 
     @Test("Encode CompleteRequest produces snake_case keys")
     func encodeCompleteRequestSnakeCase() throws {
-        let request = CompleteRequest(encryptedCsr: "base64-encrypted-csr-data")
+        let request = CompleteRequest(
+            challengeId: "challenge-123", encryptedCsr: "base64-encrypted-csr-data"
+        )
 
         let encoder = JSONEncoder()
         let data = try encoder.encode(request)
         let jsonObject = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
+        #expect(jsonObject["challenge_id"] as? String == "challenge-123")
         #expect(jsonObject["encrypted_csr"] as? String == "base64-encrypted-csr-data")
         #expect(jsonObject["encryptedCsr"] == nil)
     }
@@ -499,6 +504,8 @@ struct ModelsTests {
     func decodeChallengeResponse() throws {
         let json = """
         {
+            "protocol_version": 2,
+            "challenge_id": "challenge-123",
             "challenge": "a1b2c3d4e5f6",
             "sensor_id": "sensor-001",
             "sensor_name": "SquirrelOps-Kitchen"
@@ -509,6 +516,8 @@ struct ModelsTests {
         let challenge = try decoder.decode(ChallengeResponse.self, from: json)
 
         #expect(challenge.challenge == "a1b2c3d4e5f6")
+        #expect(challenge.protocolVersion == 2)
+        #expect(challenge.challengeId == "challenge-123")
         #expect(challenge.sensorId == "sensor-001")
         #expect(challenge.sensorName == "SquirrelOps-Kitchen")
     }
@@ -537,7 +546,8 @@ struct ModelsTests {
     func decodeCompleteResponse() throws {
         let json = """
         {
-            "encrypted_client_cert": "base64-encrypted-client-cert"
+            "encrypted_client_cert": "base64-encrypted-client-cert",
+            "pairing_id": 42
         }
         """.data(using: .utf8)!
 
@@ -545,6 +555,7 @@ struct ModelsTests {
         let complete = try decoder.decode(CompleteResponse.self, from: json)
 
         #expect(complete.encryptedClientCert == "base64-encrypted-client-cert")
+        #expect(complete.pairingId == 42)
     }
 
     // MARK: - DecoySummary decoding

@@ -3,7 +3,6 @@ import Foundation
 import Darwin
 #endif
 import os
-import SystemConfiguration
 
 // Optional dedicated service account the sensor may run as (provisioned by the
 // installer for a non-root .pkg deployment). Resolved at startup if present.
@@ -48,12 +47,22 @@ guard bindResult == 0 else {
     exit(1)
 }
 
-// The sensor runs either as root (system LaunchDaemon / .pkg install) or as the
-// logged-in console user (per-user LaunchAgent / dev install), so the socket
-// must be connectable by a non-root process. Authorization is enforced per
-// connection by the peer-UID check below (root, the current console user, or a
-// provisioned service account), NOT by these filesystem bits.
-chmod(socketPath, 0o666)
+// Fail closed if the dedicated service group is unavailable. A normal package
+// install creates _squirrelops and restarts this helper before the sensor runs.
+if let group = getgrnam(sensorServiceAccount) {
+    let serviceGID = group.pointee.gr_gid
+    guard chown(socketPath, 0, serviceGID) == 0, chmod(socketPath, 0o660) == 0 else {
+        logger.error("Failed to secure helper socket: \(String(cString: strerror(errno)))")
+        unlink(socketPath)
+        exit(1)
+    }
+} else {
+    logger.error("Service group _squirrelops is unavailable; helper socket is root-only")
+    guard chown(socketPath, 0, 0) == 0, chmod(socketPath, 0o600) == 0 else {
+        unlink(socketPath)
+        exit(1)
+    }
+}
 
 guard listen(serverFd, 5) == 0 else {
     logger.error("Failed to listen: \(String(cString: strerror(errno)))")
@@ -76,10 +85,9 @@ while true {
         continue
     }
 
-    // Verify peer credentials. Authorize only the identities the sensor can run
-    // as: root, the current console (logged-in) user, or a provisioned service
-    // account. This supports both the root daemon and the per-user agent
-    // deployments while still rejecting other local accounts and daemons.
+    // Only root and the dedicated sensor account may drive privileged network
+    // operations. Desktop users are deliberately excluded because any process
+    // in their login session could otherwise obtain the same authority.
     var peerUID: uid_t = 0
     var peerGID: gid_t = 0
     guard getpeereid(clientFd, &peerUID, &peerGID) == 0 else {
@@ -122,17 +130,6 @@ while true {
     close(clientFd)
 }
 
-/// UID of the current console (logged-in) user, or nil if no user is at the
-/// login window. The per-user LaunchAgent sensor runs as this user.
-func currentConsoleUID() -> uid_t? {
-    var uid: uid_t = 0
-    let name = SCDynamicStoreCopyConsoleUser(nil, &uid, nil) as String?
-    guard let name, !name.isEmpty, name != "loginwindow", uid != 0 else {
-        return nil
-    }
-    return uid
-}
-
 /// UID of the optional dedicated service account, if it has been provisioned.
 func serviceAccountUID() -> uid_t? {
     guard let pw = getpwnam(sensorServiceAccount) else { return nil }
@@ -140,11 +137,15 @@ func serviceAccountUID() -> uid_t? {
 }
 
 /// Whether a connecting peer UID is allowed to drive privileged operations.
-/// Permits root, the current console user, and a provisioned service account.
+/// Permits root and the provisioned sensor service account.
 func isAuthorizedPeer(_ uid: uid_t) -> Bool {
+    isAuthorizedPeer(uid, serviceUID: serviceAccountUID())
+}
+
+/// Pure authorization rule used by the socket server and regression tests.
+func isAuthorizedPeer(_ uid: uid_t, serviceUID: uid_t?) -> Bool {
     if uid == 0 { return true }
-    if let console = currentConsoleUID(), uid == console { return true }
-    if let svc = serviceAccountUID(), uid == svc { return true }
+    if let serviceUID, uid == serviceUID { return true }
     return false
 }
 

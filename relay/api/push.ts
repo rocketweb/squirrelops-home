@@ -131,6 +131,46 @@ function timingSafeEqual(a: string, b: string): boolean {
 // platform limit). APNs alert payloads are well under 4 KB.
 const MAX_BODY_BYTES = 8 * 1024;
 
+async function readLimitedJSON(
+  request: Request,
+): Promise<
+  | { ok: true; value: unknown }
+  | { ok: false; status: number; error: string }
+> {
+  if (request.body === null) {
+    return { ok: false, status: 400, error: "Invalid JSON body" };
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        await reader.cancel();
+        return { ok: false, status: 413, error: "Payload too large" };
+      }
+      chunks.push(value);
+    }
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return {
+      ok: true,
+      value: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)),
+    };
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON body" };
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Edge Function handler
 // ---------------------------------------------------------------------------
@@ -165,24 +205,34 @@ export default async function handler(request: Request): Promise<Response> {
   }
 
   // Reject oversized bodies before reading them into memory.
-  const contentLength = Number(request.headers.get("Content-Length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+  const contentLengthHeader = request.headers.get("Content-Length");
+  const contentLength = Number(contentLengthHeader ?? "0");
+  if (
+    contentLengthHeader !== null &&
+    (!/^\d+$/.test(contentLengthHeader) || !Number.isSafeInteger(contentLength))
+  ) {
+    return new Response(JSON.stringify({ error: "Invalid Content-Length" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (contentLength > MAX_BODY_BYTES) {
     return new Response(JSON.stringify({ error: "Payload too large" }), {
       status: 413,
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  // Parse and validate body
-  let rawBody: unknown;
-  try {
-    rawBody = await request.json();
-  } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
-      status: 400,
+  // Stream with an actual byte ceiling; Content-Length is optional and
+  // attacker-controlled, so it is only an early rejection hint.
+  const parsedBody = await readLimitedJSON(request);
+  if (!parsedBody.ok) {
+    return new Response(JSON.stringify({ error: parsedBody.error }), {
+      status: parsedBody.status,
       headers: { "Content-Type": "application/json" },
     });
   }
+  const rawBody = parsedBody.value;
 
   const validation = validateBody(rawBody);
   if (!validation.ok) {

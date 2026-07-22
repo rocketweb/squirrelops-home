@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Step 2 + 3: Enter the 6-digit pairing code and execute the pairing protocol.
+/// Step 2 + 3: Enter the one-time setup key and execute the pairing protocol.
 public struct PairingView: View {
     @Environment(\.colorScheme) private var colorScheme
     let pairingManager: PairingManager
@@ -23,7 +23,13 @@ public struct PairingView: View {
         self.onComplete = onComplete
     }
 
-    private var isCodeComplete: Bool { codeText.count == 6 && codeText.allSatisfy(\.isNumber) }
+    private let setupKeyLength = 20
+
+    private var rawCode: String {
+        String(codeText.filter { $0.isLetter || $0.isNumber })
+    }
+
+    private var isCodeComplete: Bool { rawCode.count == setupKeyLength }
 
     public var body: some View {
         VStack(spacing: Spacing.lg) {
@@ -61,7 +67,7 @@ public struct PairingView: View {
                 .font(Typography.h2)
                 .foregroundStyle(Theme.textPrimary(colorScheme))
 
-            Text("Enter the 6-digit code displayed on your sensor.")
+            Text("Enter the one-time setup key displayed on your sensor.")
                 .font(Typography.body)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
                 .multilineTextAlignment(.center)
@@ -94,61 +100,34 @@ public struct PairingView: View {
     }
 
     private var codeInputFields: some View {
-        ZStack {
-            // Hidden TextField captures keyboard input
-            TextField("", text: $codeText)
-                .textFieldStyle(.plain)
-                .frame(width: 1, height: 1)
-                .opacity(0.01)
-                .focused($isFieldFocused)
-                .onChange(of: codeText) { _, newValue in
-                    let filtered = String(newValue.filter(\.isNumber).prefix(6))
-                    if filtered != newValue {
-                        codeText = filtered
-                    }
-                }
-                .onSubmit {
-                    if isCodeComplete {
-                        Task { await performPairing() }
-                    }
-                }
-
-            // Visual digit boxes
-            HStack(spacing: Spacing.sm) {
-                ForEach(0..<6, id: \.self) { index in
-                    digitBox(at: index)
-                }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                isFieldFocused = true
-            }
-        }
-    }
-
-    private func digitBox(at index: Int) -> some View {
-        let digit: String = index < codeText.count
-            ? String(codeText[codeText.index(codeText.startIndex, offsetBy: index)])
-            : ""
-        let isCursor = index == codeText.count && isFieldFocused
-
-        return Text(digit)
-            .font(.system(size: 28, weight: .semibold, design: .monospaced))
-            .foregroundStyle(Theme.textPrimary(colorScheme))
-            .frame(width: 48, height: 56)
-            .background(
-                RoundedRectangle(cornerRadius: Spacing.radiusSm)
-                    .fill(Theme.backgroundSecondary(colorScheme))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Spacing.radiusSm)
-                    .stroke(
-                        isCursor
-                            ? Theme.accentDefault(colorScheme)
-                            : Theme.textTertiary(colorScheme).opacity(0.3),
-                        lineWidth: isCursor ? 2 : 1
+        TextField("XXXX-XXXX-XXXX-XXXX-XXXX", text: $codeText)
+            .textFieldStyle(.roundedBorder)
+            .font(.system(size: 20, weight: .semibold, design: .monospaced))
+            .multilineTextAlignment(.center)
+            .frame(width: 360)
+            .focused($isFieldFocused)
+            .onChange(of: codeText) { _, newValue in
+                let normalized = String(
+                    newValue.uppercased().filter { $0.isLetter || $0.isNumber }
+                        .prefix(setupKeyLength)
+                )
+                let groups = stride(from: 0, to: normalized.count, by: 4).map { start in
+                    let lower = normalized.index(normalized.startIndex, offsetBy: start)
+                    let upper = normalized.index(
+                        lower, offsetBy: min(4, normalized.count - start)
                     )
-            )
+                    return String(normalized[lower..<upper])
+                }
+                let formatted = groups.joined(separator: "-")
+                if formatted != newValue {
+                    codeText = formatted
+                }
+            }
+            .onSubmit {
+                if isCodeComplete {
+                    Task { await performPairing() }
+                }
+            }
     }
 
     // MARK: - Pairing Progress
@@ -177,7 +156,7 @@ public struct PairingView: View {
         errorMessage = nil
 
         do {
-            _ = try await pairingManager.pair(sensor: sensor, code: codeText)
+            _ = try await pairingManager.pair(sensor: sensor, code: codeText.uppercased())
             onComplete()
         } catch {
             isPairing = false

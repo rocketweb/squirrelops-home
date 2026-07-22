@@ -7,21 +7,31 @@ nesting (e.g., SQUIRRELOPS_NETWORK__SCAN_INTERVAL=120).
 
 from __future__ import annotations
 
+import logging
 import os
 import pathlib
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Config sub-models
 # ---------------------------------------------------------------------------
 
+class TLSConfig(BaseModel):
+    enabled: bool = True
+
+
 class SensorConfig(BaseModel):
+    id: str = ""
     name: str = "SquirrelOps Home Sensor"
     data_dir: str = "./data"
     port: int = 8443
+    tls: TLSConfig = Field(default_factory=TLSConfig)
+    secret_passphrase: str | None = None
 
 
 class NetworkConfig(BaseModel):
@@ -97,6 +107,31 @@ class HomeAssistantConfig(BaseModel):
     token: str = ""
 
 
+class LearningModeConfig(BaseModel):
+    enabled: bool = False
+    started_at: str | None = None
+    duration_hours: int = 48
+
+
+class PairingConfig(BaseModel):
+    """Local pairing transport and peer-verification settings.
+
+    ``socket_path`` defaults to ``<sensor.data_dir>/../run/pairing.sock`` at
+    runtime. Local automatic pairing is fail-closed: the peer must be the
+    installed SquirrelOps app unless ``allow_unsigned_local`` is explicitly
+    enabled for source development.
+    """
+
+    socket_path: str | None = None
+    allowed_app_path: str = (
+        "/Applications/SquirrelOps Home.app/Contents/MacOS/SquirrelOpsHome"
+    )
+    allowed_app_requirement: str = (
+        'identifier "com.squirrelops.home" and anchor apple generic'
+    )
+    allow_unsigned_local: bool = False
+
+
 class ProfileLimits(BaseModel):
     scan_interval: int = 300
     max_decoys: int = 8
@@ -121,7 +156,10 @@ class ProfilesConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 class Settings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     profile: str = "standard"
+    version: str = ""
     credential_filename: str = "passwords.txt"
     sensor: SensorConfig = Field(default_factory=SensorConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
@@ -132,6 +170,10 @@ class Settings(BaseModel):
     profiles: ProfilesConfig = Field(default_factory=ProfilesConfig)
     home_assistant: HomeAssistantConfig = Field(default_factory=HomeAssistantConfig)
     scouts: ScoutsConfig = Field(default_factory=ScoutsConfig)
+    learning_mode: LearningModeConfig = Field(default_factory=LearningModeConfig)
+    pairing: PairingConfig = Field(default_factory=PairingConfig)
+    alert_methods: dict[str, Any] = Field(default_factory=dict)
+    update_manifest_url: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +236,7 @@ def _collect_env_overrides() -> dict[str, Any]:
 # the flat keys are silently ignored by Pydantic, so e.g. a top-level
 # ``subnet: 192.168.1.0/24`` never reaches ``NetworkConfig.subnet``.
 _FLAT_KEY_MAP: dict[str, tuple[str, str]] = {
+    "sensor_id": ("sensor", "id"),
     "data_dir": ("sensor", "data_dir"),
     "port": ("sensor", "port"),
     "subnet": ("network", "subnet"),
@@ -257,19 +300,24 @@ def load_settings(
     if env_overrides:
         _normalize_flat_keys(env_overrides)
 
-    # Layer 3: persisted runtime config (written by PUT /config)
-    # Only loaded in daemon mode (no explicit config_path) so that tests
-    # passing a custom file aren't polluted by ./data/config.yaml.
-    if config_path is None:
-        config_for_data_dir = _deep_merge(dict(base), env_overrides)
-        _normalize_flat_keys(config_for_data_dir)
-        data_dir = config_for_data_dir.get("sensor", {}).get("data_dir", "./data")
-        persisted_path = pathlib.Path(data_dir) / "config.yaml"
-        if persisted_path.exists():
-            with open(persisted_path) as fh:
-                persisted_data = yaml.safe_load(fh)
-            if isinstance(persisted_data, dict):
-                base = _deep_merge(base, persisted_data)
+    # Layer 3: persisted runtime config (written by PUT /config). Resolve a
+    # relative data directory beside an explicit config file, not against the
+    # caller's working directory. This keeps package installs deterministic and
+    # prevents tests/custom configs from accidentally loading ./data/config.yaml
+    # from the repository.
+    config_for_data_dir = _deep_merge(dict(base), env_overrides)
+    _normalize_flat_keys(config_for_data_dir)
+    data_dir = pathlib.Path(
+        config_for_data_dir.get("sensor", {}).get("data_dir", "./data")
+    ).expanduser()
+    if not data_dir.is_absolute() and config_path is not None:
+        data_dir = config_path.resolve().parent / data_dir
+    persisted_path = data_dir / "config.yaml"
+    if persisted_path.exists() and persisted_path.resolve() != path.resolve():
+        with open(persisted_path) as fh:
+            persisted_data = yaml.safe_load(fh)
+        if isinstance(persisted_data, dict):
+            base = _deep_merge(base, persisted_data)
 
     # Migrate flat keys written by older versions of PUT /config into
     # the nested structure expected by the Settings model.
@@ -279,5 +327,10 @@ def load_settings(
     if env_overrides:
         base = _deep_merge(base, env_overrides)
         _normalize_flat_keys(base)
+
+    known_fields = set(Settings.model_fields)
+    unknown_fields = sorted(set(base) - known_fields)
+    if unknown_fields:
+        logger.warning("Ignoring unknown top-level config keys: %s", unknown_fields)
 
     return Settings(**base)

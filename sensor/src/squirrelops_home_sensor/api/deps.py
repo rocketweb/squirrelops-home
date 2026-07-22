@@ -1,12 +1,23 @@
 """FastAPI dependency injection providers."""
 from __future__ import annotations
 
+import ipaddress
 from collections.abc import AsyncGenerator
 
 import aiosqlite
 from fastapi import HTTPException, Request, status
 
 from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
+
+
+def is_loopback_client(host: str | None) -> bool:
+    """Return True only for a literal loopback peer address."""
+    if host is None:
+        return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 async def get_db() -> AsyncGenerator[aiosqlite.Connection, None]:
@@ -74,7 +85,11 @@ async def verify_client_cert(request: Request) -> dict:
     # requests. Production HTTPS requests must authenticate with a verified
     # TLS client certificate, not a spoofable HTTP header.
     auth_header = request.headers.get("authorization", "")
-    if request.url.scheme == "http" and auth_header.startswith("Bearer "):
+    if (
+        request.url.scheme == "http"
+        and is_loopback_client(request.client.host if request.client else None)
+        and auth_header.startswith("Bearer ")
+    ):
         token = auth_header[7:]
         db_dep = request.app.dependency_overrides.get(get_db, get_db)
         db_gen = db_dep()

@@ -23,6 +23,7 @@ import asyncio
 import logging
 import ssl
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,36 @@ def load_config(config_path: str | None) -> dict[str, Any]:
 
     path = Path(config_path) if config_path else None
     settings = load_settings(config_path=path)
-    return settings.model_dump()
+    config = settings.model_dump()
+
+    # Resolve relative data paths next to an explicit package/user config so
+    # startup and persisted-config loading agree regardless of cwd.
+    data_dir = Path(config["sensor"]["data_dir"]).expanduser()
+    if not data_dir.is_absolute() and path is not None:
+        data_dir = path.resolve().parent / data_dir
+    else:
+        data_dir = data_dir.resolve()
+    config["sensor"]["data_dir"] = str(data_dir)
+
+    # Sensor identity is generated once per installation and kept in a private
+    # runtime file. A stable ID is required for pairing key derivation and app
+    # credential labels; "unknown" must never become a shared identity.
+    from squirrelops_home_sensor.secure_io import atomic_write_private_text
+
+    sensor_id_path = data_dir / "sensor-id"
+    sensor_id = str(config["sensor"].get("id", "")).strip()
+    if not sensor_id and sensor_id_path.exists():
+        sensor_id = sensor_id_path.read_text(encoding="utf-8").strip()
+    if not sensor_id:
+        sensor_id = str(uuid.uuid4())
+        atomic_write_private_text(sensor_id_path, sensor_id + "\n")
+    config["sensor"]["id"] = sensor_id
+
+    # Keep the legacy flat runtime aliases while routes and integrations move
+    # to the canonical nested sensor model.
+    config["sensor_id"] = sensor_id
+    config["sensor_name"] = config["sensor"]["name"]
+    return config
 
 
 async def open_db(db_path: Path) -> Any:
@@ -289,7 +319,7 @@ def create_secret_store(config: dict[str, Any]) -> Any:
 def create_mdns_advertiser(config: dict[str, Any], port: int) -> Any:
     """Create the mDNS service advertiser."""
     from squirrelops_home_sensor.mdns import ServiceAdvertiser
-    sensor_name = config.get("sensor_name", "SquirrelOps")
+    sensor_name = config.get("sensor", {}).get("name", "SquirrelOps")
     return ServiceAdvertiser(name=sensor_name, port=port)
 
 
@@ -494,59 +524,61 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--show-pairing-code",
         action="store_true",
         default=False,
-        help="Print the current pairing code from a running sensor and exit",
+        help="Print the current one-time setup key from a running sensor and exit",
     )
     return parser.parse_args(argv)
 
 
 # ---------------------------------------------------------------------------
-# Pairing code display
+# Pairing setup-key display
 # ---------------------------------------------------------------------------
 
-# Well-known file path for the pairing code (readable by the local user).
-# The macOS app can read this for same-machine pairing without manual entry.
-PAIRING_CODE_FILE = Path("/tmp/squirrelops-pairing-code")
+
+def _pairing_key_file(config: dict[str, Any]) -> Path:
+    data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
+    return data_dir / "pairing-key"
+
+
+def _local_pairing_socket(config: dict[str, Any]) -> Path:
+    configured = config.get("pairing", {}).get("socket_path")
+    if configured:
+        return Path(configured).expanduser()
+    data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
+    return data_dir.parent / "run" / "pairing.sock"
 
 
 def _display_pairing_code(code: str, config: dict[str, Any]) -> None:
-    """Print the pairing code prominently and write it to a well-known file.
+    """Print the setup key and store a private recovery copy.
 
-    The code is displayed as a startup banner so users can easily find it
-    in terminal output or service logs.  It is also written to
-    ``/tmp/squirrelops-pairing-code`` so the macOS app (or the user) can
-    retrieve it on the same machine.
+    The local app retrieves the key over a peer-verified Unix socket. The file
+    is mode 0600 inside the private data directory for an administrator or
+    service operator using ``--show-pairing-code``; no secret is written to a
+    shared temporary directory.
     """
-    sensor_name = config.get("sensor_name", "SquirrelOps")
+    from squirrelops_home_sensor.secure_io import atomic_write_private_text
+
+    sensor_name = config.get("sensor", {}).get("name", "SquirrelOps")
 
     banner = (
         "\n"
-        "╔══════════════════════════════════════════════╗\n"
-        "║                                              ║\n"
-        f"║   🐿️  {sensor_name} Sensor — Pairing Code   ║\n"
-        "║                                              ║\n"
-        f"║              [ {code} ]              ║\n"
-        "║                                              ║\n"
-        "║   Enter this code in the SquirrelOps Home    ║\n"
-        "║   app to pair with this sensor.              ║\n"
-        "║                                              ║\n"
-        "║   Code expires after 10 minutes or 5 failed  ║\n"
-        "║   attempts, then a new code is generated.    ║\n"
-        "║                                              ║\n"
-        "╚══════════════════════════════════════════════╝\n"
+        "╔════════════════════════════════════════════════════════════╗\n"
+        "║                                                            ║\n"
+        f"║   🐿️  {sensor_name} Sensor Setup Key\n"
+        "║                                                            ║\n"
+        f"║       {code}\n"
+        "║                                                            ║\n"
+        "║   Enter this key in the SquirrelOps Home app to pair.      ║\n"
+        "║   It expires after 10 minutes or after it is used.         ║\n"
+        "║                                                            ║\n"
+        "╚════════════════════════════════════════════════════════════╝\n"
     )
     # Print directly to stdout (bypasses log formatting)
     print(banner, flush=True)
 
     # Also log it so it appears in structured logs / journald
-    logger.info("Pairing code for %s: %s", sensor_name, code)
-
-    # Write to well-known file for same-machine retrieval
-    try:
-        PAIRING_CODE_FILE.write_text(code + "\n")
-        PAIRING_CODE_FILE.chmod(0o600)
-        logger.info("Pairing code written to %s", PAIRING_CODE_FILE)
-    except OSError as exc:
-        logger.warning("Could not write pairing code file: %s", exc)
+    key_file = _pairing_key_file(config)
+    atomic_write_private_text(key_file, code + "\n")
+    logger.info("Pairing setup key stored privately at %s", key_file)
 
 
 # ---------------------------------------------------------------------------
@@ -571,6 +603,9 @@ async def run_sensor(
     if port is not None:
         config["sensor"]["port"] = port
     port = int(config.get("sensor", {}).get("port", 8443))
+    no_tls = no_tls or not bool(
+        config.get("sensor", {}).get("tls", {}).get("enabled", True)
+    )
     if no_tls:
         config["sensor"].setdefault("tls", {})
         config["sensor"]["tls"]["enabled"] = False
@@ -591,7 +626,7 @@ async def run_sensor(
         from squirrelops_home_sensor.tls import ensure_tls_certs
         secret_store = create_secret_store(config)
         data_dir_path = Path(config.get("sensor", {}).get("data_dir", "./data"))
-        sensor_name = config.get("sensor_name", "SquirrelOps")
+        sensor_name = config.get("sensor", {}).get("name", "SquirrelOps")
         cert_path, key_path, ca_key, ca_cert = await ensure_tls_certs(
             secret_store, data_dir=data_dir_path, sensor_name=sensor_name
         )
@@ -743,9 +778,13 @@ async def run_sensor(
         ClientCertWebSocketProtocol,
     )
 
+    bind_host = "127.0.0.1" if no_tls else "0.0.0.0"
+    if no_tls:
+        logger.warning("TLS disabled for development; API restricted to %s", bind_host)
+
     uvicorn_config = uvicorn.Config(
         app=app,
-        host="0.0.0.0",
+        host=bind_host,
         port=port,
         log_level="info",
         http=ClientCertH11Protocol,
@@ -758,22 +797,22 @@ async def run_sensor(
     mdns = create_mdns_advertiser(config, port)
     await mdns.start()
 
-    # Generate pairing code at startup so it's visible before the app connects
+    # Generate the one-time setup key before the app connects.
     from squirrelops_home_sensor.api.routes_pairing import (
         _init_pairing_state,
         _maybe_regenerate_code,
     )
     _init_pairing_state(app.state, config)
 
-    # Display the pairing code prominently and write to file
+    # Display the pairing setup key and store a private recovery copy.
     pairing_code = getattr(app.state, "pairing_code", None)
     if isinstance(pairing_code, str) and pairing_code:
         _display_pairing_code(pairing_code, config)
 
     # 9b. Local pairing over a peer-credential-verified Unix socket. Replaces the
     # old loopback-TCP /pairing/local/code, which disclosed the code to any
-    # local process. The connecting app must be root or the console user (and,
-    # if a codesign requirement is configured, satisfy it).
+    # local process. Production accepts only the installed, signed app; source
+    # development can explicitly opt into UID-only authorization.
     from squirrelops_home_sensor.api.local_pairing import LocalPairingServer
 
     def _get_local_pairing_code() -> str:
@@ -782,9 +821,15 @@ async def run_sensor(
         return state["code"]
 
     local_pairing = LocalPairingServer(
-        config.get("pairing", {}).get("socket_path", "/tmp/squirrelops-pairing.sock"),
+        str(_local_pairing_socket(config)),
         _get_local_pairing_code,
-        code_requirement=config.get("pairing", {}).get("local_peer_requirement"),
+        allowed_app_path=config.get("pairing", {}).get("allowed_app_path"),
+        allowed_app_requirement=config.get("pairing", {}).get(
+            "allowed_app_requirement"
+        ),
+        allow_unsigned_local=bool(
+            config.get("pairing", {}).get("allow_unsigned_local", False)
+        ),
     )
     try:
         await local_pairing.start()
@@ -830,9 +875,9 @@ async def run_sensor(
         logger.info("Closing database...")
         await db.close()
 
-        # Clean up pairing code file
+        # Clean up the ephemeral pairing setup-key file.
         try:
-            PAIRING_CODE_FILE.unlink(missing_ok=True)
+            _pairing_key_file(config).unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -854,11 +899,15 @@ def main() -> None:
     args = parse_args()
 
     if args.show_pairing_code:
-        if PAIRING_CODE_FILE.exists():
-            code = PAIRING_CODE_FILE.read_text().strip()
-            print(f"Current pairing code: {code}")
-        else:
-            print("No pairing code found. Is the sensor running?")
+        config = load_config(args.config)
+        key_file = _pairing_key_file(config)
+        try:
+            code = key_file.read_text(encoding="utf-8").strip()
+            print(f"Current pairing setup key: {code}")
+        except FileNotFoundError:
+            print("No pairing setup key found. Is the sensor running?")
+        except PermissionError:
+            print(f"Permission denied reading {key_file}; run as the sensor service user or root.")
         sys.exit(0)
 
     try:

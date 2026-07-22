@@ -1,4 +1,6 @@
 """Integration tests for config routes: get/set config, alert methods, ha-status."""
+import stat
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 
@@ -113,6 +115,30 @@ class TestUpdateConfig:
         cfg = resp.json()
         cred = cfg.get("decoys", {}).get("credential_filename") or cfg.get("credential_filename")
         assert cred is None or ("/" not in cred and ".." not in cred)
+
+    def test_persisted_config_is_private_and_keeps_mutable_sensor_fields(
+        self, client, sensor_config
+    ):
+        response = client.put(
+            "/config",
+            json={
+                "sensor": {"name": "Renamed Sensor"},
+                "home_assistant": {
+                    "enabled": True,
+                    "url": "http://192.168.1.2:8123",
+                    "token": "secret-token",
+                },
+            },
+        )
+        assert response.status_code == 200
+
+        path = Path(sensor_config["sensor"]["data_dir"]) / "config.yaml"
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        saved = path.read_text()
+        assert "Renamed Sensor" in saved
+        assert "secret-token" in saved
+        assert "data_dir" not in saved
+        assert "test-sensor-001" not in saved
 
 
 class TestGetAlertMethods:

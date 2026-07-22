@@ -13,6 +13,7 @@ from squirrelops_home_sensor.config import (
     FingerprintConfig,
     HomeAssistantConfig,
     NetworkConfig,
+    PairingConfig,
     SensorConfig,
     Settings,
     _normalize_flat_keys,
@@ -31,6 +32,12 @@ class TestSettingsModels:
         assert cfg.name == "SquirrelOps Home Sensor"
         assert cfg.data_dir == "./data"
         assert cfg.port == 8443
+        assert cfg.tls.enabled is True
+
+    def test_pairing_config_fails_closed_by_default(self) -> None:
+        cfg = PairingConfig()
+        assert cfg.allow_unsigned_local is False
+        assert cfg.socket_path is None
 
     def test_network_config_defaults(self) -> None:
         cfg = NetworkConfig()
@@ -116,6 +123,24 @@ class TestLoadFromCustomFile:
         }))
         settings = load_settings(config_path=custom)
         assert settings.sensor.name == "My Custom Sensor"
+
+    def test_explicit_config_still_loads_private_persisted_overrides(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        data_dir = tmp_path / "runtime-data"
+        data_dir.mkdir()
+        custom = tmp_path / "custom.yaml"
+        custom.write_text(
+            yaml.safe_dump({"sensor": {"data_dir": str(data_dir), "name": "Original"}})
+        )
+        (data_dir / "config.yaml").write_text(
+            yaml.safe_dump({"sensor": {"name": "Persisted"}, "profile": "full"})
+        )
+
+        settings = load_settings(config_path=custom)
+
+        assert settings.sensor.name == "Persisted"
+        assert settings.profile == "full"
 
 
 class TestLoadFromEnvVars:

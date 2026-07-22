@@ -388,6 +388,7 @@ struct EndpointTests {
     @Test("PairingVerify produces POST with correct path and body")
     func pairingVerify() throws {
         let body = VerifyRequest(
+            challengeId: "challenge-123",
             response: "hmac_hex_value",
             clientNonce: "nonce123",
             clientName: "Matt's Mac"
@@ -403,6 +404,7 @@ struct EndpointTests {
         let bodyData = endpoint.body!
         let json = try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
 
+        #expect(json["challenge_id"] as? String == "challenge-123")
         #expect(json["response"] as? String == "hmac_hex_value")
         #expect(json["client_nonce"] as? String == "nonce123")
         #expect(json["client_name"] as? String == "Matt's Mac")
@@ -410,7 +412,9 @@ struct EndpointTests {
 
     @Test("PairingComplete produces POST /pairing/complete with body")
     func pairingComplete() throws {
-        let body = CompleteRequest(encryptedCsr: "base64-csr-data")
+        let body = CompleteRequest(
+            challengeId: "challenge-123", encryptedCsr: "base64-csr-data"
+        )
         let endpoint = Endpoint.pairingComplete(body: body)
 
         #expect(endpoint.path == "/pairing/complete")
@@ -418,6 +422,7 @@ struct EndpointTests {
 
         let bodyData = endpoint.body!
         let json = try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+        #expect(json["challenge_id"] as? String == "challenge-123")
         #expect(json["encrypted_csr"] as? String == "base64-csr-data")
     }
 

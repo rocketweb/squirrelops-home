@@ -9,6 +9,7 @@ import aiosqlite
 from fastapi import APIRouter
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from squirrelops_home_sensor.api.deps import is_loopback_client
 from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
 
 router = APIRouter(tags=["websocket"])
@@ -93,7 +94,16 @@ async def _authenticate(
         })
         return None
 
-    # Non-TLS development/test fallback.
+    # Non-TLS development fallback is restricted to a literal loopback peer.
+    client = ws.scope.get("client")
+    client_host = client[0] if isinstance(client, (list, tuple)) and client else None
+    if not is_loopback_client(client_host):
+        await ws.send_json({
+            "type": "auth_error",
+            "reason": "Non-TLS authentication is restricted to loopback.",
+        })
+        return None
+
     fingerprint = raw.get("cert_fingerprint")
     token = raw.get("token")
 

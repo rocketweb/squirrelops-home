@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from squirrelops_home_sensor.api.deps import get_config, verify_client_cert
 from squirrelops_home_sensor.config import _FLAT_KEY_MAP
 from squirrelops_home_sensor.integrations.home_assistant import HomeAssistantClient
 from squirrelops_home_sensor.netvalidation import is_safe_lan_url
+from squirrelops_home_sensor.secure_io import atomic_write_private_text
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,7 @@ PROTECTED_FIELDS = {"sensor_id", "version"}
 # where the DB, CA, and encrypted secret store live (data_dir) or are the secret
 # key material itself (secret_passphrase). Allowing a paired client to change
 # them would relocate or expose trust state.
-IMMUTABLE_SENSOR_KEYS = {"data_dir", "secret_passphrase", "sensor_id"}
-
-# Keys that are runtime-only and should not be persisted
-RUNTIME_ONLY_FIELDS = {"sensor"}
+IMMUTABLE_SENSOR_KEYS = {"id", "data_dir", "secret_passphrase", "sensor_id"}
 
 # Allowed top-level config keys (Settings model fields + legacy flat keys).
 # Any key not in this set is silently rejected to prevent injection of
@@ -60,19 +58,34 @@ def _persist_config(config: dict[str, Any]) -> None:
     data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
     persist_path = data_dir / "config.yaml"
 
-    # Filter out runtime-only and protected keys
+    # Persist canonical model sections, excluding runtime identity, storage
+    # paths, and secret-store material. The file itself is private because HA,
+    # LLM, webhook, and relay settings may contain credentials.
     to_save = {
-        k: v for k, v in config.items()
-        if k not in PROTECTED_FIELDS and k not in RUNTIME_ONLY_FIELDS
+        key: value
+        for key, value in config.items()
+        if key in ALLOWED_CONFIG_KEYS and key not in _FLAT_KEY_MAP
     }
+    sensor = config.get("sensor")
+    if isinstance(sensor, dict):
+        to_save["sensor"] = {
+            key: value
+            for key, value in sensor.items()
+            if key not in IMMUTABLE_SENSOR_KEYS
+        }
 
     try:
-        data_dir.mkdir(parents=True, exist_ok=True)
-        with open(persist_path, "w") as fh:
-            yaml.safe_dump(to_save, fh, default_flow_style=False, sort_keys=False)
+        serialized = yaml.safe_dump(
+            to_save, default_flow_style=False, sort_keys=False
+        )
+        atomic_write_private_text(persist_path, serialized)
         logger.debug("Config persisted to %s", persist_path)
-    except Exception:
-        logger.warning("Failed to persist config to %s", persist_path, exc_info=True)
+    except Exception as exc:
+        logger.error("Failed to persist config to %s", persist_path, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Configuration changed in memory but could not be saved.",
+        ) from exc
 
 
 # ---------- Routes ----------

@@ -39,7 +39,18 @@ SENSOR_GROUP="_squirrelops"
 # ---------------------------------------------------------------------------
 create_service_account() {
     if dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
-        echo "[postinstall] Service account ${SENSOR_USER} already exists."
+        local existing_gid
+        existing_gid=$(dscl . -read "/Users/${SENSOR_USER}" PrimaryGroupID 2>/dev/null \
+            | awk '{print $2}')
+        if [ -z "$existing_gid" ]; then
+            echo "[postinstall] WARNING: existing ${SENSOR_USER} has no primary group ID."
+            return 1
+        fi
+        # Repair upgrades from installations that created the user without a
+        # resolvable matching group; the helper fails closed without this.
+        dscl . -create "/Groups/${SENSOR_GROUP}" 2>/dev/null || true
+        dscl . -create "/Groups/${SENSOR_GROUP}" PrimaryGroupID "$existing_gid"
+        echo "[postinstall] Service account ${SENSOR_USER} already exists (gid ${existing_gid})."
         return 0
     fi
     echo "[postinstall] Creating service account ${SENSOR_USER}..."
@@ -76,6 +87,7 @@ create_service_account || RUN_AS_SERVICE_ACCOUNT=0
 echo "[postinstall] Creating data directories..."
 mkdir -p "$DATA_DIR"
 mkdir -p "$LOG_DIR"
+mkdir -p "$INSTALL_DIR/run"
 
 # ---------------------------------------------------------------------------
 # Step 1b: Repair venv Python symlinks
@@ -140,22 +152,26 @@ if [ -f "$CONFIG_BACKUP" ]; then
 elif [ ! -f "$CONFIG_FILE" ]; then
     # Fresh install: generate default config
     echo "[postinstall] Generating default config.yaml..."
-    cat > "$CONFIG_FILE" << 'YAML'
+    cat > "$CONFIG_FILE" << YAML
 # SquirrelOps Home Sensor — Configuration
 # See documentation for all available options.
 
 profile: standard
 
+sensor:
+  name: SquirrelOps Home Sensor
+  data_dir: "$DATA_DIR"
+  port: 8443
+
 network:
   interface: auto
   scan_interval: 300
 
-api:
-  port: 8443
-  host: 0.0.0.0
-
-data:
+alerts:
   retention_days: 90
+
+pairing:
+  socket_path: "$INSTALL_DIR/run/pairing.sock"
 YAML
 fi
 
@@ -193,7 +209,19 @@ if [ "$RUN_AS_SERVICE_ACCOUNT" = "1" ]; then
     # The sensor writes the DB, certs, secret store, and logs; the venv/python
     # stays root-owned (read+execute only).
     chown -R "${SENSOR_USER}:${SENSOR_GROUP}" "$DATA_DIR" "$LOG_DIR" 2>/dev/null || true
+    chown "${SENSOR_USER}:${SENSOR_GROUP}" "$INSTALL_DIR/run" 2>/dev/null || true
     chown "${SENSOR_USER}:${SENSOR_GROUP}" "$CONFIG_FILE" 2>/dev/null || true
+    chmod 700 "$DATA_DIR" 2>/dev/null || true
+    chmod 755 "$INSTALL_DIR/run" 2>/dev/null || true
+    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+fi
+chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+chmod 700 "$DATA_DIR" 2>/dev/null || true
+
+# The app package may have started the helper before the service account was
+# created. Restart it so the socket is recreated as root:_squirrelops 0660.
+if [ -f /Library/LaunchDaemons/com.squirrelops.helper.plist ]; then
+    launchctl kickstart -k system/com.squirrelops.helper 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------

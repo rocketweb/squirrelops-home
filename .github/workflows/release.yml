@@ -6,9 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write
-  packages: write
-  id-token: write
+  contents: read
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -17,17 +15,22 @@ jobs:
   build-docker:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -35,7 +38,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/squirrelops-sensor
           tags: |
@@ -44,7 +47,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: sensor
           platforms: linux/amd64,linux/arm64
@@ -62,10 +65,14 @@ jobs:
   build-macos-pkg:
     name: Build macOS .pkg
     runs-on: macos-15
+    permissions:
+      contents: read
     env:
       HAS_CERTS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Import signing certificates
         if: ${{ env.HAS_CERTS == 'true' }}
@@ -103,12 +110,14 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: false
 
       - name: Strip version prefix
         id: version
@@ -123,7 +132,7 @@ jobs:
         run: bash scripts/build-pkg.sh
 
       - name: Upload .pkg artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: macos-pkg
           path: build/pkg/output/SquirrelOpsHome-*
@@ -135,14 +144,18 @@ jobs:
   publish-sensor-wheel:
     name: Publish Sensor Wheel to PyPI
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     continue-on-error: true
     env:
       PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
 
@@ -159,7 +172,7 @@ jobs:
 
       - name: Publish to PyPI
         if: ${{ env.PYPI_API_TOKEN != '' }}
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d # v1.14.0
         with:
           password: ${{ env.PYPI_API_TOKEN }}
           packages-dir: sensor/dist/
@@ -175,11 +188,15 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     needs: [build-docker, build-macos-pkg]
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Download .pkg artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: macos-pkg
           path: release-assets/
@@ -190,6 +207,9 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           VERSION="${TAG_NAME#v}"
+          cp scripts/install.sh scripts/install-macos.sh release-assets/
+          (cd release-assets && shasum -a 256 install.sh > install.sh.sha256)
+          (cd release-assets && shasum -a 256 install-macos.sh > install-macos.sh.sha256)
           cat > release-body.md << 'RELEASE_EOF'
           ## Install
 
@@ -205,8 +225,12 @@ jobs:
 
           Installs the **sensor only** on Linux/NAS. The dashboard/control-plane app is macOS-only and must be installed separately on a Mac.
 
+          Download `install.sh` and `install.sh.sha256` from this release, then verify before running:
+
           ```bash
-          curl -fsSL LINUX_INSTALL_URL | sudo bash
+          shasum -a 256 -c install.sh.sha256
+          less install.sh
+          sudo bash install.sh
           ```
 
           After the sensor is running, install the macOS app separately to pair with it and use the dashboard.
@@ -222,8 +246,6 @@ jobs:
 
           # Fix version placeholder
           sed -i "s/VERSION/${VERSION}/g" release-body.md
-          sed -i "s|LINUX_INSTALL_URL|https://raw.githubusercontent.com/${{ github.repository }}/${TAG_NAME}/scripts/install.sh|g" release-body.md
-
           # Fix download URL
           PKG_FILE=$(ls release-assets/SquirrelOpsHome-*.pkg 2>/dev/null | grep -v '.sha256' | head -1)
           PKG_BASENAME=$(basename "$PKG_FILE")
@@ -231,12 +253,16 @@ jobs:
           sed -i "s|PLACEHOLDER|${DOWNLOAD_URL}|g" release-body.md
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
         with:
           body_path: release-body.md
           files: |
             release-assets/SquirrelOpsHome-*.pkg
             release-assets/SquirrelOpsHome-*.pkg.sha256
+            release-assets/install.sh
+            release-assets/install.sh.sha256
+            release-assets/install-macos.sh
+            release-assets/install-macos.sh.sha256
 
       - name: Update manifest.json
         env:
@@ -274,9 +300,12 @@ jobs:
           cat site/public/manifest.json
 
       - name: Commit and push manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add site/public/manifest.json
           git commit -m "chore: update manifest.json for ${GITHUB_REF_NAME}"
-          git push origin HEAD:main
+          git -c credential.helper='!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+            push origin HEAD:main

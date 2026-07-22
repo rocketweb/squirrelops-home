@@ -140,14 +140,16 @@ Requires Swift 6.0 and macOS 14+ (Sonoma).
 
 ## Pairing
 
-The app discovers the sensor via mDNS (`_squirrelops._tcp`) and pairs using a 6-digit code. The pairing flow:
+The app discovers the sensor via mDNS (`_squirrelops._tcp`) and pairs using a one-time 100-bit setup key. The pairing flow:
 
 1. App discovers sensor on the local network
-2. Sensor generates a pairing code at startup — visible in logs and written to `/tmp/squirrelops-pairing-code` (use `--show-pairing-code` to retrieve)
-3. User enters the code in the app
-4. App and sensor perform HMAC-SHA256 challenge-response, then HKDF key derivation
+2. Sensor generates a setup key at startup. It is shown in the startup banner and stored as `pairing-key` inside the private sensor data directory (`--show-pairing-code` retrieves it)
+3. User enters the setup key in the app, or the installed local app retrieves it through a peer-verified Unix socket
+4. App and sensor perform a versioned HMAC-SHA256 transcript proof, then derive a session key with HKDF
 5. App generates a CSR, sensor issues a client certificate signed by its CA
-6. All subsequent communication uses mutual TLS — the code is never needed again
+6. All subsequent communication uses mutual TLS. The one-time setup key is invalidated after use
+
+The production local-pairing socket accepts only the configured installed SquirrelOps executable after validating both its signature and designated code requirement. `pairing.allow_unsigned_local: true` exists for source development only and reduces the local trust boundary to the logged-in user.
 
 ## Development
 
