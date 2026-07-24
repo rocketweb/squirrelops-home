@@ -50,6 +50,9 @@ def test_embedded_sensor_runtime_uses_hash_locked_dependencies() -> None:
     package_builder = (REPO_ROOT / "scripts/build-pkg.sh").read_text(
         encoding="utf-8"
     )
+    release_workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert 'uv export \\\n    --project "$SENSOR_DIR" \\' in environment_builder
     assert "--locked" in environment_builder
@@ -59,6 +62,7 @@ def test_embedded_sensor_runtime_uses_hash_locked_dependencies() -> None:
     assert "--no-annotate" in environment_builder
     assert "--require-hashes" in environment_builder
     assert 'REQUIRED_UV_VERSION="0.10.2"' in environment_builder
+    assert 'version: "0.10.2"' in release_workflow
     assert "--only-group build" in environment_builder
     assert '--build-constraints "$LOCKED_BUILD_REQUIREMENTS"' in environment_builder
     assert '--python "$ENV_PYTHON"' in environment_builder
