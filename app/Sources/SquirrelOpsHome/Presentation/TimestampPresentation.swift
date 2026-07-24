@@ -59,13 +59,23 @@ enum TimestampPresentation {
         let value = timestamp.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
 
-        let iso8601 = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
-        if let date = try? iso8601.parse(value) {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds
+        ]
+        if let date = fractional.date(from: value) {
+            return date
+        }
+
+        let wholeSeconds = ISO8601DateFormatter()
+        wholeSeconds.formatOptions = [.withInternetDateTime]
+        if let date = wholeSeconds.date(from: value) {
             return date
         }
 
         if value.count == 10 {
-            if let date = try? iso8601.parse("\(value)T00:00:00Z") {
+            if let date = wholeSeconds.date(from: "\(value)T00:00:00Z") {
                 return date
             }
         }
@@ -77,7 +87,7 @@ enum TimestampPresentation {
             if value[separator] == " " {
                 var normalized = value
                 normalized.replaceSubrange(separator...separator, with: "T")
-                return try? iso8601.parse("\(normalized)Z")
+                return wholeSeconds.date(from: "\(normalized)Z")
             }
         }
         return nil

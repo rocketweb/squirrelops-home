@@ -8,6 +8,7 @@ import aiosqlite
 import pytest
 
 from squirrelops_home_sensor.db.schema import create_all_tables
+from squirrelops_home_sensor.decoys import orchestrator as orchestrator_module
 from squirrelops_home_sensor.decoys.orchestrator import DecoyOrchestrator
 
 
@@ -97,6 +98,8 @@ class TestAutoDeployCreatesDecoys:
         self, db, event_bus, monkeypatch,
     ):
         """No-LAN scans create no unreachable rows and re-resolve on the next scan."""
+        bindable_lan_address = orchestrator_module._route_selected_ip()
+        assert bindable_lan_address is not None
         route_address: dict[str, str | None] = {"value": None}
         monkeypatch.setattr(
             "squirrelops_home_sensor.decoys.orchestrator._route_selected_ip",
@@ -117,12 +120,15 @@ class TestAutoDeployCreatesDecoys:
             ).fetchone()
         )[0] == 0
 
-        route_address["value"] = "192.168.1.79"
+        route_address["value"] = bindable_lan_address
         assert await orchestrator.auto_deploy(services) == 1
         row = await (
             await db.execute("SELECT status, bind_address FROM decoys")
         ).fetchone()
-        assert (row["status"], row["bind_address"]) == ("active", "192.168.1.79")
+        assert (row["status"], row["bind_address"]) == (
+            "active",
+            bindable_lan_address,
+        )
 
     async def test_deploys_file_share_fallback(self, orchestrator, db, event_bus):
         """Deploys a file share decoy when no recognizable ports detected."""

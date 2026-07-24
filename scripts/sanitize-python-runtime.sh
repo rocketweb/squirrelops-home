@@ -57,7 +57,13 @@ if [ "$MODE" = "sanitize" ]; then
         first_line="$(sed -n '1p' "$console_script")"
         case "$first_line" in
             "#!"*python*)
-                sed -i '' -e "1s|^.*|#!${INSTALLED_PYTHON}|" "$console_script"
+                replacement="${console_script}.squirrelops-sanitize.$$"
+                {
+                    printf '#!%s\n' "$INSTALLED_PYTHON"
+                    sed '1d' "$console_script"
+                } > "$replacement"
+                chmod 755 "$replacement"
+                mv "$replacement" "$console_script"
                 ;;
         esac
     done < <(find "$PAYLOAD_DIR/bin" -maxdepth 1 -type f -print0)
