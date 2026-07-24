@@ -6,6 +6,7 @@ home_alerts rows, publish alert.new events, and invoke incident grouping.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock
@@ -199,6 +200,267 @@ class TestScanConnection:
         detail = json.loads(rows[0]["detail"])
         assert detail["dest_port"] == 3000
         assert "request_path" not in detail
+
+    @pytest.mark.asyncio
+    async def test_scan_burst_updates_one_unread_alert(
+        self, handler, bus, db, incident_grouper,
+    ):
+        from squirrelops_home_sensor.db import queries as q
+
+        first_decoy = await q.insert_decoy(
+            db,
+            name="Web",
+            decoy_type="mimic",
+            bind_address="192.168.1.240",
+            port=80,
+            created_at="2026-03-02T00:00:00Z",
+            updated_at="2026-03-02T00:00:00Z",
+        )
+        second_decoy = await q.insert_decoy(
+            db,
+            name="TLS",
+            decoy_type="mimic",
+            bind_address="192.168.1.241",
+            port=443,
+            created_at="2026-03-02T00:00:00Z",
+            updated_at="2026-03-02T00:00:00Z",
+        )
+
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.7",
+            "source_port": 60000,
+            "dest_port": 80,
+            "protocol": "tcp",
+            "timestamp": "2026-03-02T12:10:00Z",
+            "decoy_id": first_decoy,
+        })
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.7",
+            "source_port": 60001,
+            "dest_port": 443,
+            "protocol": "tcp",
+            "timestamp": "2026-03-02T12:10:01Z",
+            "decoy_id": second_decoy,
+        })
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+        connections = await q.list_decoy_connections(
+            db,
+            source_ip="10.0.0.7",
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["title"] == "Port scan detected from 10.0.0.7"
+        detail = json.loads(rows[0]["detail"])
+        assert detail["connection_count"] == 2
+        assert detail["ports"] == [80, 443]
+        assert detail["decoy_ids"] == [first_decoy, second_decoy]
+        assert len(detail["endpoints"]) == 2
+        assert detail["detection_method"] == "decoy_port_scan"
+        assert len(connections) == 2
+        assert len(bus.events_of_type("alert.new")) == 1
+        assert len(bus.events_of_type("alert.updated")) == 1
+        incident_grouper.process_alert.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_scan_callbacks_cannot_create_duplicate_alerts(
+        self, handler, bus, db,
+    ):
+        await asyncio.gather(*[
+            handler._on_decoy_event({
+                "seq": index,
+                "event_type": "decoy.trip",
+                "payload": {
+                    "source_ip": "10.0.0.7",
+                    "source_port": 60000 + index,
+                    "dest_port": port,
+                    "protocol": "tcp",
+                    "timestamp": f"2026-03-02T12:10:{index:02d}Z",
+                },
+            })
+            for index, port in enumerate(
+                [22, 80, 443, 445, 631, 8080],
+                start=1,
+            )
+        ])
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+
+        assert len(rows) == 1
+        assert len(bus.events_of_type("alert.new")) == 1
+        assert len(bus.events_of_type("alert.updated")) == 5
+
+    @pytest.mark.asyncio
+    async def test_repeated_same_endpoint_stays_one_connection_alert(
+        self, handler, bus, db,
+    ):
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.7",
+            "dest_port": 80,
+            "protocol": "tcp",
+            "timestamp": "2026-03-02T12:10:00Z",
+        })
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.7",
+            "dest_port": 80,
+            "protocol": "tcp",
+            "timestamp": "2026-03-02T12:10:01Z",
+        })
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+
+        assert len(rows) == 1
+        assert rows[0]["title"] == "Decoy connection from 10.0.0.7 on port 80"
+        detail = json.loads(rows[0]["detail"])
+        assert detail["connection_count"] == 2
+        assert len(detail["endpoints"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_read_scan_alert_allows_a_new_alert(self, handler, bus, db):
+        payload = {
+            "source_ip": "10.0.0.7",
+            "dest_port": 80,
+            "protocol": "tcp",
+            "timestamp": "2026-03-02T12:10:00Z",
+        }
+        await bus.deliver("decoy.trip", payload)
+        await db.execute(
+            "UPDATE home_alerts SET read_at = '2026-03-02T12:11:00Z'"
+        )
+        await db.commit()
+        await bus.deliver("decoy.trip", {
+            **payload,
+            "timestamp": "2026-03-02T12:12:00Z",
+        })
+
+        async with db.execute("SELECT * FROM home_alerts ORDER BY id") as cur:
+            rows = await cur.fetchall()
+
+        assert len(rows) == 2
+        assert rows[0]["read_at"] is not None
+        assert rows[1]["read_at"] is None
+
+    @pytest.mark.asyncio
+    async def test_credential_connection_creates_only_critical_alert(
+        self, handler, bus, db,
+    ):
+        from squirrelops_home_sensor.db import queries as q
+
+        decoy_id = await q.insert_decoy(
+            db,
+            name="Login",
+            decoy_type="mimic",
+            bind_address="192.168.1.240",
+            port=443,
+            created_at="2026-03-02T00:00:00Z",
+            updated_at="2026-03-02T00:00:00Z",
+        )
+        credential_id = await q.insert_planted_credential(
+            db,
+            credential_type="password",
+            credential_value="admin:secret",
+            planted_location="/login",
+            created_at="2026-03-02T00:00:00Z",
+            decoy_id=decoy_id,
+        )
+        payload = {
+            "source_ip": "10.0.0.9",
+            "source_port": 60003,
+            "dest_port": 443,
+            "protocol": "tcp",
+            "request_path": "/login",
+            "credential_used": "admin:secret",
+            "timestamp": "2026-03-02T12:11:00Z",
+            "decoy_id": decoy_id,
+        }
+
+        await bus.deliver("decoy.trip", payload)
+        await bus.deliver("decoy.credential_trip", payload)
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+        connections = await q.list_decoy_connections(db, decoy_id=decoy_id)
+        credential = await q.get_planted_credential(db, credential_id)
+
+        assert len(rows) == 1
+        assert rows[0]["severity"] == Severity.CRITICAL.value
+        assert rows[0]["alert_type"] == AlertType.DECOY_CREDENTIAL_TRIP.value
+        assert len(connections) == 1
+        assert credential["tripped"] == 1
+
+    @pytest.mark.asyncio
+    async def test_connect_only_ipp_scan_still_alerts(self, handler, bus, db):
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.7",
+            "source_port": 60000,
+            "dest_port": 631,
+            "protocol": "tcp",
+            "timestamp": "2026-03-02T12:10:00Z",
+        })
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+
+        assert len(rows) == 1
+        assert rows[0]["severity"] == Severity.HIGH.value
+
+    @pytest.mark.asyncio
+    async def test_automatic_ipp_discovery_is_forensic_only(
+        self, handler, bus, db,
+    ):
+        from squirrelops_home_sensor.db import queries as q
+
+        decoy_id = await q.insert_decoy(
+            db,
+            name="Printer",
+            decoy_type="mimic",
+            bind_address="192.168.1.240",
+            port=631,
+            created_at="2026-03-02T00:00:00Z",
+            updated_at="2026-03-02T00:00:00Z",
+        )
+
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.8",
+            "source_port": 60001,
+            "dest_port": 631,
+            "protocol": "tcp",
+            "request_path": "/ipp/print",
+            "timestamp": "2026-03-02T12:10:01Z",
+            "decoy_id": decoy_id,
+        })
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+        connections = await q.list_decoy_connections(db, decoy_id=decoy_id)
+        decoy = await q.get_decoy(db, decoy_id)
+
+        assert rows == []
+        assert len(connections) == 1
+        assert connections[0]["request_path"] == "/ipp/print"
+        assert decoy["connection_count"] == 1
+        assert bus.events_of_type("alert.new") == []
+
+    @pytest.mark.asyncio
+    async def test_nonstandard_ipp_request_still_alerts(
+        self, handler, bus, db,
+    ):
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.9",
+            "source_port": 60002,
+            "dest_port": 631,
+            "protocol": "tcp",
+            "request_path": "/admin",
+            "timestamp": "2026-03-02T12:10:02Z",
+        })
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+
+        assert len(rows) == 1
 
 
 class TestDeviceEnrichment:

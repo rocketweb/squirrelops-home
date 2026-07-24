@@ -197,6 +197,21 @@ struct EndpointTests {
         #expect(endpoint.body != nil)
     }
 
+    @Test("ClearAlertHistory produces authenticated DELETE /alerts with explicit confirmation")
+    func clearAlertHistory() throws {
+        let endpoint = Endpoint.clearAlertHistory
+        let request = endpoint.urlRequest(baseURL: baseURL)
+
+        #expect(endpoint.path == "/alerts")
+        #expect(endpoint.method == "DELETE")
+        #expect(request.httpMethod == "DELETE")
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+
+        let bodyData = try #require(endpoint.body)
+        let json = try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+        #expect(json["confirmation"] as? String == "DELETE ALL ALERTS")
+    }
+
     // MARK: - Incidents
 
     @Test("Incident produces GET /incidents/{id}")
@@ -292,6 +307,21 @@ struct EndpointTests {
         let json = try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
         #expect(json["banner"] as? String == "FakeNAS v2")
         #expect(json["port_override"] as? Int == 9090)
+    }
+
+    @Test("UpdateDecoyHostname produces PUT /decoys/{id}/hostname")
+    func updateDecoyHostname() throws {
+        let endpoint = Endpoint.updateDecoyHostname(
+            id: 12,
+            hostname: "printer-232.local"
+        )
+
+        #expect(endpoint.path == "/decoys/12/hostname")
+        #expect(endpoint.method == "PUT")
+
+        let bodyData = try #require(endpoint.body)
+        let json = try JSONSerialization.jsonObject(with: bodyData) as! [String: Any]
+        #expect(json["hostname"] as? String == "printer-232.local")
     }
 
     @Test("DecoyConnections produces GET /decoys/{id}/connections with pagination")
@@ -448,7 +478,6 @@ struct EndpointTests {
     @Test("urlRequest includes Content-Type header for POST/PUT with body")
     func urlRequestSetsContentType() {
         let endpoint = Endpoint.approveDevice(id: 1)
-        let request = endpoint.urlRequest(baseURL: baseURL)
 
         // POST without body should not have Content-Type
         #expect(endpoint.body == nil)
@@ -456,5 +485,14 @@ struct EndpointTests {
         let putEndpoint = Endpoint.updateProfile(profile: "full")
         let putRequest = putEndpoint.urlRequest(baseURL: baseURL)
         #expect(putRequest.value(forHTTPHeaderField: "Content-Type") == "application/json")
+    }
+
+    @Test("Long-running operations use explicit request timeouts")
+    func longRunningOperationTimeouts() {
+        #expect(Endpoint.runScout.urlRequest(baseURL: baseURL).timeoutInterval == 600)
+        #expect(
+            Endpoint.clearAlertHistory.urlRequest(baseURL: baseURL).timeoutInterval == 300
+        )
+        #expect(Endpoint.status.urlRequest(baseURL: baseURL).timeoutInterval == 60)
     }
 }

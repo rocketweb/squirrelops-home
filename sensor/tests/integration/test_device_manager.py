@@ -132,6 +132,27 @@ class TestDeviceManagerPipeline:
         assert len(updated_events) >= 1
 
     @pytest.mark.asyncio
+    async def test_returning_device_is_marked_online(
+        self,
+        manager: DeviceManager,
+        db: aiosqlite.Connection,
+    ) -> None:
+        scan = ScanResult(
+            ip_address="192.168.1.100",
+            mac_address="A4:83:E7:11:22:33",
+        )
+        await manager.process_scan_result(scan)
+        await db.execute("UPDATE devices SET is_online = 0")
+        await db.commit()
+
+        await manager.process_scan_result(scan)
+
+        row = await (await db.execute(
+            "SELECT is_online FROM devices WHERE ip_address = '192.168.1.100'"
+        )).fetchone()
+        assert row["is_online"] == 1
+
+    @pytest.mark.asyncio
     async def test_high_confidence_match_auto_approves_unknown_device(
         self,
         manager: DeviceManager,
@@ -201,12 +222,12 @@ class TestDeviceManagerPipeline:
         assert (await cursor.fetchone())[0] == 0
 
     @pytest.mark.asyncio
-    async def test_stopped_mimic_decoy_ip_is_not_registered_as_device(
+    async def test_stopped_mimic_decoy_ip_can_be_registered_as_real_device(
         self,
         manager: DeviceManager,
         db: aiosqlite.Connection,
     ) -> None:
-        """Stale mimic records are still hidden from inventory."""
+        """A released/stopped mimic row must not hide a real device."""
         await db.execute(
             """INSERT INTO decoys
                (name, decoy_type, bind_address, port, status, config,
@@ -227,7 +248,7 @@ class TestDeviceManagerPipeline:
         )
 
         cursor = await db.execute("SELECT COUNT(*) FROM devices")
-        assert (await cursor.fetchone())[0] == 0
+        assert (await cursor.fetchone())[0] == 1
 
     @pytest.mark.asyncio
     async def test_active_virtual_ip_is_not_registered_as_device(

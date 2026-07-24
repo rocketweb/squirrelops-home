@@ -133,16 +133,16 @@ The helper (`SquirrelOpsHelper`) is a Swift binary that runs as root via launchd
 | Method | Purpose |
 |--------|---------|
 | `runARPScan` | Discover devices on the subnet via ARP |
-| `runServiceScan` | TCP port/service enumeration (nmap) |
-| `addIPAlias` | Add virtual IP alias (`ifconfig alias`) |
+| `addIPAlias` | Publish an isolated virtual IP with a loopback /32 and scoped proxy ARP |
 | `removeIPAlias` | Remove virtual IP alias |
 | `setupPortForwards` | Configure pfctl rdr rules for privileged ports |
 | `clearPortForwards` | Remove pfctl rules |
-| `startDNSSniff` | Start passive DNS query capture |
-| `stopDNSSniff` | Stop DNS capture |
-| `getDNSQueries` | Retrieve captured DNS queries |
 
 **Why a helper?** macOS requires root for raw sockets (ARP), `ifconfig` alias manipulation, and `pfctl` rules. Rather than running the entire sensor as root, only the helper runs privileged. Its socket is `root:_squirrelops` mode `0660`, and peer credentials are checked again after connection.
+
+TCP service scanning on macOS uses bounded, unprivileged connections directly
+from the Python sensor. Passive DNS capture is not currently supported on
+macOS and is not advertised by the helper.
 
 **On Linux/Docker**, the sensor runs as root with `CAP_NET_RAW` and `CAP_NET_ADMIN`, so it performs these operations directly using scapy and iptables. No helper needed.
 
@@ -180,10 +180,10 @@ echo '{"jsonrpc":"2.0","method":"runARPScan","params":{"subnet":"192.168.1.0/24"
 
 The helper isn't running or isn't reachable. Check the socket and helper logs as above.
 
-### Deploy returns `{"deployed": 0}` or 503
+### Fill Capacity returns `{"deployed": 0}` or 503
 
 - **503 with "Privileged helper is not running"**: Helper isn't installed. Run `dev-install-helper.sh`.
-- **200 with `{"deployed": 0}`**: No mimic candidates. Run scouts first to discover services, then deploy.
+- **200 with `{"deployed": 0}`**: No eligible unrepresented source devices. Run scouts first to refresh service profiles, then use Fill Capacity.
 
 ### Sensor warnings about virtual IP alias failures
 
@@ -210,8 +210,31 @@ The helper isn't running or can't execute `ifconfig`. Reinstall and check logs.
 
 Releases are triggered by pushing a `v*` tag. The GitHub Actions workflow (`.github/workflows/release.yml`) handles:
 
-1. Code signing with Developer ID certificates
-2. Building the `.pkg` installer (app + sensor + helper)
-3. Notarization with Apple
-4. Creating the GitHub Release with the `.pkg` artifact
-5. Updating `site/public/manifest.json` for auto-update
+1. Verifying the tag, `VERSION`, sensor package version, and install-script version agree
+2. Building and publishing the multi-architecture sensor container
+3. Building the `.pkg` installer with the app, sensor, and privileged helper
+4. Code signing, Apple notarization, stapling, and Gatekeeper verification
+5. Creating the GitHub Release with the installer, checksums, and install scripts
+6. Updating `site/public/manifest.json` for app and sensor update checks
+
+Release builds fail closed if signing or notarization credentials are missing.
+Before tagging a release:
+
+```bash
+# Update VERSION, sensor/pyproject.toml, sensor/uv.lock, scripts/install.sh,
+# site/public/install.sh, PreviewData, documentation, and release notes.
+git diff --check
+cd sensor && uv lock --check && uv run pytest && uv run ruff check .
+cd ../app && swift test
+cd ..
+
+# Confirm main is current, then create the immutable release tag.
+git fetch origin
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+git tag -a vX.Y.Z -m "SquirrelOps Home X.Y.Z"
+git push origin vX.Y.Z
+```
+
+After the workflow completes, verify the release assets, package digest,
+notarization result, update manifest, and the published GHCR image before
+announcing the release.

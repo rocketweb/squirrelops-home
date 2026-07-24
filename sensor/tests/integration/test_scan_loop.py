@@ -162,6 +162,329 @@ class TestScanLoopExecution:
         assert len(devices) == 2
 
     @pytest.mark.asyncio
+    async def test_successful_scan_reconciles_device_online_state(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        db: aiosqlite.Connection,
+        event_bus: EventBus,
+    ) -> None:
+        await scan_loop.run_single_scan()
+        offline_events: list[dict] = []
+
+        async def record_offline(event: dict) -> None:
+            offline_events.append(event)
+
+        event_bus.subscribe([EventType.DEVICE_OFFLINE], record_offline)
+
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
+        ]
+        await scan_loop.run_single_scan()
+
+        rows = await (await db.execute(
+            "SELECT ip_address, is_online FROM devices ORDER BY ip_address"
+        )).fetchall()
+        assert [(row["ip_address"], row["is_online"]) for row in rows] == [
+            ("192.168.1.1", 1),
+            ("192.168.1.2", 0),
+        ]
+        assert [event["payload"]["device_id"] for event in offline_events] == [2]
+
+    @pytest.mark.asyncio
+    async def test_failed_scan_preserves_device_online_state(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        db: aiosqlite.Connection,
+    ) -> None:
+        await scan_loop.run_single_scan()
+        mock_ops.arp_scan.side_effect = RuntimeError("helper unavailable")
+
+        await scan_loop.run_single_scan()
+
+        rows = await (await db.execute(
+            "SELECT is_online FROM devices ORDER BY ip_address"
+        )).fetchall()
+        assert [row["is_online"] for row in rows] == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_reconciliation_failure_does_not_advance_in_memory_state(
+        self,
+        scan_loop: ScanLoop,
+        device_manager: DeviceManager,
+        db: aiosqlite.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await scan_loop.run_single_scan()
+        first_id = device_manager.get_known_devices()[0].device_id
+        monkeypatch.setattr(
+            db,
+            "commit",
+            AsyncMock(side_effect=OSError("disk unavailable")),
+        )
+
+        with pytest.raises(OSError, match="disk unavailable"):
+            await device_manager.reconcile_online_state({first_id})
+
+        assert [device.is_online for device in device_manager.get_known_devices()] == [
+            True,
+            True,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_returning_offline_device_publishes_online_transition(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        event_bus: EventBus,
+    ) -> None:
+        await scan_loop.run_single_scan()
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
+        ]
+        await scan_loop.run_single_scan()
+        online_events: list[dict] = []
+
+        async def record_online(event: dict) -> None:
+            online_events.append(event)
+
+        event_bus.subscribe([EventType.DEVICE_ONLINE], record_online)
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
+            ("192.168.1.2", "AA:BB:CC:DD:EE:02"),
+        ]
+
+        await scan_loop.run_single_scan()
+
+        assert [event["payload"]["device_id"] for event in online_events] == [2]
+
+    @pytest.mark.asyncio
+    async def test_empty_arp_snapshot_preserves_device_online_state(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        db: aiosqlite.Connection,
+    ) -> None:
+        await scan_loop.run_single_scan()
+        mock_ops.arp_scan.return_value = []
+
+        await scan_loop.run_single_scan()
+
+        rows = await (await db.execute(
+            "SELECT is_online FROM devices ORDER BY ip_address"
+        )).fetchall()
+        assert [row["is_online"] for row in rows] == [1, 1]
+
+    @pytest.mark.asyncio
+    async def test_ip_reuse_marks_previous_mac_offline(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        db: aiosqlite.Connection,
+    ) -> None:
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.50", "AA:BB:CC:DD:EE:50"),
+        ]
+        await scan_loop.run_single_scan()
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.50", "AA:BB:CC:DD:EE:51"),
+        ]
+
+        await scan_loop.run_single_scan()
+
+        rows = await (await db.execute(
+            "SELECT mac_address, is_online FROM devices ORDER BY id"
+        )).fetchall()
+        assert [(row["mac_address"], row["is_online"]) for row in rows] == [
+            ("AA:BB:CC:DD:EE:50", 0),
+            ("AA:BB:CC:DD:EE:51", 1),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_ip_reuse_attributes_ports_and_analysis_to_current_mac(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        mock_port_scanner: AsyncMock,
+        device_manager: DeviceManager,
+    ) -> None:
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.50", "AA:BB:CC:DD:EE:50"),
+        ]
+        mock_port_scanner.scan_with_banners.return_value = {}
+        await scan_loop.run_single_scan()
+
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.50", "AA:BB:CC:DD:EE:51"),
+        ]
+        mock_port_scanner.scan_with_banners.return_value = {
+            "192.168.1.50": [PortResult(port=445, service_name="smb")],
+        }
+        analyzer = AsyncMock()
+        analyzer.analyze_all_devices.return_value = 0
+        scan_loop._security_analyzer = analyzer
+
+        await scan_loop.run_single_scan()
+
+        by_mac = {
+            device.mac_address: device
+            for device in device_manager.get_known_devices()
+        }
+        assert by_mac["AA:BB:CC:DD:EE:50"].open_ports == frozenset()
+        assert by_mac["AA:BB:CC:DD:EE:51"].open_ports == frozenset({445})
+        analyzed = analyzer.analyze_all_devices.await_args.args[0]
+        assert [device["device_id"] for device in analyzed] == [
+            by_mac["AA:BB:CC:DD:EE:51"].device_id
+        ]
+
+    @pytest.mark.asyncio
+    async def test_ip_reuse_attributes_discovery_to_current_mac(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        mock_mdns_browser: AsyncMock,
+        device_manager: DeviceManager,
+    ) -> None:
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.50", "AA:BB:CC:DD:EE:50"),
+        ]
+        await scan_loop.run_single_scan()
+
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.50", "AA:BB:CC:DD:EE:51"),
+        ]
+        mock_mdns_browser.browse.return_value = [
+            MDNSResult(ip="192.168.1.50", hostname="new-host.local."),
+        ]
+
+        await scan_loop.run_single_scan()
+
+        by_mac = {
+            device.mac_address: device
+            for device in device_manager.get_known_devices()
+        }
+        assert by_mac["AA:BB:CC:DD:EE:50"].hostname is None
+        assert by_mac["AA:BB:CC:DD:EE:51"].hostname == "new-host.local."
+
+    @pytest.mark.asyncio
+    async def test_duplicate_proxy_rows_do_not_register_the_sensor_as_a_device(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        db: aiosqlite.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        local_mac = "1c:1d:d3:e0:7d:03"
+        external_mac = "38:42:0b:48:51:07"
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.scanner.loop._local_interface_macs",
+            lambda: {local_mac},
+            raising=False,
+        )
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.18", local_mac),
+            ("192.168.1.200", local_mac),
+            ("192.168.1.200", external_mac),
+        ]
+
+        await scan_loop.run_single_scan()
+
+        rows = await (await db.execute(
+            "SELECT ip_address, mac_address FROM devices ORDER BY id"
+        )).fetchall()
+        assert [(row["ip_address"], row["mac_address"]) for row in rows] == [
+            ("192.168.1.200", "38:42:0B:48:51:07"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_same_mac_multi_ip_uses_lowest_deterministic_address(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        db: aiosqlite.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.scanner.loop._local_interface_macs",
+            lambda: set(),
+            raising=False,
+        )
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.203", "AE:29:0A:E5:CC:C5"),
+            ("192.168.1.209", "AE:29:0A:E5:CC:C5"),
+        ]
+
+        await scan_loop.run_single_scan()
+
+        rows = await (await db.execute(
+            "SELECT ip_address, mac_address FROM devices"
+        )).fetchall()
+        assert [(row["ip_address"], row["mac_address"]) for row in rows] == [
+            ("192.168.1.203", "AE:29:0A:E5:CC:C5"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_security_analysis_uses_only_hosts_seen_in_current_scan(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        device_manager: DeviceManager,
+    ) -> None:
+        await device_manager.process_scan_result(
+            ScanResult(
+                ip_address="192.168.1.50",
+                mac_address="AA:BB:CC:DD:EE:50",
+                open_ports=[22],
+            )
+        )
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
+        ]
+        analyzer = AsyncMock()
+        analyzer.analyze_all_devices.return_value = 0
+        scan_loop._security_analyzer = analyzer
+
+        await scan_loop.run_single_scan()
+
+        analyzed = analyzer.analyze_all_devices.await_args.args[0]
+        assert {device["ip_address"] for device in analyzed} == {"192.168.1.1"}
+
+    @pytest.mark.asyncio
+    async def test_closed_ports_are_cleared_and_reach_security_analysis(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        mock_port_scanner: AsyncMock,
+        device_manager: DeviceManager,
+        db: aiosqlite.Connection,
+    ) -> None:
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
+        ]
+        mock_port_scanner.scan_with_banners.return_value = {
+            "192.168.1.1": [PortResult(port=22, service_name="ssh")],
+        }
+        analyzer = AsyncMock()
+        analyzer.analyze_all_devices.return_value = 0
+        scan_loop._security_analyzer = analyzer
+        await scan_loop.run_single_scan()
+        analyzer.analyze_all_devices.reset_mock()
+        mock_port_scanner.scan_with_banners.return_value = {}
+
+        await scan_loop.run_single_scan()
+
+        tracked = device_manager.get_known_devices()
+        assert len(tracked) == 1
+        assert tracked[0].open_ports == frozenset()
+        assert (await (await db.execute(
+            "SELECT COUNT(*) FROM device_open_ports"
+        )).fetchone())[0] == 0
+        analyzed = analyzer.analyze_all_devices.await_args.args[0]
+        assert len(analyzed) == 1
+        assert analyzed[0]["open_ports"] == frozenset()
+
+    @pytest.mark.asyncio
     async def test_single_scan_enriches_with_ports(
         self, scan_loop: ScanLoop, mock_port_scanner: AsyncMock, device_manager: DeviceManager
     ) -> None:
@@ -199,6 +522,75 @@ class TestScanLoopExecution:
         assert payload["device_count"] == 2
 
     @pytest.mark.asyncio
+    async def test_ip_conflicts_are_reconciled_before_device_filtering(
+        self, scan_loop: ScanLoop, mock_ops: AsyncMock, db: aiosqlite.Connection,
+    ) -> None:
+        observed_device_counts: list[int] = []
+
+        async def reconcile(raw_arp: list[tuple[str, str]]) -> None:
+            assert raw_arp == mock_ops.arp_scan.return_value
+            cursor = await db.execute("SELECT COUNT(*) FROM devices")
+            observed_device_counts.append((await cursor.fetchone())[0])
+
+        scan_loop.set_ip_conflict_handler(reconcile)
+        await scan_loop.run_single_scan()
+
+        assert observed_device_counts == [0]
+
+    @pytest.mark.asyncio
+    async def test_system_mimics_are_never_scanned_by_the_sensor(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        mock_port_scanner: AsyncMock,
+        db: aiosqlite.Connection,
+        event_bus: EventBus,
+    ) -> None:
+        """Proxy-ARP responses for mimics must not make scheduled scans self-trigger."""
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.10", "AA:BB:CC:DD:EE:10"),
+            ("192.168.1.200", "02:00:00:00:00:01"),
+        ]
+        mock_port_scanner.scan_with_banners.return_value = {
+            "192.168.1.10": [PortResult(port=22, service_name="ssh")],
+        }
+        await db.execute(
+            """INSERT INTO decoys
+               (name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at)
+               VALUES ('Mimic: Printer', 'mimic', '192.168.1.200', 80,
+                       'active', '{}', '2026-07-23T00:00:00Z',
+                       '2026-07-23T00:00:00Z')"""
+        )
+        await db.commit()
+
+        conflict_inputs: list[list[tuple[str, str]]] = []
+
+        async def reconcile(raw_arp: list[tuple[str, str]]) -> None:
+            conflict_inputs.append(raw_arp)
+
+        completed: list[dict] = []
+
+        async def record_complete(event: dict) -> None:
+            completed.append(event)
+
+        scan_loop.set_ip_conflict_handler(reconcile)
+        event_bus.subscribe([EventType.SYSTEM_SCAN_COMPLETE], record_complete)
+
+        await scan_loop.run_single_scan()
+        await asyncio.sleep(0.1)
+
+        assert conflict_inputs == [mock_ops.arp_scan.return_value]
+        assert mock_port_scanner.scan_with_banners.call_args.kwargs["targets"] == [
+            "192.168.1.10"
+        ]
+        cursor = await db.execute(
+            "SELECT ip_address FROM devices ORDER BY ip_address"
+        )
+        assert [row[0] for row in await cursor.fetchall()] == ["192.168.1.10"]
+        assert completed[-1]["payload"]["hosts_discovered"] == 1
+
+    @pytest.mark.asyncio
     async def test_port_scan_failure_doesnt_block_devices(
         self, device_manager: DeviceManager, event_bus: EventBus,
         mock_ops: AsyncMock,
@@ -219,6 +611,60 @@ class TestScanLoopExecution:
         await loop.run_single_scan()
         devices = device_manager.get_known_devices()
         assert len(devices) == 2
+
+    @pytest.mark.asyncio
+    async def test_port_scan_failure_preserves_last_verified_ports(
+        self,
+        scan_loop: ScanLoop,
+        mock_port_scanner: AsyncMock,
+        device_manager: DeviceManager,
+        db: aiosqlite.Connection,
+    ) -> None:
+        await scan_loop.run_single_scan()
+        analyzer = AsyncMock()
+        scan_loop._security_analyzer = analyzer
+        mock_port_scanner.scan_with_banners.side_effect = OSError("network error")
+
+        await scan_loop.run_single_scan()
+
+        tracked = next(
+            device
+            for device in device_manager.get_known_devices()
+            if device.ip_address == "192.168.1.1"
+        )
+        assert tracked.open_ports == frozenset({80, 443})
+        rows = await (await db.execute(
+            "SELECT port FROM device_open_ports "
+            "WHERE device_id = ? ORDER BY port",
+            (tracked.device_id,),
+        )).fetchall()
+        assert [row["port"] for row in rows] == [80, 443]
+        analyzer.analyze_all_devices.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_processing_error_skips_authoritative_offline_reconciliation(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        device_manager: DeviceManager,
+        db: aiosqlite.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await scan_loop.run_single_scan()
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
+        ]
+
+        async def fail_processing(_scan: ScanResult) -> int:
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(device_manager, "process_scan_result", fail_processing)
+        await scan_loop.run_single_scan()
+
+        rows = await (await db.execute(
+            "SELECT is_online FROM devices ORDER BY ip_address"
+        )).fetchall()
+        assert [row["is_online"] for row in rows] == [1, 1]
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +706,19 @@ class TestScanLoopTiming:
             scan_interval=60,  # Would be 60 seconds in production
         )
         assert loop.scan_interval == 60
+
+    def test_interval_can_be_reconfigured_live(self, scan_loop: ScanLoop) -> None:
+        scan_loop.set_scan_interval(60)
+
+        assert scan_loop.scan_interval == 60
+        assert scan_loop._reschedule.is_set()
+
+    @pytest.mark.parametrize("value", [0, -1])
+    def test_rejects_invalid_live_interval(
+        self, scan_loop: ScanLoop, value: int,
+    ) -> None:
+        with pytest.raises(ValueError, match="greater than zero"):
+            scan_loop.set_scan_interval(value)
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +909,29 @@ class TestDevicePortEnrichment:
 
         updated_events = [e for e in received_events if e["event_type"] == "device.updated"]
         assert len(updated_events) >= 1
+
+    @pytest.mark.asyncio
+    async def test_port_enrichment_preserves_other_fingerprint_signals(
+        self,
+        device_manager: DeviceManager,
+    ) -> None:
+        await device_manager.process_scan_result(ScanResult(
+            ip_address="192.168.1.1",
+            mac_address="AA:BB:CC:DD:EE:01",
+            mdns_hostname="printer.local.",
+            dhcp_options=[1, 3, 6, 15],
+            connections=[("1.1.1.1", 443)],
+            open_ports=[22],
+        ))
+        before = device_manager.get_known_devices()[0].fingerprint
+
+        await device_manager.enrich_device_ports("192.168.1.1", [80, 443])
+
+        after = device_manager.get_known_devices()[0].fingerprint
+        assert after.mdns_hostname == before.mdns_hostname
+        assert after.dhcp_fingerprint_hash == before.dhcp_fingerprint_hash
+        assert after.connection_pattern_hash == before.connection_pattern_hash
+        assert after.open_ports_hash != before.open_ports_hash
 
 
 # ---------------------------------------------------------------------------
@@ -843,6 +1325,32 @@ class TestEnrichDeviceDiscovery:
         # normalize_mdns strips .local. suffix for fingerprint comparison
         assert row[0] == "mydevice"
 
+    @pytest.mark.asyncio
+    async def test_discovery_enrichment_preserves_other_fingerprint_signals(
+        self,
+        device_manager: DeviceManager,
+    ) -> None:
+        await device_manager.process_scan_result(ScanResult(
+            ip_address="192.168.1.1",
+            mac_address="AA:BB:CC:DD:EE:01",
+            mdns_hostname="old-name.local.",
+            dhcp_options=[1, 3, 6, 15],
+            connections=[("1.1.1.1", 443)],
+            open_ports=[22],
+        ))
+        before = device_manager.get_known_devices()[0].fingerprint
+
+        await device_manager.enrich_device_discovery(
+            ip_address="192.168.1.1",
+            mdns_hostname="new-name.local.",
+        )
+
+        after = device_manager.get_known_devices()[0].fingerprint
+        assert after.mdns_hostname != before.mdns_hostname
+        assert after.dhcp_fingerprint_hash == before.dhcp_fingerprint_hash
+        assert after.connection_pattern_hash == before.connection_pattern_hash
+        assert after.open_ports_hash == before.open_ports_hash
+
 
 # ---------------------------------------------------------------------------
 # Phase 3: Discovery protocol enrichment
@@ -1007,6 +1515,44 @@ class TestScanLoopPhase3:
 
 class TestScanLoopPhase3Conditional:
     """Test that Phase 3 uses HA enrichment when configured, falling back to mDNS/SSDP."""
+
+    @pytest.mark.asyncio
+    async def test_ha_enrichment_preserves_other_fingerprint_signals(
+        self,
+        device_manager: DeviceManager,
+    ) -> None:
+        from squirrelops_home_sensor.integrations.home_assistant import (
+            HAArea,
+            HADevice,
+        )
+
+        await device_manager.process_scan_result(ScanResult(
+            ip_address="192.168.1.1",
+            mac_address="AA:BB:CC:DD:EE:01",
+            mdns_hostname="device.local.",
+            dhcp_options=[1, 3, 6, 15],
+            connections=[("1.1.1.1", 443)],
+            open_ports=[22],
+        ))
+        before = device_manager.get_known_devices()[0].fingerprint
+
+        await device_manager.enrich_device_ha(
+            [HADevice(
+                id="ha-dev-1",
+                name="Living Room Device",
+                manufacturer="Example",
+                model="Model 1",
+                mac_addresses=frozenset({"aa:bb:cc:dd:ee:01"}),
+                area_id="area-1",
+            )],
+            [HAArea(id="area-1", name="Living Room")],
+        )
+
+        after = device_manager.get_known_devices()[0].fingerprint
+        assert after.mdns_hostname == before.mdns_hostname
+        assert after.dhcp_fingerprint_hash == before.dhcp_fingerprint_hash
+        assert after.connection_pattern_hash == before.connection_pattern_hash
+        assert after.open_ports_hash == before.open_ports_hash
 
     @pytest.mark.asyncio
     async def test_phase3_uses_ha_when_configured(

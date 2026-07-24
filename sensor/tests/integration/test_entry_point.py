@@ -83,6 +83,9 @@ def mock_subsystems() -> dict[str, Any]:
     mock_scan_loop.start = AsyncMock()
     mock_scan_loop.stop = AsyncMock()
     mock_scan_loop.set_orchestrator = MagicMock()
+    mock_scan_loop.set_ip_conflict_handler = MagicMock()
+    mock_scan_loop.privileged_ops = MagicMock()
+    mock_scan_loop.privileged_ops.is_available = AsyncMock(return_value=True)
     mock_create_scan_loop = MagicMock(return_value=mock_scan_loop)
     mocks["create_scan_loop"] = mock_create_scan_loop
     mocks["scan_loop"] = mock_scan_loop
@@ -96,6 +99,44 @@ def mock_subsystems() -> dict[str, Any]:
     mocks["create_orchestrator"] = mock_create_orchestrator
     mocks["orchestrator"] = mock_orchestrator
 
+    # Squirrel Scouts
+    mock_scout_scheduler = AsyncMock()
+    mock_scout_scheduler.start = AsyncMock()
+    mock_scout_scheduler.stop = AsyncMock()
+    mocks["scout_scheduler"] = mock_scout_scheduler
+
+    mock_mimic_orchestrator = AsyncMock()
+    mock_mimic_orchestrator.prepare_persisted_network = AsyncMock(return_value=0)
+    mock_mimic_orchestrator.resume_active = AsyncMock(return_value=0)
+    mock_mimic_orchestrator.stop_all = AsyncMock()
+    mock_mimic_orchestrator.reconcile_ip_conflicts = AsyncMock()
+    mocks["mimic_orchestrator"] = mock_mimic_orchestrator
+
+    mock_ip_manager = AsyncMock()
+    mock_ip_manager.load_from_db = AsyncMock(return_value=0)
+    mock_ip_manager.remove_all = AsyncMock(return_value=0)
+    mock_ip_manager.active_ips = set()
+    mocks["ip_manager"] = mock_ip_manager
+
+    mock_mimic_mdns = AsyncMock()
+    mock_mimic_mdns.start = AsyncMock()
+    mock_mimic_mdns.stop = AsyncMock()
+    mocks["mimic_mdns"] = mock_mimic_mdns
+
+    mock_port_fwd = AsyncMock()
+    mock_port_fwd.clear_all = AsyncMock(return_value=True)
+    mocks["port_fwd"] = mock_port_fwd
+
+    mock_scouts = {
+        "scheduler": mock_scout_scheduler,
+        "mimic_orchestrator": mock_mimic_orchestrator,
+        "ip_manager": mock_ip_manager,
+        "mimic_mdns": mock_mimic_mdns,
+        "port_forward_manager": mock_port_fwd,
+    }
+    mock_create_scouts = MagicMock(return_value=mock_scouts)
+    mocks["create_scouts_subsystem"] = mock_create_scouts
+
     # FastAPI app factory
     mock_app = MagicMock()
     mock_create_app = MagicMock(return_value=mock_app)
@@ -108,6 +149,22 @@ def mock_subsystems() -> dict[str, Any]:
     mock_server_cls = MagicMock(return_value=mock_server)
     mocks["uvicorn_server_cls"] = mock_server_cls
     mocks["uvicorn_server"] = mock_server
+
+    # API and mimic mDNS advertisers
+    mock_mdns = AsyncMock()
+    mock_mdns.start = AsyncMock()
+    mock_mdns.stop = AsyncMock()
+    mock_create_mdns = MagicMock(return_value=mock_mdns)
+    mocks["create_mdns_advertiser"] = mock_create_mdns
+    mocks["mdns"] = mock_mdns
+
+    # Peer-verified local pairing socket
+    mock_local_pairing = AsyncMock()
+    mock_local_pairing.start = AsyncMock()
+    mock_local_pairing.stop = AsyncMock()
+    mock_local_pairing_cls = MagicMock(return_value=mock_local_pairing)
+    mocks["local_pairing_cls"] = mock_local_pairing_cls
+    mocks["local_pairing"] = mock_local_pairing
 
     return mocks
 
@@ -156,6 +213,12 @@ def patched(mock_subsystems: dict[str, Any]):
         )
         stack.enter_context(
             patch(
+                "squirrelops_home_sensor.__main__.create_scouts_subsystem",
+                mock_subsystems["create_scouts_subsystem"],
+            )
+        )
+        stack.enter_context(
+            patch(
                 "squirrelops_home_sensor.__main__.create_app",
                 mock_subsystems["create_app"],
             )
@@ -166,12 +229,64 @@ def patched(mock_subsystems: dict[str, Any]):
                 mock_subsystems["uvicorn_server_cls"],
             )
         )
+        stack.enter_context(
+            patch(
+                "squirrelops_home_sensor.__main__.create_mdns_advertiser",
+                mock_subsystems["create_mdns_advertiser"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "squirrelops_home_sensor.api.local_pairing.LocalPairingServer",
+                mock_subsystems["local_pairing_cls"],
+            )
+        )
         yield
 
 
 # ---------------------------------------------------------------------------
 # Startup tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_db_enables_foreign_key_enforcement(tmp_path: Path) -> None:
+    """Production connections must enforce the relationships in the schema."""
+    from squirrelops_home_sensor.__main__ import open_db
+
+    db = await open_db(tmp_path / "sensor.db")
+    try:
+        cursor = await db.execute("PRAGMA foreign_keys")
+        row = await cursor.fetchone()
+        assert row[0] == 1
+    finally:
+        await db.close()
+
+
+def test_full_profile_canonicalizes_stale_nested_runtime_limits() -> None:
+    """A persisted Full label must reconstruct Full subsystems after restart."""
+    from squirrelops_home_sensor.__main__ import _canonicalize_profile_runtime
+
+    config = {
+        "profile": "full",
+        "network": {"scan_interval": 300},
+        "decoys": {"max_decoys": 8},
+        "classifier": {"mode": "cloud_llm"},
+        "scouts": {
+            "interval_minutes": 60,
+            "max_mimic_decoys": 10,
+            "max_virtual_ips": 10,
+        },
+    }
+
+    _canonicalize_profile_runtime(config)
+
+    assert config["network"]["scan_interval"] == 60
+    assert config["decoys"]["max_decoys"] == 3
+    assert config["classifier"]["mode"] == "local_llm"
+    assert config["scouts"]["interval_minutes"] == 30
+    assert config["scouts"]["max_mimic_decoys"] == 30
+    assert config["scouts"]["max_virtual_ips"] == 30
 
 
 class TestEntryPointStartup:
@@ -207,9 +322,7 @@ class TestEntryPointStartup:
         await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
 
         mock_subsystems["open_db"].assert_called_once()
-        mock_subsystems["run_migrations"].assert_called_once_with(
-            mock_subsystems["db"]
-        )
+        mock_subsystems["run_migrations"].assert_called_once_with(mock_subsystems["db"])
 
     @pytest.mark.asyncio
     async def test_initializes_event_bus(
@@ -224,9 +337,7 @@ class TestEntryPointStartup:
 
         await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
 
-        mock_subsystems["create_event_bus"].assert_called_once_with(
-            mock_subsystems["db"]
-        )
+        mock_subsystems["create_event_bus"].assert_called_once_with(mock_subsystems["db"])
 
     @pytest.mark.asyncio
     async def test_starts_scan_loop(
@@ -306,6 +417,84 @@ class TestEntryPointStartup:
         uvicorn_config = mock_subsystems["uvicorn_server_cls"].call_args.args[0]
         assert uvicorn_config.host == "127.0.0.1"
 
+    @pytest.mark.asyncio
+    async def test_helper_capability_failure_aborts_before_mimic_start(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """The API cannot report healthy when privileged networking is unusable."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        privileged_ops = mock_subsystems["scan_loop"].privileged_ops
+        privileged_ops.is_available.return_value = False
+
+        with pytest.raises(RuntimeError, match="privileged helper"):
+            await run_sensor(
+                config_path=str(config_file),
+                port=9443,
+                no_tls=True,
+            )
+
+        privileged_ops.is_available.assert_awaited_once()
+        mock_subsystems["mimic_mdns"].start.assert_not_awaited()
+        mock_subsystems["scan_loop"].start.assert_not_awaited()
+        mock_subsystems["uvicorn_server"].serve.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mimic_resume_failure_aborts_before_api_start(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """Persisted mimics are mandatory startup state, not best effort."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["mimic_orchestrator"].resume_active.side_effect = RuntimeError(
+            "mimic resume failed"
+        )
+
+        with pytest.raises(RuntimeError, match="mimic resume failed"):
+            await run_sensor(
+                config_path=str(config_file),
+                port=9443,
+                no_tls=True,
+            )
+
+        mock_subsystems["scout_scheduler"].start.assert_not_awaited()
+        mock_subsystems["scan_loop"].start.assert_not_awaited()
+        mock_subsystems["uvicorn_server"].serve.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_persisted_alias_withdrawal_failure_aborts_before_api_start(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """Startup quarantine must remain in place when an alias cannot be withdrawn."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems[
+            "mimic_orchestrator"
+        ].prepare_persisted_network.side_effect = RuntimeError(
+            "persisted alias withdrawal failed"
+        )
+
+        with pytest.raises(RuntimeError, match="persisted alias withdrawal failed"):
+            await run_sensor(
+                config_path=str(config_file),
+                port=9443,
+                no_tls=True,
+            )
+
+        mock_subsystems["mimic_orchestrator"].resume_active.assert_not_awaited()
+        mock_subsystems["scout_scheduler"].start.assert_not_awaited()
+        mock_subsystems["scan_loop"].start.assert_not_awaited()
+        mock_subsystems["uvicorn_server"].serve.assert_not_awaited()
+
 
 # ---------------------------------------------------------------------------
 # Shutdown tests
@@ -314,6 +503,147 @@ class TestEntryPointStartup:
 
 class TestEntryPointShutdown:
     """Graceful shutdown stops components in the correct order."""
+
+    @pytest.mark.asyncio
+    async def test_startup_failure_after_network_and_scan_start_unwinds_all(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """A late startup failure cannot leak listeners, aliases, PF, or DB."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["mdns"].start.side_effect = RuntimeError("mDNS startup failed")
+
+        with pytest.raises(RuntimeError, match="mDNS startup failed"):
+            await run_sensor(
+                config_path=str(config_file),
+                port=9443,
+                no_tls=True,
+            )
+
+        mock_subsystems["orchestrator"].start.assert_awaited_once()
+        mock_subsystems["mimic_orchestrator"].prepare_persisted_network.assert_awaited_once()
+        mock_subsystems["scan_loop"].start.assert_awaited_once()
+        mock_subsystems["mdns"].stop.assert_awaited_once()
+        mock_subsystems["scan_loop"].stop.assert_awaited_once()
+        mock_subsystems["scout_scheduler"].stop.assert_awaited_once()
+        mock_subsystems["mimic_orchestrator"].stop_all.assert_awaited_once()
+        mock_subsystems["mimic_mdns"].stop.assert_awaited_once()
+        mock_subsystems["ip_manager"].remove_all.assert_awaited_once()
+        mock_subsystems["port_fwd"].clear_all.assert_awaited_once()
+        mock_subsystems["orchestrator"].stop.assert_awaited_once()
+        mock_subsystems["db"].close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_failure_does_not_skip_later_critical_cleanup(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """One early stop error is reported only after all later cleanup."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+        mock_subsystems["local_pairing"].stop.side_effect = RuntimeError(
+            "local pairing stop failed"
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match="shutdown did not complete cleanly",
+        ):
+            await run_sensor(
+                config_path=str(config_file),
+                port=9443,
+                no_tls=True,
+            )
+
+        mock_subsystems["mdns"].stop.assert_awaited_once()
+        mock_subsystems["scan_loop"].stop.assert_awaited_once()
+        mock_subsystems["scout_scheduler"].stop.assert_awaited_once()
+        mock_subsystems["mimic_orchestrator"].stop_all.assert_awaited_once()
+        mock_subsystems["mimic_mdns"].stop.assert_awaited_once()
+        mock_subsystems["ip_manager"].remove_all.assert_awaited_once()
+        mock_subsystems["port_fwd"].clear_all.assert_awaited_once()
+        mock_subsystems["orchestrator"].stop.assert_awaited_once()
+        mock_subsystems["db"].close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unknown_persisted_alias_state_retains_packet_filter(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """A failed DB reservation load must not make PF cleanup fail open."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["ip_manager"].load_from_db.side_effect = RuntimeError(
+            "virtual IP load failed"
+        )
+
+        with pytest.raises(RuntimeError, match="virtual IP load failed"):
+            await run_sensor(
+                config_path=str(config_file),
+                port=9443,
+                no_tls=True,
+            )
+
+        mock_subsystems["ip_manager"].remove_all.assert_awaited_once()
+        assert mock_subsystems["ip_manager"].active_ips == set()
+        mock_subsystems["port_fwd"].clear_all.assert_not_awaited()
+        mock_subsystems["scan_loop"].start.assert_not_awaited()
+        mock_subsystems["uvicorn_server"].serve.assert_not_awaited()
+        mock_subsystems["orchestrator"].stop.assert_awaited_once()
+        mock_subsystems["db"].close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("remove_error", "active_ips"),
+        [
+            (RuntimeError("alias removal failed"), set()),
+            (None, {"192.168.1.200"}),
+        ],
+    )
+    async def test_alias_cleanup_failure_retains_packet_filter(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+        remove_error: RuntimeError | None,
+        active_ips: set[str],
+    ) -> None:
+        """PF remains loaded unless virtual alias removal is confirmed."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+        mock_subsystems["ip_manager"].active_ips = active_ips
+        if remove_error is not None:
+            mock_subsystems["ip_manager"].remove_all.side_effect = remove_error
+
+        if remove_error is None:
+            await run_sensor(
+                config_path=str(config_file),
+                port=9443,
+                no_tls=True,
+            )
+        else:
+            with pytest.raises(
+                RuntimeError,
+                match="shutdown did not complete cleanly",
+            ):
+                await run_sensor(
+                    config_path=str(config_file),
+                    port=9443,
+                    no_tls=True,
+                )
+
+        mock_subsystems["port_fwd"].clear_all.assert_not_awaited()
+        mock_subsystems["orchestrator"].stop.assert_awaited_once()
+        mock_subsystems["db"].close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_graceful_shutdown_on_cancelled_error(
@@ -335,9 +665,7 @@ class TestEntryPointShutdown:
             call_order.append("db.close")
 
         mock_subsystems["scan_loop"].stop = AsyncMock(side_effect=track_scan_stop)
-        mock_subsystems["orchestrator"].stop = AsyncMock(
-            side_effect=track_orchestrator_stop
-        )
+        mock_subsystems["orchestrator"].stop = AsyncMock(side_effect=track_orchestrator_stop)
         mock_subsystems["db"].close = AsyncMock(side_effect=track_db_close)
 
         from squirrelops_home_sensor.__main__ import run_sensor
@@ -438,9 +766,7 @@ class TestCLIParsing:
     def test_all_flags_combined(self) -> None:
         from squirrelops_home_sensor.__main__ import parse_args
 
-        args = parse_args(
-            ["--config", "my.yaml", "--port", "7777", "--no-tls"]
-        )
+        args = parse_args(["--config", "my.yaml", "--port", "7777", "--no-tls"])
         assert args.config == "my.yaml"
         assert args.port == 7777
         assert args.no_tls is True

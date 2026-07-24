@@ -71,6 +71,10 @@ class DeviceClassifier:
         self._sig_db = signature_db
         self._llm = llm
 
+    def set_llm(self, llm: LLMClassifier | None) -> None:
+        """Replace or disable the live LLM fallback."""
+        self._llm = llm
+
     async def classify(self, fingerprint: CompositeFingerprint) -> DeviceClassification:
         """Classify a device using the full classification chain.
 

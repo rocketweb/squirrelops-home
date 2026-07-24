@@ -21,6 +21,7 @@ import aiosqlite
 from squirrelops_home_sensor.devices.classifier import DeviceClassifier
 from squirrelops_home_sensor.devices.decoy_filter import DECOY_DEVICE_FILTER, is_decoy_device_ip
 from squirrelops_home_sensor.events.bus import EventBus
+from squirrelops_home_sensor.events.types import EventType
 from squirrelops_home_sensor.fingerprint.composite import (
     CompositeFingerprint,
     compute_fingerprint,
@@ -82,6 +83,7 @@ class TrackedDevice:
     open_ports: frozenset[int]
     first_seen: datetime
     last_seen: datetime
+    is_online: bool = True
     model_name: str | None = None
     area: str | None = None
 
@@ -190,7 +192,7 @@ class DeviceManager:
             "custom_name": custom_name,
             "area": tracked.area,
             "trust_status": trust_status,
-            "is_online": True,
+            "is_online": tracked.is_online,
             "first_seen": tracked.first_seen.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "last_seen": now_iso,
         }
@@ -208,7 +210,7 @@ class DeviceManager:
             "SELECT d.id, d.ip_address, d.mac_address, d.hostname, "
             "d.vendor, d.device_type, d.model_name, d.first_seen, d.last_seen, "
             "fp.mdns_hostname, fp.dhcp_fingerprint_hash, "
-            "fp.connection_pattern_hash, fp.open_ports_hash, d.area "
+            "fp.connection_pattern_hash, fp.open_ports_hash, d.area, d.is_online "
             "FROM devices d "
             "LEFT JOIN device_fingerprints fp ON fp.device_id = d.id "
             "AND fp.id = (SELECT MAX(fp2.id) FROM device_fingerprints fp2 "
@@ -229,14 +231,14 @@ class DeviceManager:
                 f"WHERE device_id IN ({placeholders})",
                 device_ids,
             )
+            mutable_baselines: dict[int, set[str]] = {}
             for bl_row in await bl_cursor.fetchall():
                 did = bl_row[0]
                 entry = f"{bl_row[1]}:{bl_row[2]}"
-                baselines_by_device.setdefault(did, set()).add(entry)
-            # Freeze the sets
+                mutable_baselines.setdefault(did, set()).add(entry)
             baselines_by_device = {
                 did: frozenset(dests)
-                for did, dests in baselines_by_device.items()
+                for did, dests in mutable_baselines.items()
             }
 
         # Build {device_id: frozenset(port, ...)} lookup
@@ -248,11 +250,12 @@ class DeviceManager:
                 f"WHERE device_id IN ({placeholders})",
                 device_ids,
             )
+            mutable_ports: dict[int, set[int]] = {}
             for port_row in await port_cursor.fetchall():
-                ports_by_device.setdefault(port_row[0], set()).add(port_row[1])
+                mutable_ports.setdefault(port_row[0], set()).add(port_row[1])
             ports_by_device = {
                 did: frozenset(ports)
-                for did, ports in ports_by_device.items()
+                for did, ports in mutable_ports.items()
             }
 
         loaded: list[TrackedDevice] = []
@@ -285,6 +288,7 @@ class DeviceManager:
                 open_ports=ports_by_device.get(device_id, frozenset()),
                 first_seen=first_seen,
                 last_seen=last_seen,
+                is_online=bool(row[14]),
                 area=row[13],
             ))
 
@@ -309,7 +313,42 @@ class DeviceManager:
             await self._db.commit()
             logger.info("Reclassified %d devices with updated OUI database", reclassified)
 
-    async def process_scan_result(self, scan: ScanResult) -> None:
+    async def is_system_decoy_ip(self, ip_address: str) -> bool:
+        """Return whether an address is currently reserved for a virtual decoy."""
+        return await is_decoy_device_ip(self._db, ip_address)
+
+    async def reconcile_online_state(self, seen_device_ids: set[int]) -> None:
+        """Make a successful ARP snapshot authoritative for online status."""
+        transitions: list[tuple[TrackedDevice, bool]] = []
+        for tracked in self._known_devices:
+            now_online = tracked.device_id in seen_device_ids
+            if tracked.is_online != now_online:
+                transitions.append((tracked, now_online))
+
+        if seen_device_ids:
+            ordered_ids = sorted(seen_device_ids)
+            placeholders = ",".join("?" for _ in ordered_ids)
+            await self._db.execute(
+                f"""UPDATE devices
+                    SET is_online = CASE
+                        WHEN id IN ({placeholders}) THEN 1
+                        ELSE 0
+                    END""",
+                ordered_ids,
+            )
+        else:
+            await self._db.execute("UPDATE devices SET is_online = 0")
+        await self._db.commit()
+
+        for tracked, is_online in transitions:
+            await self._bus.publish(
+                EventType.DEVICE_ONLINE if is_online else EventType.DEVICE_OFFLINE,
+                {"device_id": tracked.device_id},
+                source_id=str(tracked.device_id),
+            )
+            tracked.is_online = is_online
+
+    async def process_scan_result(self, scan: ScanResult) -> int | None:
         """Process a single scan result through the full pipeline.
 
         Parameters
@@ -320,7 +359,7 @@ class DeviceManager:
         now = datetime.now(UTC)
         now_iso = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-        if await is_decoy_device_ip(self._db, scan.ip_address):
+        if await self.is_system_decoy_ip(scan.ip_address):
             self._known_devices = [
                 td for td in self._known_devices if td.ip_address != scan.ip_address
             ]
@@ -328,7 +367,7 @@ class DeviceManager:
                 "Ignoring system-created decoy IP in device scan: %s",
                 scan.ip_address,
             )
-            return
+            return None
 
         # Stage 1: Compute composite fingerprint
         fp = compute_fingerprint(
@@ -340,10 +379,16 @@ class DeviceManager:
         )
 
         # Build set representations for Jaccard comparison
-        conn_dests = frozenset(
-            f"{ip}:{port}" for ip, port in scan.connections
-        ) if scan.connections else frozenset()
-        ports_set = frozenset(scan.open_ports) if scan.open_ports else frozenset()
+        conn_dests = (
+            frozenset(f"{ip}:{port}" for ip, port in scan.connections)
+            if scan.connections is not None
+            else None
+        )
+        ports_set = (
+            frozenset(scan.open_ports)
+            if scan.open_ports is not None
+            else None
+        )
 
         # Stage 2: Match against known devices
         # Fast path: direct MAC lookup (handles ARP-only scans where the
@@ -377,21 +422,26 @@ class DeviceManager:
             matched_id, confidence = match_device(
                 fp,
                 known_for_match,
-                connection_destinations=conn_dests,
-                open_ports=ports_set,
+                connection_destinations=conn_dests or frozenset(),
+                open_ports=ports_set or frozenset(),
                 weights=self._signal_weights(),
             )
 
         if matched_id is not None:
             # Found a match -- update existing device
-            await self._handle_matched_device(
+            return await self._handle_matched_device(
                 matched_id, confidence, scan, fp, conn_dests, ports_set, now, now_iso
             )
-        else:
-            # New device
-            await self._handle_new_device(
-                scan, fp, conn_dests, ports_set, now, now_iso
-            )
+
+        # New device
+        return await self._handle_new_device(
+            scan,
+            fp,
+            conn_dests or frozenset(),
+            ports_set or frozenset(),
+            now,
+            now_iso,
+        )
 
     async def _handle_new_device(
         self,
@@ -401,7 +451,7 @@ class DeviceManager:
         ports_set: frozenset[int],
         now: datetime,
         now_iso: str,
-    ) -> None:
+    ) -> int:
         """Handle a newly-discovered device."""
         # Classify
         classification = await self._classifier.classify(fp)
@@ -414,6 +464,8 @@ class DeviceManager:
              classification.manufacturer, now_iso, now_iso),
         )
         device_id = cursor.lastrowid
+        if device_id is None:
+            raise RuntimeError("SQLite did not return a device id")
 
         await self._db.execute(
             "INSERT INTO device_fingerprints "
@@ -441,6 +493,7 @@ class DeviceManager:
             open_ports=ports_set,
             first_seen=now,
             last_seen=now,
+            is_online=True,
         )
         self._known_devices.append(tracked)
 
@@ -450,6 +503,7 @@ class DeviceManager:
             await self._build_device_payload(tracked, now_iso),
             source_id=str(device_id),
         )
+        return device_id
 
     async def _handle_matched_device(
         self,
@@ -457,29 +511,56 @@ class DeviceManager:
         confidence: float,
         scan: ScanResult,
         fp: CompositeFingerprint,
-        conn_dests: frozenset[str],
-        ports_set: frozenset[int],
+        conn_dests: frozenset[str] | None,
+        ports_set: frozenset[int] | None,
         now: datetime,
         now_iso: str,
-    ) -> None:
+    ) -> int:
         """Handle a returning device that matched a known device."""
         # Find the tracked device
         tracked = next(
             (td for td in self._known_devices if td.device_id == matched_id), None
         )
         if tracked is None:
-            return
+            raise RuntimeError(f"Matched device {matched_id} is not loaded")
+        was_online = tracked.is_online
+
+        merged_fp = CompositeFingerprint(
+            mac_address=fp.mac_address or tracked.fingerprint.mac_address,
+            mdns_hostname=(
+                fp.mdns_hostname
+                if scan.mdns_hostname is not None
+                else tracked.fingerprint.mdns_hostname
+            ),
+            dhcp_fingerprint_hash=(
+                fp.dhcp_fingerprint_hash
+                if scan.dhcp_options is not None
+                else tracked.fingerprint.dhcp_fingerprint_hash
+            ),
+            connection_pattern_hash=(
+                fp.connection_pattern_hash
+                if scan.connections is not None
+                else tracked.fingerprint.connection_pattern_hash
+            ),
+            open_ports_hash=(
+                fp.open_ports_hash
+                if scan.open_ports is not None
+                else tracked.fingerprint.open_ports_hash
+            ),
+        )
 
         old_mac = tracked.mac_address
-        new_mac = fp.mac_address
+        new_mac = merged_fp.mac_address
 
         # Update tracked device state
         tracked.ip_address = scan.ip_address
         if scan.hostname is not None:
             tracked.hostname = scan.hostname
-        tracked.fingerprint = fp
-        tracked.connection_destinations = conn_dests
-        tracked.open_ports = ports_set
+        tracked.fingerprint = merged_fp
+        if conn_dests is not None:
+            tracked.connection_destinations = conn_dests
+        if ports_set is not None:
+            tracked.open_ports = ports_set
         tracked.last_seen = now
         if new_mac is not None:
             tracked.mac_address = new_mac
@@ -487,15 +568,17 @@ class DeviceManager:
         # Update database — only overwrite hostname if scan provided one
         if scan.hostname is not None:
             await self._db.execute(
-                "UPDATE devices SET ip_address = ?, mac_address = ?, hostname = ?, last_seen = ? "
+                "UPDATE devices SET ip_address = ?, mac_address = ?, hostname = ?, "
+                "last_seen = ?, is_online = 1 "
                 "WHERE id = ?",
-                (scan.ip_address, fp.mac_address, scan.hostname, now_iso, matched_id),
+                (scan.ip_address, merged_fp.mac_address, scan.hostname, now_iso, matched_id),
             )
         else:
             await self._db.execute(
-                "UPDATE devices SET ip_address = ?, mac_address = ?, last_seen = ? "
+                "UPDATE devices SET ip_address = ?, mac_address = ?, last_seen = ?, "
+                "is_online = 1 "
                 "WHERE id = ?",
-                (scan.ip_address, fp.mac_address, now_iso, matched_id),
+                (scan.ip_address, merged_fp.mac_address, now_iso, matched_id),
             )
 
         await self._db.execute(
@@ -504,9 +587,9 @@ class DeviceManager:
             "connection_pattern_hash, open_ports_hash, composite_hash, "
             "signal_count, confidence, first_seen, last_seen) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (matched_id, fp.mac_address, fp.mdns_hostname,
-             fp.dhcp_fingerprint_hash, fp.connection_pattern_hash,
-             fp.open_ports_hash, fp.composite_hash, fp.signal_count,
+            (matched_id, merged_fp.mac_address, merged_fp.mdns_hostname,
+             merged_fp.dhcp_fingerprint_hash, merged_fp.connection_pattern_hash,
+             merged_fp.open_ports_hash, merged_fp.composite_hash, merged_fp.signal_count,
              confidence, now_iso, now_iso),
         )
         auto_approve_threshold = self._auto_approve_threshold()
@@ -515,6 +598,13 @@ class DeviceManager:
             await self._auto_approve_device_if_unknown(matched_id, now_iso)
 
         await self._db.commit()
+        if not was_online:
+            await self._bus.publish(
+                EventType.DEVICE_ONLINE,
+                {"device_id": matched_id},
+                source_id=str(matched_id),
+            )
+        tracked.is_online = True
 
         # Determine which events to emit
         # MAC changed?
@@ -555,6 +645,7 @@ class DeviceManager:
                 {**device_payload, "low_confidence": True},
                 source_id=str(matched_id),
             )
+        return matched_id
 
     async def _auto_approve_device_if_unknown(self, device_id: int, now_iso: str) -> None:
         cursor = await self._db.execute(
@@ -593,12 +684,29 @@ class DeviceManager:
         from squirrelops_home_sensor.scanner.port_scanner import PortResult
 
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        normalized: list[tuple[int, str | None, str | None]] = []
         for item in port_results:
             if isinstance(item, PortResult):
                 port, svc, banner = item.port, item.service_name, item.banner
             else:
                 port, svc, banner = int(item), None, None
+            normalized.append((port, svc, banner))
 
+        current_ports = sorted({port for port, _, _ in normalized})
+        if current_ports:
+            placeholders = ",".join("?" for _ in current_ports)
+            await self._db.execute(
+                f"""DELETE FROM device_open_ports
+                    WHERE device_id = ? AND port NOT IN ({placeholders})""",
+                (device_id, *current_ports),
+            )
+        else:
+            await self._db.execute(
+                "DELETE FROM device_open_ports WHERE device_id = ?",
+                (device_id,),
+            )
+
+        for port, svc, banner in normalized:
             await self._db.execute(
                 """INSERT INTO device_open_ports
                    (device_id, port, protocol, service_name, banner, first_seen, last_seen)
@@ -612,7 +720,13 @@ class DeviceManager:
             )
         await self._db.commit()
 
-    async def enrich_device_ports(self, ip_address: str, port_data: list[Any]) -> None:
+    async def enrich_device_ports(
+        self,
+        ip_address: str,
+        port_data: list[Any],
+        *,
+        device_id: int | None = None,
+    ) -> None:
         """Enrich a known device with open port data from a port scan.
 
         This is called in Phase 2 of the scan loop, after devices have
@@ -631,9 +745,15 @@ class DeviceManager:
         """
         from squirrelops_home_sensor.scanner.port_scanner import PortResult
 
-        tracked = next(
-            (td for td in self._known_devices if td.ip_address == ip_address),
-            None,
+        candidates = [
+            td for td in self._known_devices
+            if td.ip_address == ip_address
+            and (device_id is None or td.device_id == device_id)
+        ]
+        tracked = (
+            max(candidates, key=lambda td: (td.last_seen, td.device_id))
+            if candidates
+            else None
         )
         if tracked is None:
             return
@@ -655,12 +775,19 @@ class DeviceManager:
         tracked.last_seen = now
 
         # Recompute fingerprint with port data
-        fp = compute_fingerprint(
+        refreshed_port_fp = compute_fingerprint(
             mac=tracked.mac_address,
             mdns_hostname=tracked.fingerprint.mdns_hostname,
             dhcp_options=None,
             connections=None,
             open_ports=port_numbers,
+        )
+        fp = CompositeFingerprint(
+            mac_address=refreshed_port_fp.mac_address,
+            mdns_hostname=tracked.fingerprint.mdns_hostname,
+            dhcp_fingerprint_hash=tracked.fingerprint.dhcp_fingerprint_hash,
+            connection_pattern_hash=tracked.fingerprint.connection_pattern_hash,
+            open_ports_hash=refreshed_port_fp.open_ports_hash,
         )
         tracked.fingerprint = fp
 
@@ -699,6 +826,8 @@ class DeviceManager:
         upnp_friendly_name: str | None = None,
         upnp_manufacturer: str | None = None,
         upnp_model_name: str | None = None,
+        *,
+        device_id: int | None = None,
     ) -> None:
         """Enrich a known device with mDNS/SSDP discovery data.
 
@@ -712,9 +841,15 @@ class DeviceManager:
         - custom_name is never overwritten
         - Enrichment is additive — never removes data
         """
-        tracked = next(
-            (td for td in self._known_devices if td.ip_address == ip_address),
-            None,
+        candidates = [
+            td for td in self._known_devices
+            if td.ip_address == ip_address
+            and (device_id is None or td.device_id == device_id)
+        ]
+        tracked = (
+            max(candidates, key=lambda td: (td.last_seen, td.device_id))
+            if candidates
+            else None
         )
         if tracked is None:
             return
@@ -760,12 +895,19 @@ class DeviceManager:
         )
 
         # Recompute fingerprint with mdns_hostname signal
-        fp = compute_fingerprint(
+        refreshed_discovery_fp = compute_fingerprint(
             mac=tracked.mac_address,
             mdns_hostname=mdns_hostname or tracked.fingerprint.mdns_hostname,
             dhcp_options=None,
             connections=None,
-            open_ports=list(tracked.open_ports) if tracked.open_ports else None,
+            open_ports=None,
+        )
+        fp = CompositeFingerprint(
+            mac_address=refreshed_discovery_fp.mac_address,
+            mdns_hostname=refreshed_discovery_fp.mdns_hostname,
+            dhcp_fingerprint_hash=tracked.fingerprint.dhcp_fingerprint_hash,
+            connection_pattern_hash=tracked.fingerprint.connection_pattern_hash,
+            open_ports_hash=tracked.fingerprint.open_ports_hash,
         )
         tracked.fingerprint = fp
 
@@ -870,13 +1012,7 @@ class DeviceManager:
             )
 
             # Recompute fingerprint
-            fp = compute_fingerprint(
-                mac=tracked.mac_address,
-                mdns_hostname=tracked.fingerprint.mdns_hostname,
-                dhcp_options=None,
-                connections=None,
-                open_ports=list(tracked.open_ports) if tracked.open_ports else None,
-            )
+            fp = tracked.fingerprint
             tracked.fingerprint = fp
 
             await self._db.execute(

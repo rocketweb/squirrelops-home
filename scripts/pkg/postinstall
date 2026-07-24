@@ -15,18 +15,45 @@ LOG_DIR="$INSTALL_DIR/logs"
 CONFIG_FILE="$INSTALL_DIR/config.yaml"
 CONFIG_BACKUP="${CONFIG_FILE}.bak"
 
-# Detect Python environment mode (standalone or venv).
-# The build writes a .python-mode marker file to indicate which was used.
+# Release packages carry a pinned standalone Python runtime. Refuse an
+# incomplete or legacy host-bound venv payload instead of reporting success
+# and hoping a compatible target interpreter happens to exist.
 PYTHON_MODE_FILE="$INSTALL_DIR/.python-mode"
-if [ -f "$PYTHON_MODE_FILE" ] && [ "$(cat "$PYTHON_MODE_FILE")" = "standalone" ]; then
-    PYTHON_PATH="$INSTALL_DIR/python/bin/python3"
-else
-    PYTHON_PATH="$INSTALL_DIR/venv/bin/python"
+EXPECTED_VERSION_FILE="$INSTALL_DIR/VERSION"
+if [ ! -f "$PYTHON_MODE_FILE" ] \
+    || [ "$(cat "$PYTHON_MODE_FILE")" != "standalone" ]; then
+    echo "[postinstall] Package does not contain the required standalone Python runtime." >&2
+    exit 1
+fi
+PYTHON_PATH="$INSTALL_DIR/python/bin/python3"
+if [ ! -x "$PYTHON_PATH" ]; then
+    echo "[postinstall] Standalone Python is missing or not executable." >&2
+    exit 1
+fi
+if [ ! -f "$EXPECTED_VERSION_FILE" ]; then
+    echo "[postinstall] Package VERSION marker is missing." >&2
+    exit 1
+fi
+EXPECTED_SENSOR_VERSION="$(tr -d '[:space:]' < "$EXPECTED_VERSION_FILE")"
+if ! INSTALLED_SENSOR_VERSION=$("$PYTHON_PATH" -c \
+    'from importlib.metadata import version; print(version("squirrelops-home-sensor"))' \
+    2>/dev/null)
+then
+    echo "[postinstall] Cannot read the embedded sensor package version." >&2
+    exit 1
+fi
+if [ "$INSTALLED_SENSOR_VERSION" != "$EXPECTED_SENSOR_VERSION" ]; then
+    echo "[postinstall] Embedded sensor version $INSTALLED_SENSOR_VERSION does not match package version $EXPECTED_SENSOR_VERSION." >&2
+    exit 1
 fi
 
 PLIST_NAME="com.squirrelops.sensor"
 PLIST_TEMPLATE="$INSTALL_DIR/com.squirrelops.sensor.plist"
 PLIST_DEST="/Library/LaunchDaemons/${PLIST_NAME}.plist"
+HELPER_LABEL="com.squirrelops.helper"
+HELPER_BINARY="/Library/PrivilegedHelperTools/com.squirrelops.helper"
+HELPER_PLIST="/Library/LaunchDaemons/com.squirrelops.helper.plist"
+HELPER_SOCKET="/var/run/squirrelops-helper.sock"
 
 # Dedicated non-root service account the sensor daemon runs as, so an RCE in the
 # network-facing sensor is not root. The privileged helper authorizes this
@@ -78,8 +105,11 @@ create_service_account() {
     echo "[postinstall] Created ${SENSOR_USER} (uid/gid ${new_id})."
 }
 
+if ! create_service_account; then
+    echo "[postinstall] Cannot provision the required non-root sensor account." >&2
+    exit 1
+fi
 RUN_AS_SERVICE_ACCOUNT=1
-create_service_account || RUN_AS_SERVICE_ACCOUNT=0
 
 # ---------------------------------------------------------------------------
 # Step 1: Create data directories
@@ -88,59 +118,6 @@ echo "[postinstall] Creating data directories..."
 mkdir -p "$DATA_DIR"
 mkdir -p "$LOG_DIR"
 mkdir -p "$INSTALL_DIR/run"
-
-# ---------------------------------------------------------------------------
-# Step 1b: Repair venv Python symlinks
-# ---------------------------------------------------------------------------
-# The venv's python symlink may point to the build machine's Python, which
-# might not exist on the target system (e.g., built with 3.13 but target has
-# 3.14). Re-link to whatever python3 is available on this system.
-if [ "$PYTHON_PATH" = "$INSTALL_DIR/venv/bin/python" ]; then
-    VENV_BIN="$INSTALL_DIR/venv/bin"
-    # Find the system Python 3
-    SYSTEM_PYTHON=""
-    for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-        if [ -x "$candidate" ]; then
-            SYSTEM_PYTHON="$candidate"
-            break
-        fi
-    done
-
-    if [ -n "$SYSTEM_PYTHON" ]; then
-        SYSTEM_PY_VERSION=$("$SYSTEM_PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || true)
-        SYSTEM_PY_REAL=$(readlink -f "$SYSTEM_PYTHON" 2>/dev/null || "$SYSTEM_PYTHON" -c "import os,sys; print(os.path.realpath(sys.executable))" 2>/dev/null || true)
-
-        if [ -n "$SYSTEM_PY_VERSION" ] && [ -n "$SYSTEM_PY_REAL" ]; then
-            echo "[postinstall] System Python: $SYSTEM_PY_REAL (${SYSTEM_PY_VERSION})"
-
-            # Check if the venv's python actually works
-            if ! "$VENV_BIN/python" --version >/dev/null 2>&1; then
-                echo "[postinstall] Venv Python is broken — repairing symlinks..."
-
-                # Remove stale symlinks
-                rm -f "$VENV_BIN/python" "$VENV_BIN/python3"
-                # Remove old versioned symlink (e.g. python3.13)
-                find "$VENV_BIN" -maxdepth 1 -name "python3.*" -type l -delete 2>/dev/null || true
-
-                # Create fresh symlinks pointing to system Python
-                ln -s "$SYSTEM_PY_REAL" "$VENV_BIN/python3.${SYSTEM_PY_VERSION#*.}"
-                ln -s "python3.${SYSTEM_PY_VERSION#*.}" "$VENV_BIN/python3"
-                ln -s "python3" "$VENV_BIN/python"
-
-                # Verify the repair worked
-                if "$VENV_BIN/python" --version >/dev/null 2>&1; then
-                    echo "[postinstall] Venv Python repaired successfully."
-                else
-                    echo "[postinstall] WARNING: Venv Python repair failed."
-                fi
-            else
-                echo "[postinstall] Venv Python is working."
-            fi
-        fi
-    else
-        echo "[postinstall] WARNING: No system Python 3 found."
-    fi
-fi
 
 # ---------------------------------------------------------------------------
 # Step 2: Handle config file
@@ -189,9 +166,8 @@ if [ -f "$PLIST_TEMPLATE" ]; then
         -e "s|__LOG_DIR__|${LOG_DIR}|g" \
         "$PLIST_TEMPLATE" > "$PLIST_DEST"
 else
-    echo "[postinstall] WARNING: Plist template not found at $PLIST_TEMPLATE"
-    echo "[postinstall] Sensor service will not be started automatically."
-    exit 0
+    echo "[postinstall] Plist template not found at $PLIST_TEMPLATE." >&2
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -200,29 +176,180 @@ fi
 # The plist template carries no UserName (it is shared with the per-user
 # LaunchAgent install). For the root .pkg deployment we inject it here and give
 # the account ownership of the directories it must read/write.
+set_launchd_identity() {
+    local key="$1"
+    local expected_value="$2"
+    local actual_value
+
+    if ! /usr/libexec/PlistBuddy \
+        -c "Add :${key} string ${expected_value}" "$PLIST_DEST" 2>/dev/null
+    then
+        if ! /usr/libexec/PlistBuddy \
+            -c "Set :${key} ${expected_value}" "$PLIST_DEST" 2>/dev/null
+        then
+            echo "[postinstall] Cannot set launchd ${key} to ${expected_value}." >&2
+            return 1
+        fi
+    fi
+
+    if ! actual_value=$(
+        /usr/libexec/PlistBuddy -c "Print :${key}" "$PLIST_DEST" 2>/dev/null
+    ); then
+        echo "[postinstall] Cannot verify launchd ${key}." >&2
+        return 1
+    fi
+    if [ "$actual_value" != "$expected_value" ]; then
+        echo "[postinstall] launchd ${key} is ${actual_value}, expected ${expected_value}." >&2
+        return 1
+    fi
+}
+
+verify_owner_mode() {
+    local path="$1"
+    local expected_mode="$2"
+    local expected_value="${SENSOR_USER}:${SENSOR_GROUP}:${expected_mode}"
+    local actual_value
+
+    if ! actual_value=$(/usr/bin/stat -f "%Su:%Sg:%Lp" "$path" 2>/dev/null); then
+        echo "[postinstall] Cannot inspect ownership and mode for ${path}." >&2
+        return 1
+    fi
+    if [ "$actual_value" != "$expected_value" ]; then
+        echo "[postinstall] ${path} is ${actual_value}, expected ${expected_value}." >&2
+        return 1
+    fi
+}
+
+verify_existing_log_permissions() {
+    find "$LOG_DIR" -maxdepth 1 -type f -exec /bin/sh -c '
+        expected_value="$1"
+        shift
+        for log_file do
+            if ! actual_value=$(/usr/bin/stat -f "%Su:%Sg:%Lp" "$log_file" 2>/dev/null); then
+                echo "[postinstall] Cannot inspect log permissions for ${log_file}." >&2
+                exit 1
+            fi
+            if [ "$actual_value" != "$expected_value" ]; then
+                echo "[postinstall] ${log_file} is ${actual_value}, expected ${expected_value}." >&2
+                exit 1
+            fi
+        done
+    ' sh "${SENSOR_USER}:${SENSOR_GROUP}:600" {} +
+}
+
+configure_sensor_permissions() {
+    # The sensor writes the DB, certs, secret store, and logs; the standalone
+    # Python runtime stays root-owned and read+execute only.
+    if ! chown -R "${SENSOR_USER}:${SENSOR_GROUP}" "$DATA_DIR" "$LOG_DIR"; then
+        return 1
+    fi
+    if ! chown "${SENSOR_USER}:${SENSOR_GROUP}" "$INSTALL_DIR/run" "$CONFIG_FILE"; then
+        return 1
+    fi
+    if ! chmod 700 "$DATA_DIR"; then
+        return 1
+    fi
+    if ! chmod 700 "$LOG_DIR"; then
+        return 1
+    fi
+    if ! chmod 755 "$INSTALL_DIR/run"; then
+        return 1
+    fi
+    if ! chmod 600 "$CONFIG_FILE"; then
+        return 1
+    fi
+    if ! find "$LOG_DIR" -maxdepth 1 -type f -exec chmod 600 {} \;; then
+        return 1
+    fi
+
+    verify_owner_mode "$DATA_DIR" "700" \
+        && verify_owner_mode "$LOG_DIR" "700" \
+        && verify_owner_mode "$INSTALL_DIR/run" "755" \
+        && verify_owner_mode "$CONFIG_FILE" "600" \
+        && verify_existing_log_permissions
+}
+
 if [ "$RUN_AS_SERVICE_ACCOUNT" = "1" ]; then
     echo "[postinstall] Configuring daemon to run as ${SENSOR_USER}..."
-    /usr/libexec/PlistBuddy -c "Add :UserName string ${SENSOR_USER}" "$PLIST_DEST" 2>/dev/null \
-        || /usr/libexec/PlistBuddy -c "Set :UserName ${SENSOR_USER}" "$PLIST_DEST" 2>/dev/null || true
-    /usr/libexec/PlistBuddy -c "Add :GroupName string ${SENSOR_GROUP}" "$PLIST_DEST" 2>/dev/null \
-        || /usr/libexec/PlistBuddy -c "Set :GroupName ${SENSOR_GROUP}" "$PLIST_DEST" 2>/dev/null || true
-    # The sensor writes the DB, certs, secret store, and logs; the venv/python
-    # stays root-owned (read+execute only).
-    chown -R "${SENSOR_USER}:${SENSOR_GROUP}" "$DATA_DIR" "$LOG_DIR" 2>/dev/null || true
-    chown "${SENSOR_USER}:${SENSOR_GROUP}" "$INSTALL_DIR/run" 2>/dev/null || true
-    chown "${SENSOR_USER}:${SENSOR_GROUP}" "$CONFIG_FILE" 2>/dev/null || true
-    chmod 700 "$DATA_DIR" 2>/dev/null || true
-    chmod 755 "$INSTALL_DIR/run" 2>/dev/null || true
-    chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+    if ! set_launchd_identity "UserName" "$SENSOR_USER"; then
+        echo "[postinstall] Cannot configure the required launchd service identity." >&2
+        exit 1
+    fi
+    if ! set_launchd_identity "GroupName" "$SENSOR_GROUP"; then
+        echo "[postinstall] Cannot configure the required launchd service identity." >&2
+        exit 1
+    fi
+    if ! configure_sensor_permissions; then
+        echo "[postinstall] Cannot configure required sensor storage permissions." >&2
+        exit 1
+    fi
 fi
-chmod 600 "$CONFIG_FILE" 2>/dev/null || true
-chmod 700 "$DATA_DIR" 2>/dev/null || true
 
-# The app package may have started the helper before the service account was
-# created. Restart it so the socket is recreated as root:_squirrelops 0660.
-if [ -f /Library/LaunchDaemons/com.squirrelops.helper.plist ]; then
-    launchctl kickstart -k system/com.squirrelops.helper 2>/dev/null || true
+# The app package starts the helper before the service account exists. Restart
+# it now, then prove the actual sensor account can connect to the RPC socket.
+verify_helper_for_sensor_account() {
+    [ -x "$HELPER_BINARY" ] \
+        && [ -f "$HELPER_PLIST" ] \
+        && [ -S "$HELPER_SOCKET" ] \
+        && /usr/bin/sudo -n -u "$SENSOR_USER" "$PYTHON_PATH" \
+            - "$HELPER_SOCKET" >/dev/null 2>&1 <<'PY'
+import json
+import socket
+import sys
+
+request = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "ping",
+}
+required_capabilities = {
+    "arp_scan",
+    "virtual_ip",
+    "port_forward_isolation",
+}
+
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as helper:
+    helper.settimeout(2)
+    helper.connect(sys.argv[1])
+    helper.sendall(json.dumps(request, separators=(",", ":")).encode() + b"\n")
+    response_line = helper.makefile("rb").readline(65537)
+
+if not response_line.endswith(b"\n") or len(response_line) > 65536:
+    raise SystemExit(1)
+response = json.loads(response_line)
+result = response.get("result")
+valid = (
+    response.get("jsonrpc") == "2.0"
+    and response.get("id") == 1
+    and "error" not in response
+    and isinstance(result, dict)
+    and result.get("status") == "ok"
+    and result.get("protocol_version") == 1
+    and required_capabilities.issubset(result.get("capabilities", []))
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
+if [ ! -x "$HELPER_BINARY" ] || [ ! -f "$HELPER_PLIST" ]; then
+    echo "[postinstall] Privileged helper installation is incomplete." >&2
+    exit 1
 fi
+if ! launchctl kickstart -k "system/${HELPER_LABEL}" 2>/dev/null; then
+    echo "[postinstall] Failed to restart privileged helper." >&2
+    exit 1
+fi
+
+HELPER_WAIT=0
+while ! verify_helper_for_sensor_account; do
+    if [ "$HELPER_WAIT" -ge 10 ]; then
+        echo "[postinstall] Privileged helper is unusable by ${SENSOR_USER}." >&2
+        exit 1
+    fi
+    sleep 1
+    HELPER_WAIT=$((HELPER_WAIT + 1))
+done
+echo "[postinstall] Privileged helper is available to ${SENSOR_USER}."
 
 # ---------------------------------------------------------------------------
 # Step 4: Set permissions on plist
@@ -234,35 +361,129 @@ chmod 644 "$PLIST_DEST"
 # Step 5: Load the sensor service
 # ---------------------------------------------------------------------------
 echo "[postinstall] Loading sensor service..."
-launchctl bootstrap system "$PLIST_DEST" 2>/dev/null || {
-    echo "[postinstall] WARNING: Failed to bootstrap sensor service."
-    echo "[postinstall] You may need to load it manually:"
-    echo "[postinstall]   sudo launchctl bootstrap system $PLIST_DEST"
-}
+if ! launchctl bootstrap system "$PLIST_DEST" 2>/dev/null; then
+    echo "[postinstall] Failed to bootstrap sensor service." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
-# Step 6: Health check (best effort — don't block installer)
+# Step 6: Health check (a package is not successful unless the sensor starts)
 # ---------------------------------------------------------------------------
 echo "[postinstall] Waiting for sensor to start..."
 
 HEALTH_URL="https://localhost:8443/system/health"
-TIMEOUT=30
-INTERVAL=2
-ELAPSED=0
+HEALTH_TIMEOUT_SECONDS=180
+HEALTH_PROBE_TIMEOUT_SECONDS=3
+HEALTH_INTERVAL_SECONDS=2
+HEALTH_REQUIRED_SUCCESSES=2
+SENSOR_LIVENESS_GRACE_SECONDS=10
+HEALTH_STARTED_AT="$(/bin/date "+%s")"
+HEALTH_DEADLINE=$((HEALTH_STARTED_AT + HEALTH_TIMEOUT_SECONDS))
+SENSOR_LIVENESS_GRACE_DEADLINE=$((HEALTH_STARTED_AT + SENSOR_LIVENESS_GRACE_SECONDS))
+SENSOR_SERVICE_SNAPSHOT=""
+SENSOR_HEALTHY=0
 
-while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
-    # Use curl with --insecure since the sensor uses a self-signed cert
-    if curl -sf --insecure --max-time 3 "$HEALTH_URL" >/dev/null 2>&1; then
-        echo "[postinstall] Sensor is healthy."
-        break
+capture_sensor_service_snapshot() {
+    SENSOR_SERVICE_SNAPSHOT=$(
+        /bin/launchctl print "system/${PLIST_NAME}" 2>/dev/null
+    )
+}
+
+sensor_service_is_running() {
+    printf '%s\n' "$SENSOR_SERVICE_SNAPSHOT" \
+        | /usr/bin/grep -Eq "state = running" \
+        && printf '%s\n' "$SENSOR_SERVICE_SNAPSHOT" \
+        | /usr/bin/grep -Eq "pid = [1-9][0-9]*"
+}
+
+sensor_health_is_ready() {
+    local health_response
+
+    # The local API uses a self-signed certificate. A successful HTTP status
+    # alone is insufficient: require the sensor's documented health payload.
+    if ! health_response=$(
+        /usr/bin/curl \
+            --silent \
+            --show-error \
+            --fail \
+            --insecure \
+            --connect-timeout 1 \
+            --max-time "$HEALTH_PROBE_TIMEOUT_SECONDS" \
+            "$HEALTH_URL" 2>/dev/null
+    ); then
+        return 1
     fi
-    sleep "$INTERVAL"
-    ELAPSED=$((ELAPSED + INTERVAL))
-done
 
-if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-    echo "[postinstall] WARNING: Sensor did not respond within ${TIMEOUT}s."
-    echo "[postinstall] Check logs at: $LOG_DIR/squirrelops-sensor.log"
+    printf '%s' "$health_response" | "$PYTHON_PATH" -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except (json.JSONDecodeError, UnicodeDecodeError):
+    raise SystemExit(1)
+
+healthy = isinstance(payload, dict) and payload.get("status") == "ok"
+raise SystemExit(0 if healthy else 1)
+'
+}
+
+wait_for_sensor_health() {
+    local consecutive_successes=0
+    local now
+    local remaining
+    local sleep_seconds
+
+    # Full-profile upgrades restore and isolate every persisted mimic before
+    # uvicorn binds the API. Keep the installer bounded, but allow that work to
+    # finish while continuously proving the launchd job still exists.
+    while [ "$(/bin/date "+%s")" -lt "$HEALTH_DEADLINE" ]; do
+        if ! capture_sensor_service_snapshot; then
+            echo "[postinstall] Sensor launchd job disappeared during startup." >&2
+            return 1
+        fi
+
+        now="$(/bin/date "+%s")"
+        if sensor_service_is_running; then
+            if sensor_health_is_ready; then
+                consecutive_successes=$((consecutive_successes + 1))
+                if [ "$consecutive_successes" -ge "$HEALTH_REQUIRED_SUCCESSES" ]; then
+                    return 0
+                fi
+            else
+                consecutive_successes=0
+            fi
+        elif [ "$now" -ge "$SENSOR_LIVENESS_GRACE_DEADLINE" ]; then
+            echo "[postinstall] Sensor process is not running." >&2
+            return 1
+        else
+            consecutive_successes=0
+        fi
+
+        now="$(/bin/date "+%s")"
+        remaining=$((HEALTH_DEADLINE - now))
+        if [ "$remaining" -le 0 ]; then
+            break
+        fi
+        sleep_seconds="$HEALTH_INTERVAL_SECONDS"
+        if [ "$remaining" -lt "$sleep_seconds" ]; then
+            sleep_seconds="$remaining"
+        fi
+        /bin/sleep "$sleep_seconds"
+    done
+
+    return 1
+}
+
+if wait_for_sensor_health; then
+    SENSOR_HEALTHY=1
+    echo "[postinstall] Sensor is healthy."
+fi
+
+if [ "$SENSOR_HEALTHY" -ne 1 ]; then
+    echo "[postinstall] Sensor did not become healthy within ${HEALTH_TIMEOUT_SECONDS}s." >&2
+    echo "[postinstall] Check logs at: $LOG_DIR/squirrelops-sensor.log" >&2
+    exit 1
 fi
 
 echo "[postinstall] Done."

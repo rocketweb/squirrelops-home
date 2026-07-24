@@ -1,14 +1,15 @@
 """Resource profile detection and enforcement.
 
-Three resource profiles control scan frequency, decoy limits, and LLM
+Three resource profiles control scan frequency, classic-decoy limits,
+Squirrel Scout frequency, mimic capacity, virtual-IP capacity, and LLM
 classification mode. The sensor auto-detects an appropriate profile on
 startup based on available system resources (RAM, CPU cores), but the
 user may override it at any time.
 
 Profiles:
-    Lite     -- 15-min scans, <=3 decoys, local signature DB only
-    Standard -- 5-min scans,  <=8 decoys, cloud LLM (user's API key)
-    Full     -- 1-min scans,  <=16 decoys, local LLM (LM Studio/Ollama)
+    Lite     -- 15-min scans, <=3 classic decoys, scouts/mimics disabled
+    Standard -- 5-min scans, <=3 classic + <=10 mimic decoys
+    Full     -- 1-min scans, <=3 classic + <=30 mimic decoys
 """
 
 from __future__ import annotations
@@ -57,11 +58,16 @@ class ProfileSettings:
     """Immutable settings for a single resource profile."""
 
     scan_interval: int  # seconds between active scans
-    max_decoys: int  # maximum concurrent decoy services
+    max_decoys: int  # maximum concurrent classic decoy services
     llm_mode: LLMMode  # classification strategy
     scout_interval_minutes: int = 30  # 0 = disabled
     max_mimic_decoys: int = 10
     max_virtual_ips: int = 15
+
+    @property
+    def total_decoy_capacity(self) -> int:
+        """Maximum combined classic and mimic decoy count."""
+        return self.max_decoys + self.max_mimic_decoys
 
 
 PROFILE_SETTINGS: dict[ResourceProfile, ProfileSettings] = {
@@ -75,7 +81,11 @@ PROFILE_SETTINGS: dict[ResourceProfile, ProfileSettings] = {
     ),
     ResourceProfile.STANDARD: ProfileSettings(
         scan_interval=300,
-        max_decoys=8,
+        # There are three independently useful classic listener types. Keep
+        # one of each rather than advertising or spawning redundant clones on
+        # random high ports. Mimic capacity provides the larger network-facing
+        # surface for Standard and Full profiles.
+        max_decoys=3,
         llm_mode=LLMMode.CLOUD_LLM,
         scout_interval_minutes=60,
         max_mimic_decoys=10,
@@ -83,7 +93,7 @@ PROFILE_SETTINGS: dict[ResourceProfile, ProfileSettings] = {
     ),
     ResourceProfile.FULL: ProfileSettings(
         scan_interval=60,
-        max_decoys=16,
+        max_decoys=3,
         llm_mode=LLMMode.LOCAL_LLM,
         scout_interval_minutes=30,
         max_mimic_decoys=30,
@@ -144,13 +154,18 @@ def detect_profile() -> ResourceProfile:
 def get_profile_limits(profile: ResourceProfile) -> dict[str, object]:
     """Return the numeric limits for *profile* as a plain dict.
 
-    Keys: ``scan_interval``, ``max_decoys``, ``llm_mode``.
+    The returned values are the canonical source for both persisted
+    configuration and live subsystem reconciliation.
     """
     settings = PROFILE_SETTINGS[profile]
     return {
         "scan_interval": settings.scan_interval,
         "max_decoys": settings.max_decoys,
         "llm_mode": settings.llm_mode.value,
+        "scout_interval_minutes": settings.scout_interval_minutes,
+        "max_mimic_decoys": settings.max_mimic_decoys,
+        "max_virtual_ips": settings.max_virtual_ips,
+        "total_decoy_capacity": settings.total_decoy_capacity,
     }
 
 
@@ -160,8 +175,8 @@ def apply_profile(
 ) -> dict[str, object]:
     """Return a **copy** of *config* with *profile* settings applied.
 
-    Overwrites ``scan_interval``, ``max_decoys``, ``llm_mode``, and
-    ``profile`` keys. All other keys are preserved unchanged.
+    Overwrites all profile-governed flat keys plus ``profile``. All other
+    keys are preserved unchanged.
     """
     merged = dict(config)
     limits = get_profile_limits(profile)

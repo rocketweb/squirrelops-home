@@ -20,15 +20,17 @@
     <dict>
         <key>SQUIRRELOPS_DATA_DIR</key>
         <string>__DATA_DIR__</string>
+        <key>SQUIRRELOPS_LOG_PATH</key>
+        <string>__LOG_DIR__/squirrelops-sensor.log</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__LOG_DIR__/squirrelops-sensor.log</string>
+    <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
     <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/squirrelops-sensor.log</string>
+    <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
     <key>ThrottleInterval</key>
     <integer>10</integer>
 </dict>

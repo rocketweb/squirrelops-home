@@ -6,6 +6,10 @@ struct DecoyStatusView: View {
     let appState: AppState
 
     @State private var selectedDecoy: DecoySummary?
+    @State private var actionError: String?
+    @State private var editingMimicGroupID: String?
+    @State private var hostnameDraft = ""
+    @State private var isSavingHostname = false
 
     private let columns = [GridItem(.adaptive(minimum: 280), spacing: Spacing.md)]
 
@@ -13,6 +17,15 @@ struct DecoyStatusView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
+            if let actionError {
+                Label(actionError, systemImage: "exclamationmark.triangle.fill")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.statusError(colorScheme))
+                    .padding(.horizontal, Spacing.lg)
+                    .padding(.vertical, Spacing.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.statusError(colorScheme).opacity(0.08))
+            }
             if appState.decoys.isEmpty {
                 emptyState
             } else {
@@ -23,6 +36,41 @@ struct DecoyStatusView: View {
         .sheet(item: $selectedDecoy) { decoy in
             DecoyDetailSheet(decoy: decoy, appState: appState)
         }
+        .task {
+            await appState.refreshDecoys()
+        }
+    }
+
+    private var activeDecoys: [DecoySummary] {
+        appState.decoys.filter(\.isActiveDeployment)
+    }
+
+    private var mimicServices: [DecoySummary] {
+        appState.decoys.filter(\.isVirtualMimic)
+    }
+
+    private var mimicGroups: [DecoyHostGroup] {
+        DecoyHostGroup.grouping(mimicServices)
+    }
+
+    private var activeMimicServices: [DecoySummary] {
+        activeDecoys.filter(\.isVirtualMimic)
+    }
+
+    private var activeMimicGroups: [DecoyHostGroup] {
+        DecoyHostGroup.grouping(activeMimicServices)
+    }
+
+    private var activeHostListeners: [DecoySummary] {
+        activeDecoys.filter(\.isHostListener)
+    }
+
+    private var activeHostListenerCount: Int {
+        activeHostListeners.count
+    }
+
+    private var inactiveHostListeners: [DecoySummary] {
+        appState.decoys.filter { $0.isHostListener && !$0.isActiveDeployment }
     }
 
     private var toolbar: some View {
@@ -32,7 +80,11 @@ struct DecoyStatusView: View {
                 .tracking(Typography.h3Tracking)
                 .foregroundStyle(Theme.textPrimary(colorScheme))
             Spacer()
-            Text("\(appState.decoys.count) deployed")
+            Text(
+                "\(activeMimicGroups.count) fake hosts · "
+                + "\(activeMimicServices.count) service decoys · "
+                + "\(activeHostListenerCount) host listeners"
+            )
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
         }
@@ -41,16 +93,221 @@ struct DecoyStatusView: View {
 
     private var decoyGrid: some View {
         ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                if activeHostListenerCount > 0 {
+                    Label(
+                        "Host listeners use this sensor Mac's LAN address and the shown port. "
+                        + "Only virtual-IP mimics have their own network address.",
+                        systemImage: "info.circle"
+                    )
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+                    .padding(Spacing.s12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.backgroundSecondary(colorScheme))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Spacing.radiusMd)
+                            .stroke(Theme.borderSubtle(colorScheme), lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusMd))
+                }
+
+                if !mimicServices.isEmpty {
+                    mimicSection(
+                        title: "Fake hosts",
+                        description: "Services sharing a virtual IP belong to one fake host. Each port keeps its own behavior and evidence; lifecycle actions apply to the entire host.",
+                        groups: mimicGroups
+                    )
+                }
+
+                if !activeHostListeners.isEmpty {
+                    decoySection(
+                        title: "Active host listeners",
+                        decoys: activeHostListeners
+                    )
+                }
+
+                if !inactiveHostListeners.isEmpty {
+                    decoySection(
+                        title: "Inactive host listeners",
+                        description: "These listeners are disabled and do not count as deployed decoys.",
+                        decoys: inactiveHostListeners
+                    )
+                }
+            }
+            .padding(Spacing.lg)
+        }
+        .refreshable {
+            await appState.refreshDecoys()
+        }
+    }
+
+    @ViewBuilder
+    private func decoySection(
+        title: String,
+        description: String? = nil,
+        decoys: [DecoySummary]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text(title.uppercased())
+                .font(Typography.caption)
+                .tracking(Typography.captionTracking)
+                .foregroundStyle(Theme.textTertiary(colorScheme))
+
+            if let description {
+                Text(description)
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+            }
+
             LazyVGrid(columns: columns, spacing: Spacing.md) {
-                ForEach(appState.decoys) { decoy in
+                ForEach(decoys) { decoy in
                     decoyCard(decoy)
                         .onTapGesture {
                             selectedDecoy = decoy
                         }
                 }
             }
-            .padding(Spacing.lg)
         }
+    }
+
+    @ViewBuilder
+    private func mimicSection(
+        title: String,
+        description: String? = nil,
+        groups: [DecoyHostGroup]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text(title.uppercased())
+                .font(Typography.caption)
+                .tracking(Typography.captionTracking)
+                .foregroundStyle(Theme.textTertiary(colorScheme))
+
+            if let description {
+                Text(description)
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+            }
+
+            ForEach(groups) { group in
+                mimicHostGroupCard(group)
+            }
+        }
+    }
+
+    private func mimicHostGroupCard(_ group: DecoyHostGroup) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            HStack(alignment: .top, spacing: Spacing.sm) {
+                Image(systemName: "network")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+
+                VStack(alignment: .leading, spacing: Spacing.xs) {
+                    if editingMimicGroupID == group.id {
+                        TextField("hostname.local", text: $hostnameDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .font(Typography.mono)
+                            .onSubmit {
+                                Task { await saveHostname(for: group) }
+                            }
+
+                        HStack(spacing: Spacing.sm) {
+                            Button("Cancel") {
+                                editingMimicGroupID = nil
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.textSecondary(colorScheme))
+
+                            Button {
+                                Task { await saveHostname(for: group) }
+                            } label: {
+                                if isSavingHostname {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Text("Save hostname")
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.accentDefault(colorScheme))
+                            .disabled(
+                                isSavingHostname
+                                || hostnameDraft.trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                ).isEmpty
+                            )
+                        }
+                        .font(Typography.bodySmall)
+                    } else {
+                        HStack(spacing: Spacing.xs) {
+                            Text(mimicHostTitle(group))
+                                .font(Typography.h4)
+                                .tracking(Typography.h4Tracking)
+                                .foregroundStyle(Theme.textPrimary(colorScheme))
+
+                            Button {
+                                beginEditingHostname(group)
+                            } label: {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Theme.accentDefault(colorScheme))
+                            .help("Edit hostname for every service on this fake host")
+                        }
+                    }
+
+                    Text(group.bindAddress)
+                        .font(Typography.mono)
+                        .tracking(Typography.monoTracking)
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
+                }
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: Spacing.xs) {
+                    Text(
+                        "\(group.services.count) "
+                        + (group.services.count == 1 ? "service" : "services")
+                    )
+                    Text("\(group.connectionCount) hits")
+                }
+                .font(Typography.bodySmall)
+                .foregroundStyle(Theme.textSecondary(colorScheme))
+            }
+
+            if let representative = group.services.first {
+                VStack(alignment: .leading, spacing: Spacing.xs) {
+                    Text("HOST LIFECYCLE")
+                        .font(Typography.caption)
+                        .tracking(Typography.captionTracking)
+                        .foregroundStyle(Theme.textTertiary(colorScheme))
+                    DecoyToggle(
+                        decoy: representative,
+                        appState: appState,
+                        scopeLabel: "All services on \(group.bindAddress)"
+                    ) { message in
+                        actionError = message
+                    }
+                }
+            }
+
+            LazyVGrid(columns: columns, spacing: Spacing.md) {
+                ForEach(group.services) { decoy in
+                    decoyCard(decoy)
+                        .onTapGesture {
+                            selectedDecoy = decoy
+                        }
+                }
+            }
+        }
+        .padding(Spacing.md)
+        .background(Theme.background(colorScheme))
+        .overlay(
+            RoundedRectangle(cornerRadius: Spacing.radiusLg)
+                .stroke(Theme.borderSubtle(colorScheme), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusLg))
     }
 
     private func decoyCard(_ decoy: DecoySummary) -> some View {
@@ -60,7 +317,7 @@ struct DecoyStatusView: View {
                 Image(systemName: decoyIcon(decoy.decoyType))
                     .font(.system(size: 20))
                     .foregroundStyle(Theme.textSecondary(colorScheme))
-                Text(decoy.name)
+                Text(decoy.serviceLabel)
                     .font(Typography.h4)
                     .tracking(Typography.h4Tracking)
                     .foregroundStyle(Theme.textPrimary(colorScheme))
@@ -71,14 +328,24 @@ struct DecoyStatusView: View {
                 )
             }
 
-            // Address
-            Text("\(decoy.bindAddress):\(String(decoy.port))")
-                .font(Typography.mono)
-                .tracking(Typography.monoTracking)
-                .foregroundStyle(Theme.textSecondary(colorScheme))
+            // Address and deployment scope
+            HStack(spacing: Spacing.sm) {
+                Text(decoy.endpointLabel)
+                    .font(Typography.mono)
+                    .tracking(Typography.monoTracking)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+                Text(decoy.deploymentScopeLabel.uppercased())
+                    .font(Typography.caption)
+                    .tracking(Typography.captionTracking)
+                    .foregroundStyle(Theme.textTertiary(colorScheme))
+            }
 
-            // Enable/disable toggle
-            DecoyToggle(decoy: decoy, appState: appState)
+            // Shared-IP mimics have one lifecycle control on their host card.
+            if !decoy.isVirtualMimic {
+                DecoyToggle(decoy: decoy, appState: appState) { message in
+                    actionError = message
+                }
+            }
 
             Divider()
 
@@ -109,11 +376,19 @@ struct DecoyStatusView: View {
             }
 
             // Restart button for degraded
-            if decoy.status == "degraded" {
+            if decoy.status == "degraded" && !decoy.isVirtualMimic {
                 Button {
                     Task {
-                        try? await appState.sensorClient?.request(.restartDecoy(id: decoy.id))
-                        await appState.refreshDecoys()
+                        do {
+                            guard let client = appState.sensorClient else {
+                                throw SensorClientError.connectionFailed("Sensor is not connected")
+                            }
+                            try await client.request(.restartDecoy(id: decoy.id))
+                            await appState.refreshDecoys()
+                            actionError = nil
+                        } catch {
+                            actionError = "Could not restart \(decoy.name): \(error.localizedDescription)"
+                        }
                     }
                 } label: {
                     Text("Restart")
@@ -154,6 +429,44 @@ struct DecoyStatusView: View {
         }
     }
 
+    private func mimicHostTitle(_ group: DecoyHostGroup) -> String {
+        if let hostname = group.hostname, !hostname.isEmpty {
+            return hostname
+        }
+        return group.services.first?.name ?? "Unnamed fake host"
+    }
+
+    private func beginEditingHostname(_ group: DecoyHostGroup) {
+        hostnameDraft = group.hostname ?? ""
+        editingMimicGroupID = group.id
+        actionError = nil
+    }
+
+    private func saveHostname(for group: DecoyHostGroup) async {
+        guard let client = appState.sensorClient,
+              let representative = group.services.first else {
+            actionError = "Sensor is not connected."
+            return
+        }
+
+        let hostname = hostnameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !hostname.isEmpty else { return }
+
+        isSavingHostname = true
+        defer { isSavingHostname = false }
+
+        do {
+            let _: DecoyHostnameUpdateResponse = try await client.request(
+                .updateDecoyHostname(id: representative.id, hostname: hostname)
+            )
+            editingMimicGroupID = nil
+            actionError = nil
+            await appState.refreshDecoys()
+        } catch {
+            actionError = "Could not update hostname: \(error.localizedDescription)"
+        }
+    }
+
     private var emptyState: some View {
         VStack(spacing: Spacing.md) {
             Spacer()
@@ -180,6 +493,8 @@ private struct DecoyToggle: View {
     @Environment(\.colorScheme) private var colorScheme
     let decoy: DecoySummary
     let appState: AppState
+    var scopeLabel: String?
+    let onError: (String?) -> Void
 
     @State private var isToggling = false
 
@@ -189,7 +504,7 @@ private struct DecoyToggle: View {
 
     var body: some View {
         HStack {
-            Text(isEnabled ? "Enabled" : "Disabled")
+            Text(scopeLabel ?? (isEnabled ? "Enabled" : "Disabled"))
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
             Spacer()
@@ -199,12 +514,23 @@ private struct DecoyToggle: View {
                     guard !isToggling else { return }
                     isToggling = true
                     Task {
-                        if newValue {
-                            try? await appState.sensorClient?.request(.enableDecoy(id: decoy.id))
-                        } else {
-                            try? await appState.sensorClient?.request(.disableDecoy(id: decoy.id))
+                        do {
+                            guard let client = appState.sensorClient else {
+                                throw SensorClientError.connectionFailed("Sensor is not connected")
+                            }
+                            if newValue {
+                                try await client.request(.enableDecoy(id: decoy.id))
+                            } else {
+                                try await client.request(.disableDecoy(id: decoy.id))
+                            }
+                            await appState.refreshDecoys()
+                            onError(nil)
+                        } catch {
+                            let action = newValue ? "enable" : "disable"
+                            onError(
+                                "Could not \(action) \(decoy.name): \(error.localizedDescription)"
+                            )
                         }
-                        await appState.refreshDecoys()
                         isToggling = false
                     }
                 }
@@ -302,7 +628,7 @@ struct DecoyDetailSheet: View {
                     .tint(Theme.accentDefault(colorScheme))
                     .disabled(isSaving)
                 } else {
-                    if detail != nil {
+                    if detail != nil && !decoy.isVirtualMimic {
                         Button("Edit Config") {
                             startEditing()
                         }
@@ -326,13 +652,20 @@ struct DecoyDetailSheet: View {
 
             VStack(spacing: Spacing.sm) {
                 infoRow(label: "Type", value: decoy.decoyType.replacingOccurrences(of: "_", with: " ").capitalized)
-                infoRow(label: "Address", value: "\(decoy.bindAddress):\(String(decoy.port))")
+                infoRow(label: "Scope", value: decoy.deploymentScopeLabel)
+                infoRow(label: "Address", value: decoy.endpointLabel)
                 infoRow(label: "Connections", value: "\(decoy.connectionCount)")
                 infoRow(label: "Cred Trips", value: "\(decoy.credentialTripCount)")
                 if let d = detail {
                     infoRow(label: "Failures", value: "\(d.failureCount)")
-                    infoRow(label: "Created", value: d.createdAt)
-                    infoRow(label: "Updated", value: d.updatedAt)
+                    infoRow(
+                        label: "Created",
+                        value: TimestampPresentation.local(d.createdAt)
+                    )
+                    infoRow(
+                        label: "Updated",
+                        value: TimestampPresentation.local(d.updatedAt)
+                    )
                 }
             }
             .padding(Spacing.md)
@@ -480,7 +813,7 @@ struct DecoyDetailSheet: View {
 
     private func configValueString(_ value: AnyCodableValue) -> String {
         switch value {
-        case .string(let s): return s
+        case .string(let s): return TimestampPresentation.localIfRecognized(s)
         case .int(let i): return "\(i)"
         case .double(let d): return "\(d)"
         case .bool(let b): return b ? "true" : "false"
@@ -615,7 +948,7 @@ struct DecoyDetailSheet: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: Spacing.xs) {
-                Text(conn.timestamp)
+                Text(TimestampPresentation.local(conn.timestamp))
                     .font(Typography.mono)
                     .tracking(Typography.monoTracking)
                     .foregroundStyle(Theme.textSecondary(colorScheme))

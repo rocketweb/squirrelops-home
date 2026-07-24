@@ -116,7 +116,8 @@ def test_verify_application_enforces_designated_requirement(monkeypatch, tmp_pat
 
     monkeypatch.setattr(local_pairing.subprocess, "run", fake_run)
     assert verify_peer_application(123, str(executable), _REQUIREMENT)
-    assert captured[captured.index("-R") + 1] == _REQUIREMENT
+    assert f"-R={_REQUIREMENT}" in captured
+    assert "-R" not in captured
 
 
 class _FakeSock:

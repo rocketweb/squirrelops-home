@@ -41,7 +41,10 @@ private final class ServiceResolver: NSObject, NetServiceDelegate {
                             var addr = sa.sin_addr
                             var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
                             if inet_ntop(AF_INET, &addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil {
-                                host = String(cString: buf)
+                                let bytes = buf.prefix { $0 != 0 }.map {
+                                    UInt8(bitPattern: $0)
+                                }
+                                host = String(decoding: bytes, as: UTF8.self)
                             }
                         }
                         if host != nil { break }

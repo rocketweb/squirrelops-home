@@ -1,7 +1,84 @@
 """Integration tests for decoy routes: list, get, restart, update config, connections."""
 import asyncio
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
+
+import pytest
 
 from tests.integration.conftest import seed_decoys
+
+
+class _FakeDecoyOrchestrator:
+    def __init__(self, db):
+        self.db = db
+
+    async def restart_decoy(self, decoy_id):
+        return await self.enable_decoy(decoy_id)
+
+    async def enable_decoy(self, decoy_id):
+        now = datetime.now(UTC).isoformat()
+        await self.db.execute(
+            """UPDATE decoys SET status = 'active', failure_count = 0,
+               last_failure_at = NULL, updated_at = ? WHERE id = ?""",
+            (now, decoy_id),
+        )
+        await self.db.commit()
+        return True
+
+    async def disable_decoy(self, decoy_id):
+        now = datetime.now(UTC).isoformat()
+        await self.db.execute(
+            "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
+            (now, decoy_id),
+        )
+        await self.db.commit()
+        return True
+
+
+class _FakeMimicOrchestrator:
+    def __init__(self, db):
+        self.db = db
+        self.calls = []
+        self.degraded_ids = set()
+
+    def effective_mimic_status(self, decoy_id, persisted_status):
+        if persisted_status == "active" and decoy_id in self.degraded_ids:
+            return "degraded"
+        return persisted_status
+
+    async def restart_mimic(self, decoy_id):
+        self.calls.append(("restart", decoy_id))
+        return await self.enable_mimic(decoy_id)
+
+    async def enable_mimic(self, decoy_id):
+        self.calls.append(("enable", decoy_id))
+        await self.db.execute(
+            "UPDATE decoys SET status = 'active' WHERE id = ?", (decoy_id,)
+        )
+        await self.db.commit()
+        return True
+
+    async def disable_mimic(self, decoy_id):
+        self.calls.append(("disable", decoy_id))
+        await self.db.execute(
+            "UPDATE decoys SET status = 'stopped' WHERE id = ?", (decoy_id,)
+        )
+        await self.db.commit()
+        return True
+
+
+@pytest.fixture(autouse=True)
+def live_decoy_controls(app, db):
+    from squirrelops_home_sensor.api.routes_decoys import get_decoy_orchestrator
+    from squirrelops_home_sensor.api.routes_scouts import get_mimic_orchestrator
+
+    classic = _FakeDecoyOrchestrator(db)
+    mimic = _FakeMimicOrchestrator(db)
+    app.dependency_overrides[get_decoy_orchestrator] = lambda: classic
+    app.dependency_overrides[get_mimic_orchestrator] = lambda: mimic
+    yield classic, mimic
+    app.dependency_overrides.pop(get_decoy_orchestrator, None)
+    app.dependency_overrides.pop(get_mimic_orchestrator, None)
 
 
 async def seed_decoy_connections(db, decoy_id, count=3):
@@ -46,6 +123,33 @@ class TestListDecoys:
         response = client.get("/decoys")
         data = response.json()
         assert data["items"][0]["status"] == "active"
+
+    def test_list_overlays_unpublished_mimic_as_degraded(
+        self,
+        client,
+        db,
+        live_decoy_controls,
+    ):
+        asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        row = asyncio.get_event_loop().run_until_complete(
+            db.execute("SELECT id FROM decoys ORDER BY id LIMIT 1")
+        )
+        decoy_id = asyncio.get_event_loop().run_until_complete(
+            row.fetchone()
+        )[0]
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                "UPDATE decoys SET decoy_type = 'mimic' WHERE id = ?",
+                (decoy_id,),
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+        live_decoy_controls[1].degraded_ids.add(decoy_id)
+
+        response = client.get("/decoys")
+
+        assert response.status_code == 200
+        assert response.json()["items"][0]["status"] == "degraded"
 
     def test_list_includes_connection_count(self, client, db):
         asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
@@ -129,6 +233,22 @@ class TestRestartDecoy:
         response = client.post("/decoys/9999/restart")
         assert response.status_code == 404
 
+    def test_restart_controls_mimic_runtime(
+        self, client, db, live_decoy_controls,
+    ):
+        ids = asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                "UPDATE decoys SET decoy_type = 'mimic' WHERE id = ?", (ids[0],)
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        response = client.post(f"/decoys/{ids[0]}/restart")
+
+        assert response.status_code == 200
+        assert ("restart", ids[0]) in live_decoy_controls[1].calls
+
 
 class TestEnableDecoy:
     """POST /decoys/{id}/enable -- enable a stopped decoy."""
@@ -178,6 +298,24 @@ class TestEnableDecoy:
         response = client.post("/decoys/9999/enable")
         assert response.status_code == 404
 
+    def test_enable_failure_does_not_fake_active_state(
+        self, client, db, live_decoy_controls,
+    ):
+        ids = asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute("UPDATE decoys SET status = 'stopped' WHERE id = ?", (ids[0],))
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+        live_decoy_controls[0].enable_decoy = AsyncMock(return_value=False)
+
+        response = client.post(f"/decoys/{ids[0]}/enable")
+
+        assert response.status_code == 409
+        cursor = asyncio.get_event_loop().run_until_complete(
+            db.execute("SELECT status FROM decoys WHERE id = ?", (ids[0],))
+        )
+        assert asyncio.get_event_loop().run_until_complete(cursor.fetchone())[0] == "stopped"
+
 
 class TestDisableDecoy:
     """POST /decoys/{id}/disable -- disable an active decoy."""
@@ -207,6 +345,23 @@ class TestDisableDecoy:
     def test_disable_nonexistent_returns_404(self, client, db):
         response = client.post("/decoys/9999/disable")
         assert response.status_code == 404
+
+    def test_disable_controls_mimic_runtime(
+        self, client, db, live_decoy_controls,
+    ):
+        ids = asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                "UPDATE decoys SET decoy_type = 'mimic' WHERE id = ?", (ids[0],)
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        response = client.post(f"/decoys/{ids[0]}/disable")
+
+        assert response.status_code == 200
+        assert ("disable", ids[0]) in live_decoy_controls[1].calls
+        assert response.json()["status"] == "stopped"
 
 
 class TestUpdateDecoyConfig:

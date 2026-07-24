@@ -24,6 +24,14 @@ class ScoutStatusResponse(BaseModel):
     interval_minutes: int
     active_mimics: int
     max_mimics: int
+    fake_host_count: int = 0
+    service_decoy_count: int = 0
+
+
+class ScoutRunResponse(BaseModel):
+    profiles_created: int
+    mimics_deployed: int
+    mimic_deployment_error: str | None = None
 
 
 class ServiceProfileSummary(BaseModel):
@@ -59,6 +67,10 @@ class MimicDecoySummary(BaseModel):
     connection_count: int = 0
     created_at: str
     mdns_hostname: str | None = None
+    host_id: int | None = None
+    hostname: str | None = None
+    protocol: str | None = None
+    service_name: str | None = None
 
 
 # ---------- Dependency stubs ----------
@@ -82,6 +94,7 @@ async def get_mimic_orchestrator():
 async def get_scout_status(
     scheduler=Depends(get_scout_scheduler),
     orchestrator=Depends(get_mimic_orchestrator),
+    db: aiosqlite.Connection = Depends(get_db),
     _auth: dict = Depends(verify_client_cert),
 ):
     """Get scout engine status: last run, next run, profile count."""
@@ -93,36 +106,77 @@ async def get_scout_status(
             interval_minutes=0,
             active_mimics=0,
             max_mimics=0,
+            fake_host_count=0,
+            service_decoy_count=0,
         )
 
+    enabled = scheduler.interval_minutes > 0
     active_mimics = orchestrator.active_count if orchestrator else 0
     max_mimics = orchestrator.max_mimics if orchestrator else 0
+    service_cursor = await db.execute(
+        """SELECT COUNT(*)
+           FROM decoys
+           WHERE decoy_type = 'mimic'
+             AND status = 'active'
+             AND retired_at IS NULL"""
+    )
+    service_row = await service_cursor.fetchone()
+    service_decoy_count = int(service_row[0]) if service_row else 0
+    cursor = await db.execute("SELECT COUNT(*) FROM service_profiles")
+    row = await cursor.fetchone()
+    total_profiles = int(row[0]) if row else 0
 
     return ScoutStatusResponse(
-        enabled=True,
-        is_running=scheduler.is_running,
+        enabled=enabled,
+        is_running=getattr(scheduler, "is_scouting", False),
         last_scout_at=scheduler.last_scout_at.isoformat() if scheduler.last_scout_at else None,
         last_scout_duration_ms=scheduler.last_scout_duration_ms,
-        total_profiles=scheduler.total_profiles,
+        total_profiles=total_profiles,
         interval_minutes=scheduler.interval_minutes,
         active_mimics=active_mimics,
         max_mimics=max_mimics,
+        fake_host_count=active_mimics,
+        service_decoy_count=service_decoy_count,
     )
 
 
-@router.post("/run")
+@router.post("/run", response_model=ScoutRunResponse)
 async def run_scout(
     scheduler=Depends(get_scout_scheduler),
+    orchestrator=Depends(get_mimic_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
-    """Trigger an immediate scout cycle."""
-    if scheduler is None:
+    """Run scouts and immediately fill available mimic capacity."""
+    if scheduler is None or scheduler.interval_minutes <= 0:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Scout engine not enabled",
         )
+    if getattr(scheduler, "is_scouting", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A scout cycle is already running",
+        )
     count = await scheduler.run_now()
-    return {"profiles_created": count}
+
+    deployed = scheduler.last_mimics_deployed
+    deployment_error = scheduler.last_deployment_error
+    if orchestrator is not None and not scheduler.handles_mimic_deployment:
+        from squirrelops_home_sensor.scouts.orchestrator import (
+            HelperUnavailableError,
+            MimicDeploymentError,
+        )
+
+        try:
+            deployed = await orchestrator.evaluate_and_deploy()
+        except (HelperUnavailableError, MimicDeploymentError) as exc:
+            deployment_error = str(exc)
+
+    return ScoutRunResponse(
+        profiles_created=count,
+        mimics_deployed=deployed,
+        mimic_deployment_error=deployment_error,
+    )
 
 
 @router.get("/profiles", response_model=list[ServiceProfileSummary])
@@ -193,19 +247,24 @@ async def get_profile(
 @router.get("/mimics", response_model=list[MimicDecoySummary])
 async def list_mimics(
     db: aiosqlite.Connection = Depends(get_db),
+    orchestrator=Depends(get_mimic_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """List all deployed mimic decoys with virtual IPs."""
     cursor = await db.execute(
         """SELECT d.*,
-                  mt.source_device_id,
+                  COALESCE(dh.source_device_id, mt.source_device_id)
+                      AS source_device_id,
                   mt.device_category,
-                  json_extract(d.config, '$.mdns_hostname') AS mdns_hostname
+                  json_extract(d.config, '$.mdns_hostname') AS mdns_hostname,
+                  dh.hostname AS hostname
            FROM decoys d
+           LEFT JOIN decoy_hosts dh ON dh.id = d.host_id
            LEFT JOIN mimic_templates mt ON mt.id = CAST(
                json_extract(d.config, '$.template_id') AS INTEGER
            )
            WHERE d.decoy_type = 'mimic'
+             AND d.retired_at IS NULL
            ORDER BY d.created_at DESC"""
     )
     rows = await cursor.fetchall()
@@ -215,12 +274,23 @@ async def list_mimics(
             name=row["name"],
             bind_address=row["bind_address"],
             port=row["port"],
-            status=row["status"],
+            status=(
+                orchestrator.effective_mimic_status(
+                    row["id"],
+                    row["status"],
+                )
+                if orchestrator is not None
+                else row["status"]
+            ),
             source_device_id=row["source_device_id"],
             device_category=row["device_category"],
             connection_count=row["connection_count"],
             created_at=row["created_at"],
             mdns_hostname=row["mdns_hostname"],
+            host_id=row["host_id"],
+            hostname=row["hostname"],
+            protocol=row["protocol"],
+            service_name=row["service_name"],
         )
         for row in rows
     ]
@@ -232,7 +302,11 @@ async def deploy_mimics(
     _auth: dict = Depends(verify_client_cert),
 ):
     """Manually trigger evaluate_and_deploy."""
-    from squirrelops_home_sensor.scouts.orchestrator import HelperUnavailableError
+    from squirrelops_home_sensor.scouts.orchestrator import (
+        HelperUnavailableError,
+        MimicCleanupError,
+        MimicDeploymentError,
+    )
 
     if orchestrator is None:
         raise HTTPException(
@@ -244,6 +318,11 @@ async def deploy_mimics(
     except HelperUnavailableError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    except (MimicCleanupError, MimicDeploymentError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         )
     return {"deployed": count}
@@ -274,12 +353,20 @@ async def remove_mimic(
     _auth: dict = Depends(verify_client_cert),
 ):
     """Stop and remove a mimic decoy, releasing its virtual IP."""
+    from squirrelops_home_sensor.scouts.orchestrator import MimicCleanupError
+
     if orchestrator is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Mimic orchestrator not enabled",
         )
-    ok = await orchestrator.remove_mimic(decoy_id)
+    try:
+        ok = await orchestrator.remove_mimic(decoy_id)
+    except MimicCleanupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
     if not ok:
         raise HTTPException(status_code=404, detail="Mimic decoy not found")
     return {"removed": True}

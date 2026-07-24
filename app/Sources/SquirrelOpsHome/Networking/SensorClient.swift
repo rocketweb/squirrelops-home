@@ -4,20 +4,43 @@ import Security
 // MARK: - Errors
 
 public enum SensorClientError: Error, Sendable, Equatable {
-    case badResponse(statusCode: Int)
+    case badResponse(statusCode: Int, detail: String? = nil)
     case decodingFailed
     case connectionFailed(String)
 
     public static func == (lhs: SensorClientError, rhs: SensorClientError) -> Bool {
         switch (lhs, rhs) {
-        case (.badResponse(let a), .badResponse(let b)):
-            return a == b
+        case (.badResponse(let a, let ad), .badResponse(let b, let bd)):
+            return a == b && ad == bd
         case (.decodingFailed, .decodingFailed):
             return true
         case (.connectionFailed(let a), .connectionFailed(let b)):
             return a == b
         default:
             return false
+        }
+    }
+
+    public var httpStatusCode: Int? {
+        if case .badResponse(let statusCode, _) = self {
+            return statusCode
+        }
+        return nil
+    }
+}
+
+extension SensorClientError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .badResponse(let statusCode, let detail):
+            if let detail, !detail.isEmpty {
+                return detail
+            }
+            return "Sensor returned HTTP \(statusCode)"
+        case .decodingFailed:
+            return "Sensor returned an unexpected response"
+        case .connectionFailed(let message):
+            return message
         }
     }
 }
@@ -84,7 +107,10 @@ public final class SensorClient: Sendable {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw SensorClientError.badResponse(statusCode: httpResponse.statusCode)
+            throw Self.serverError(
+                statusCode: httpResponse.statusCode,
+                data: data
+            )
         }
 
         do {
@@ -98,9 +124,10 @@ public final class SensorClient: Sendable {
     public func request(_ endpoint: Endpoint) async throws {
         let urlRequest = endpoint.urlRequest(baseURL: baseURL)
 
+        let data: Data
         let response: URLResponse
         do {
-            (_, response) = try await session.data(for: urlRequest)
+            (data, response) = try await session.data(for: urlRequest)
         } catch {
             throw SensorClientError.connectionFailed(error.localizedDescription)
         }
@@ -110,7 +137,26 @@ public final class SensorClient: Sendable {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw SensorClientError.badResponse(statusCode: httpResponse.statusCode)
+            throw Self.serverError(
+                statusCode: httpResponse.statusCode,
+                data: data
+            )
         }
+    }
+
+    private static func serverError(
+        statusCode: Int,
+        data: Data
+    ) -> SensorClientError {
+        let detail: String?
+        if let object = try? JSONSerialization.jsonObject(with: data),
+           let dictionary = object as? [String: Any],
+           let message = dictionary["detail"] as? String {
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            detail = trimmed.isEmpty ? nil : String(trimmed.prefix(512))
+        } else {
+            detail = nil
+        }
+        return .badResponse(statusCode: statusCode, detail: detail)
     }
 }

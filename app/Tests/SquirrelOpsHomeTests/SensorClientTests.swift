@@ -140,7 +140,7 @@ struct SensorClientTests {
             let _: HealthResponse = try await client.request(.health)
             Issue.record("Expected SensorClientError.badResponse")
         } catch let error as SensorClientError {
-            if case .badResponse(let statusCode) = error {
+            if case .badResponse(let statusCode, _) = error {
                 #expect(statusCode == 401)
             } else {
                 Issue.record("Expected badResponse, got \(error)")
@@ -160,15 +160,20 @@ struct SensorClientTests {
                 httpVersion: "HTTP/1.1",
                 headerFields: nil
             )!
-            return (response, Data())
+            return (
+                response,
+                Data(#"{"detail":"Privileged helper is unavailable"}"#.utf8)
+            )
         }
 
         do {
             let _: HealthResponse = try await client.request(.health)
             Issue.record("Expected SensorClientError.badResponse")
         } catch let error as SensorClientError {
-            if case .badResponse(let statusCode) = error {
+            if case .badResponse(let statusCode, let detail) = error {
                 #expect(statusCode == 500)
+                #expect(detail == "Privileged helper is unavailable")
+                #expect(error.localizedDescription == "Privileged helper is unavailable")
             } else {
                 Issue.record("Expected badResponse, got \(error)")
             }
@@ -269,15 +274,19 @@ struct SensorClientTests {
                 httpVersion: "HTTP/1.1",
                 headerFields: nil
             )!
-            return (response, Data())
+            return (
+                response,
+                Data(#"{"detail":"Decoy could not be enabled"}"#.utf8)
+            )
         }
 
         do {
             try await client.request(.readAlert(id: 1))
             Issue.record("Expected SensorClientError.badResponse")
         } catch let error as SensorClientError {
-            if case .badResponse(let statusCode) = error {
+            if case .badResponse(let statusCode, let detail) = error {
                 #expect(statusCode == 403)
+                #expect(detail == "Decoy could not be enabled")
             } else {
                 Issue.record("Expected badResponse, got \(error)")
             }

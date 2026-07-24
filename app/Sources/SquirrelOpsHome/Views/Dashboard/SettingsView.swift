@@ -17,6 +17,9 @@ struct SettingsView: View {
     let appState: AppState
 
     @State private var selectedProfile: String = "standard"
+    @State private var profileDetails: ResourceProfileResponse?
+    @State private var isUpdatingProfile = false
+    @State private var profileSaveMessage: String?
     @State private var pushEnabled = true
     @State private var menuBarEnabled = true
     @State private var slackEnabled = false
@@ -52,6 +55,14 @@ struct SettingsView: View {
                 Text("Settings")
                     .font(Typography.h2)
                     .foregroundStyle(Theme.textPrimary(colorScheme))
+
+                if let saveError {
+                    settingsNotice(
+                        saveError,
+                        icon: "exclamationmark.triangle.fill",
+                        color: Theme.statusError(colorScheme)
+                    )
+                }
 
                 appearanceSection
                 profileSection
@@ -95,14 +106,22 @@ struct SettingsView: View {
                 Text("Full").tag("full")
             }
             .pickerStyle(.segmented)
+            .disabled(isLoading || isUpdatingProfile)
             .onChange(of: selectedProfile) { _, newValue in
-                guard !isLoading else { return }
+                guard !isLoading, !isUpdatingProfile else { return }
+                isUpdatingProfile = true
                 Task {
-                    try? await appState.sensorClient?.request(.updateProfile(profile: newValue))
+                    await updateProfile(newValue)
                 }
             }
 
             profileDescription
+
+            if let profileSaveMessage {
+                Label(profileSaveMessage, systemImage: "checkmark.circle.fill")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.statusSuccess(colorScheme))
+            }
         }
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
@@ -111,21 +130,22 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var profileDescription: some View {
-        switch selectedProfile {
-        case "lite":
-            Text("Scan every 15 min. Up to 3 decoys. Local signature DB only.")
+        if isUpdatingProfile {
+            HStack(spacing: Spacing.sm) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Applying \(selectedProfile.capitalized) profile...")
+            }
+            .font(Typography.bodySmall)
+            .foregroundStyle(Theme.textSecondary(colorScheme))
+        } else if let profileDetails, profileDetails.profile == selectedProfile {
+            Text(profileDetails.userSummary)
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
-        case "standard":
-            Text("Scan every 5 min. Up to 8 decoys. Cloud LLM classification.")
+        } else {
+            Text("Loading profile limits...")
                 .font(Typography.bodySmall)
-                .foregroundStyle(Theme.textSecondary(colorScheme))
-        case "full":
-            Text("Scan every 1 min. 16+ decoys. Local LLM classification.")
-                .font(Typography.bodySmall)
-                .foregroundStyle(Theme.textSecondary(colorScheme))
-        default:
-            EmptyView()
+                .foregroundStyle(Theme.textTertiary(colorScheme))
         }
     }
 
@@ -196,7 +216,7 @@ struct SettingsView: View {
                 }
 
             if slackEnabled {
-                TextField("Webhook URL", text: $slackWebhookURL)
+                SecureField("Webhook URL", text: $slackWebhookURL)
                     .textFieldStyle(.roundedBorder)
                     .font(Typography.mono)
                     .task(id: slackWebhookURL) {
@@ -247,11 +267,6 @@ struct SettingsView: View {
                 }
             }
 
-            if let saveError {
-                Text(saveError)
-                    .font(Typography.bodySmall)
-                    .foregroundStyle(Theme.statusError(colorScheme))
-            }
         }
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
@@ -669,6 +684,20 @@ struct SettingsView: View {
         }
     }
 
+    private func settingsNotice(_ message: String, icon: String, color: Color) -> some View {
+        Label(message, systemImage: icon)
+            .font(Typography.bodySmall)
+            .foregroundStyle(color)
+            .padding(Spacing.s12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.backgroundSecondary(colorScheme))
+            .overlay(
+                RoundedRectangle(cornerRadius: Spacing.radiusMd)
+                    .stroke(color.opacity(0.35), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusMd))
+    }
+
     private func severityPicker(label: String, selection: Binding<String>, method: String, enabled: Bool, extraConfig: [String: AnyCodableValue] = [:]) -> some View {
         VStack(alignment: .leading, spacing: Spacing.xs) {
             Text("Minimum Severity")
@@ -698,17 +727,32 @@ struct SettingsView: View {
     }
 
     private func loadConfig() async {
+        guard let client = appState.sensorClient else {
+            saveError = "Sensor is not connected."
+            isLoading = false
+            return
+        }
+
         // Refresh sensor info (version, uptime) each time settings is opened
-        if let client = appState.sensorClient {
-            if let health: HealthResponse = try? await client.request(.health) {
-                appState.sensorInfo = health
-            }
+        if let health: HealthResponse = try? await client.request(.health) {
+            appState.sensorInfo = HealthResponse(
+                version: appState.sensorInfo?.version,
+                sensorId: health.sensorId,
+                uptimeSeconds: health.uptimeSeconds
+            )
+        }
+        try? await appState.refreshSystemStatus()
+
+        if let profile: ResourceProfileResponse = try? await client.request(.profile) {
+            profileDetails = profile
+            selectedProfile = profile.profile
+            appState.applyResourceProfile(profile)
         }
 
         do {
-            let config: [String: AnyCodableValue] = try await appState.sensorClient!.request(.config)
+            let config: [String: AnyCodableValue] = try await client.request(.config)
 
-            if case .string(let profile) = config["profile"] {
+            if profileDetails == nil, case .string(let profile) = config["profile"] {
                 selectedProfile = profile
             }
 
@@ -798,6 +842,35 @@ struct SettingsView: View {
             saveError = "Failed to load settings: \(error.localizedDescription)"
         }
         isLoading = false
+    }
+
+    private func updateProfile(_ newValue: String) async {
+        saveError = nil
+        profileSaveMessage = nil
+        let previousProfile = profileDetails?.profile ?? appState.systemStatus?.profile ?? "standard"
+
+        guard let client = appState.sensorClient else {
+            selectedProfile = previousProfile
+            saveError = "Sensor is not connected."
+            isUpdatingProfile = false
+            return
+        }
+
+        do {
+            let updated: ResourceProfileResponse = try await client.request(
+                .updateProfile(profile: newValue)
+            )
+            profileDetails = updated
+            selectedProfile = updated.profile
+            appState.applyResourceProfile(updated)
+            try? await appState.refreshSystemStatus()
+            await appState.refreshDecoys()
+            profileSaveMessage = "\(updated.profile.capitalized) profile is active."
+        } catch {
+            selectedProfile = previousProfile
+            saveError = "Failed to change resource profile: \(error.localizedDescription)"
+        }
+        isUpdatingProfile = false
     }
 
     private func saveHAConfig() {

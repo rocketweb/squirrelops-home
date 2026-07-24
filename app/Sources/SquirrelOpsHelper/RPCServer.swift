@@ -89,8 +89,13 @@ final class RPCRouter: Sendable {
         do {
             let result = try handler(request.params)
             return rpcSuccessResponse(id: request.id, result: result)
+        } catch let rpcError as RPCError {
+            return rpcErrorResponse(id: request.id, error: rpcError)
         } catch {
-            return rpcErrorResponse(id: request.id, error: .internalError(error.localizedDescription))
+            return rpcErrorResponse(
+                id: request.id,
+                error: .internalError(error.localizedDescription)
+            )
         }
     }
 }

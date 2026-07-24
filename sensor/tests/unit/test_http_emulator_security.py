@@ -40,3 +40,27 @@ def test_transfer_encoding_is_rejected() -> None:
         connection.close()
     finally:
         emulator.stop()
+
+
+def test_emulator_rebinds_immediately_after_restart() -> None:
+    """Fast package upgrades must not strand decoys behind a TIME_WAIT socket."""
+    routes = [{"path": "/", "method": "GET", "status": 200, "body": "ok"}]
+    first = Emulator(routes=routes)
+    first.start()
+    port = first.port
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        connection.request("GET", "/")
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+        connection.close()
+    finally:
+        first.stop()
+
+    replacement = Emulator(port=port, routes=routes)
+    try:
+        replacement.start()
+        assert replacement.is_alive()
+    finally:
+        replacement.stop()

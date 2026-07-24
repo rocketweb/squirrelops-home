@@ -13,13 +13,10 @@ network:
   learning_duration_hours: 48
 
 decoys:
-  max_decoys: 8
+  max_decoys: 3
   health_check_interval: 1800
   restart_max_attempts: 3
   restart_window_seconds: 300
-  dns_canaries:
-    enabled: false
-    domain: "canary.local"
 
 alerts:
   retention_days: 90
@@ -61,9 +58,9 @@ profiles:
     llm_mode: "none"
   standard:
     scan_interval: 300
-    max_decoys: 8
+    max_decoys: 3
     llm_mode: "cloud"
   full:
     scan_interval: 60
-    max_decoys: 16
+    max_decoys: 3
     llm_mode: "local"

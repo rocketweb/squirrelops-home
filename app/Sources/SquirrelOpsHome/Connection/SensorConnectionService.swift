@@ -122,24 +122,10 @@ public final class SensorConnectionService: @unchecked Sendable {
         // Sync initial data
         state = .syncing
         await syncStateAsync()
+        let status: StatusResponse
         do {
-            let status: StatusResponse = try await sensorClient.request(.status)
-            let learning: LearningStatusResponse = try await sensorClient.request(.learning)
-            let allDevices = try await fetchAllPages { [sensorClient] (offset: Int) -> PaginatedDevices in
-                try await sensorClient.request(.devices(limit: 50, offset: offset))
-            }
-            let allAlerts = try await fetchAllPages { [sensorClient] (offset: Int) -> PaginatedAlerts in
-                try await sensorClient.request(.alerts(limit: 50, offset: offset))
-            }
-            let decoys: DecoyListResponse = try await sensorClient.request(.decoys)
-            await MainActor.run {
-                appState?.applySyncData(
-                    sensorInfo: health, status: status,
-                    devices: allDevices, alerts: allAlerts, decoys: decoys
-                )
-                appState?.updateLearningStatus(learning)
-            }
-        } catch let error as SensorClientError where error == .badResponse(statusCode: 403) {
+            status = try await sensorClient.request(.status)
+        } catch let error as SensorClientError where error.httpStatusCode == 403 {
             // Sensor is reachable but rejected our credentials — pairing is broken.
             // Don't schedule reconnect; user must re-pair.
             state = .authFailed
@@ -154,11 +140,72 @@ public final class SensorConnectionService: @unchecked Sendable {
             return
         }
 
+        // Apply authenticated version/status immediately. Bulk collections are
+        // independent and must not keep Sensor Version blank (or disconnect the
+        // app) when a large alert history is slow or one endpoint is degraded.
+        let profile = await optionalRequest(
+            .profile,
+            as: ResourceProfileResponse.self
+        )
+        await MainActor.run {
+            appState?.sensorInfo = HealthResponse(
+                version: status.version ?? health.version,
+                sensorId: health.sensorId,
+                uptimeSeconds: health.uptimeSeconds
+            )
+            appState?.updateSystemStatus(status)
+            if let profile {
+                appState?.applyResourceProfile(profile)
+            }
+        }
+
+        let learning = await optionalRequest(
+            .learning,
+            as: LearningStatusResponse.self
+        )
+        let decoys = await optionalRequest(
+            .decoys,
+            as: DecoyListResponse.self
+        )
+        let allDevices: [DeviceSummary]? = try? await fetchAllPages {
+            [sensorClient] (offset: Int) -> PaginatedDevices in
+            try await sensorClient.request(.devices(limit: 50, offset: offset))
+        }
+        // The status count communicates complete history. Load a bounded recent
+        // page for the dashboard instead of blocking initial sync on thousands
+        // of old alerts; export and clear operations still cover every row.
+        let recentAlerts = await optionalRequest(
+            .alerts(limit: 200, offset: 0),
+            as: PaginatedAlerts.self
+        )
+        await MainActor.run {
+            if let decoys {
+                appState?.decoys = decoys.items
+            }
+            if let allDevices {
+                appState?.devices = AppState.visibleDevices(
+                    allDevices,
+                    decoys: appState?.decoys ?? []
+                )
+            }
+            if let recentAlerts {
+                appState?.alerts = recentAlerts.items
+            }
+            if let learning {
+                appState?.updateLearningStatus(learning)
+            }
+        }
+
         // WebSocket setup
         do {
             webSocketManager.connect()
             try await webSocketManager.sendAuth(certFingerprint: certFingerprint, token: nil)
-            try await webSocketManager.requestReplay(sinceSeq: webSocketManager.lastSeq)
+            // A fresh app process has no in-memory WebSocket cursor. The
+            // authenticated REST status response supplies a server high-water
+            // mark captured before the collection snapshot, so replay covers
+            // only concurrent changes instead of the complete event history.
+            let replayCursor = status.eventSeq ?? webSocketManager.lastSeq
+            try await webSocketManager.requestReplay(sinceSeq: replayCursor)
         } catch {
             state = .disconnected
             lastError = "WebSocket setup failed: \(error.localizedDescription)"
@@ -252,6 +299,23 @@ public final class SensorConnectionService: @unchecked Sendable {
     }
 
     // MARK: - Pagination
+
+    /// Best-effort collection fetch that still asks the generic client for the
+    /// concrete wire model. Writing ``try? request`` directly into an optional
+    /// local lets Swift infer ``T == Optional<Model>``, which strict clients
+    /// cannot decode and which caused profile/learning/decoy state to vanish
+    /// during an otherwise successful sync.
+    private func optionalRequest<T: Decodable>(
+        _ endpoint: Endpoint,
+        as type: T.Type
+    ) async -> T? {
+        do {
+            let value: T = try await sensorClient.request(endpoint)
+            return value
+        } catch {
+            return nil
+        }
+    }
 
     private func fetchAllPages<P: PaginatedResponse>(
         fetch: @Sendable (Int) async throws -> P

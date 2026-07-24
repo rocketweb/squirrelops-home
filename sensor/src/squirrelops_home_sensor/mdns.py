@@ -48,8 +48,9 @@ def _is_lan_ip(addr: str) -> bool:
 def _collect_interface_ips() -> list[str]:
     """Collect all IPv4 addresses from network interfaces using OS tools.
 
-    Uses ``ifconfig`` on macOS and ``ip -4 addr`` on Linux.  Returns a list
-    of IPv4 address strings (excluding loopback).
+    Uses ``ifconfig`` on macOS and ``ip -4 addr`` on Linux. Returns physical
+    interface addresses only. Host-route virtual IPs owned by ``lo0`` must
+    never become the advertised sensor API address.
     """
     import re
 
@@ -62,6 +63,15 @@ def _collect_interface_ips() -> list[str]:
                 text=True,
                 timeout=5,
             )
+            current_interface: str | None = None
+            for line in result.stdout.splitlines():
+                if line and not line[0].isspace() and ":" in line:
+                    current_interface = line.split(":", 1)[0]
+                if current_interface == "lo0":
+                    continue
+                match = re.search(r"\binet (\d+\.\d+\.\d+\.\d+)", line)
+                if match and not match.group(1).startswith("127."):
+                    ips.append(match.group(1))
         else:
             result = subprocess.run(
                 ["ip", "-4", "-o", "addr", "show"],
@@ -69,24 +79,38 @@ def _collect_interface_ips() -> list[str]:
                 text=True,
                 timeout=5,
             )
-
-        for addr in re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", result.stdout):
-            if not addr.startswith("127."):
-                ips.append(addr)
+            for line in result.stdout.splitlines():
+                match = re.search(
+                    r"^\d+:\s+(\S+)\s+inet\s+(\d+\.\d+\.\d+\.\d+)",
+                    line,
+                )
+                if not match:
+                    continue
+                interface = match.group(1).split("@", 1)[0]
+                address = match.group(2)
+                if interface != "lo" and not address.startswith("127."):
+                    ips.append(address)
     except Exception:
         pass
 
     return ips
 
 
-def _get_local_ip() -> str:
+def _get_local_ip(preferred_ip: str | None = None) -> str:
     """Pick the best local IP for mDNS advertisement.
+
+    A route-selected RFC 1918 address supplied by the sensor runtime wins.
+    This is the address the API actually uses to reach the LAN and cannot be a
+    loopback-owned mimic address. Interface enumeration remains as a fallback.
 
     Enumerates all network interfaces and prefers standard private LAN
     addresses (``10.x``, ``172.16-31.x``, ``192.168.x``) over VPN/CGNAT
     addresses (Tailscale ``100.x``).  Falls back to the UDP-to-8.8.8.8
     trick, then ``127.0.0.1``.
     """
+    if preferred_ip and _is_lan_ip(preferred_ip):
+        return preferred_ip
+
     lan_ips: list[str] = []
     other_private_ips: list[str] = []
 
@@ -160,15 +184,22 @@ class ServiceAdvertiser:
 
     service_type = "_squirrelops._tcp.local."
 
-    def __init__(self, name: str, port: int) -> None:
+    def __init__(
+        self,
+        name: str,
+        port: int,
+        *,
+        preferred_ip: str | None = None,
+    ) -> None:
         self.name = name
         self.port = port
+        self.preferred_ip = preferred_ip
         self._zeroconf: AsyncZeroconf | None = None
         self._info: ServiceInfo | None = None
 
     async def start(self) -> None:
         """Register the service on the local network."""
-        ip = _get_local_ip()
+        ip = _get_local_ip(self.preferred_ip)
         server = _get_mdns_hostname()
         self._info = ServiceInfo(
             type_=self.service_type,

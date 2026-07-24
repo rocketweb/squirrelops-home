@@ -21,6 +21,14 @@ public struct DeviceUpdateRequest: Encodable, Sendable {
     }
 }
 
+public struct DecoyHostnameUpdateRequest: Encodable, Sendable {
+    public let hostname: String
+
+    public init(hostname: String) {
+        self.hostname = hostname
+    }
+}
+
 // MARK: - Endpoint
 
 public enum Endpoint: Sendable {
@@ -52,6 +60,7 @@ public enum Endpoint: Sendable {
     case alert(id: Int)
     case readAlert(id: Int)
     case actionAlert(id: Int, note: String?)
+    case clearAlertHistory
     case incident(id: Int)
     case readIncident(id: Int)
     case exportAlerts(dateFrom: String? = nil, dateTo: String? = nil)
@@ -60,6 +69,7 @@ public enum Endpoint: Sendable {
     case decoys
     case decoy(id: Int)
     case restartDecoy(id: Int)
+    case updateDecoyHostname(id: Int, hostname: String)
     case updateDecoyConfig(id: Int, config: [String: AnyCodableValue])
     case decoyCredentials(id: Int)
     case decoyConnections(id: Int, limit: Int = 50, offset: Int = 0)
@@ -125,7 +135,7 @@ public enum Endpoint: Sendable {
             return "/ports/network"
         case .probePorts:
             return "/ports/probe"
-        case .alerts:
+        case .alerts, .clearAlertHistory:
             return "/alerts"
         case .alert(let id):
             return "/alerts/\(id)"
@@ -145,6 +155,8 @@ public enum Endpoint: Sendable {
             return "/decoys/\(id)"
         case .restartDecoy(let id):
             return "/decoys/\(id)/restart"
+        case .updateDecoyHostname(let id, _):
+            return "/decoys/\(id)/hostname"
         case .updateDecoyConfig(let id, _):
             return "/decoys/\(id)/config"
         case .decoyCredentials(let id):
@@ -208,10 +220,10 @@ public enum Endpoint: Sendable {
             return "POST"
         case .updateProfile, .updateDevice, .readAlert, .actionAlert,
              .readIncident,
-             .updateDecoyConfig,
+             .updateDecoyHostname, .updateDecoyConfig,
              .updateConfig, .updateAlertMethods:
             return "PUT"
-        case .unpair, .removeMimic:
+        case .unpair, .removeMimic, .clearAlertHistory:
             return "DELETE"
         }
     }
@@ -225,6 +237,10 @@ public enum Endpoint: Sendable {
             return try? encoder.encode(body)
         case .actionAlert(_, let note):
             return try? encoder.encode(["note": note])
+        case .clearAlertHistory:
+            return try? encoder.encode(["confirmation": "DELETE ALL ALERTS"])
+        case .updateDecoyHostname(_, let hostname):
+            return try? encoder.encode(DecoyHostnameUpdateRequest(hostname: hostname))
         case .updateDecoyConfig(_, let config):
             return try? encoder.encode(config)
         case .updateConfig(let body):
@@ -277,6 +293,17 @@ public enum Endpoint: Sendable {
         }
     }
 
+    public var timeoutInterval: TimeInterval {
+        switch self {
+        case .runScout, .deployMimics:
+            return 600
+        case .clearAlertHistory:
+            return 300
+        default:
+            return 60
+        }
+    }
+
     public func urlRequest(baseURL: URL) -> URLRequest {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         components.queryItems = queryItems
@@ -284,6 +311,7 @@ public enum Endpoint: Sendable {
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
         request.httpBody = body
+        request.timeoutInterval = timeoutInterval
 
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

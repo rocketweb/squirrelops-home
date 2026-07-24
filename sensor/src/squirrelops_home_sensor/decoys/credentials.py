@@ -1,9 +1,9 @@
 """Credential generator for decoy services.
 
 Generates 7 types of realistic credentials planted across decoy services.
-Credentials with DNS-detectable usage (AWS keys, GitHub PATs, HA tokens)
-receive canary hostnames. All credential values are guaranteed unique
-within a generator instance.
+The generator retains optional DNS-hostname fields for legacy data and focused
+unit tests, but current product factories always leave them disabled. All
+credential values are guaranteed unique within a generator instance.
 """
 
 from __future__ import annotations
@@ -86,8 +86,8 @@ class CredentialGenerator:
     password_filename:
         Filename used as ``planted_location`` for password-type credentials.
     canary_enabled:
-        When ``True``, DNS canary hostnames are embedded in credentials that
-        support them (AWS keys, GitHub PATs, HA tokens).  Default ``False``.
+        Legacy/internal option for generating DNS hostname metadata. Current
+        product factories do not enable it.
     canary_domain:
         The domain suffix used when generating canary hostnames.
         Default ``"canary.local"``.  Only relevant when *canary_enabled* is

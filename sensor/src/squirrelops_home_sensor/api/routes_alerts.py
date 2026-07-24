@@ -2,13 +2,20 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from squirrelops_home_sensor.api.deps import get_db, verify_client_cert
+from squirrelops_home_sensor.alerts.history import clear_alert_history
+from squirrelops_home_sensor.api.deps import (
+    get_config,
+    get_db,
+    get_event_bus,
+    verify_client_cert,
+)
 
 router = APIRouter(tags=["alerts"])
 
@@ -93,6 +100,18 @@ class ExportResponse(BaseModel):
     alerts: list[AlertDetail]
     incidents: list[IncidentDetail] = []
     exported_at: str
+
+
+class ClearAlertHistoryRequest(BaseModel):
+    confirmation: Literal["DELETE ALL ALERTS"]
+
+
+class ClearAlertHistoryResponse(BaseModel):
+    alerts_deleted: int
+    incidents_deleted: int
+    replay_events_deleted: int
+    backup_file: str
+    cleared_at: str
 
 
 # ---------- Helpers ----------
@@ -256,6 +275,44 @@ async def list_alerts(
         )
 
     return PaginatedAlerts(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.delete("/alerts", response_model=ClearAlertHistoryResponse)
+async def delete_alert_history(
+    body: ClearAlertHistoryRequest,
+    db: aiosqlite.Connection = Depends(get_db),
+    config: dict = Depends(get_config),
+    event_bus=Depends(get_event_bus),
+    _auth: dict = Depends(verify_client_cert),
+):
+    """Back up and permanently remove all alert and incident history."""
+    data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
+    # Serialize the clear marker against alert/incident publication. Producers
+    # that committed before the clear are then suppressed if their row no
+    # longer exists; producers committed after it receive a higher event seq.
+    async with event_bus.serialized():
+        result = await clear_alert_history(
+            db,
+            backup_dir=data_dir / "backups",
+        )
+        await event_bus.broadcast_persisted(
+            seq=result.event_seq,
+            event_type="alerts.history_cleared",
+            payload={
+                "alerts_deleted": result.alerts_deleted,
+                "incidents_deleted": result.incidents_deleted,
+                "replay_events_deleted": result.replay_events_deleted,
+                "backup_file": result.backup_file,
+                "cleared_at": result.cleared_at,
+            },
+        )
+    return ClearAlertHistoryResponse(
+        alerts_deleted=result.alerts_deleted,
+        incidents_deleted=result.incidents_deleted,
+        replay_events_deleted=result.replay_events_deleted,
+        backup_file=result.backup_file,
+        cleared_at=result.cleared_at,
+    )
 
 
 @router.get("/alerts/export", response_model=ExportResponse)

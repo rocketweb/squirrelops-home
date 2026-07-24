@@ -9,9 +9,9 @@
 #   bash scripts/build-pkg.sh
 #
 # Environment variables:
-#   SQUIRRELOPS_VERSION   Override version (default: read from VERSION file)
-#   BUILD_ARCH            Architecture: "arm64", "x86_64", or "universal"
-#                         (default: current arch — set "universal" in CI)
+#   SQUIRRELOPS_VERSION   Optional assertion; must match the VERSION file
+#   BUILD_ARCH            Architecture: "arm64" or "x86_64"
+#                         (default: current architecture)
 #   SIGNING_IDENTITY      App signing identity (default: "Developer ID Application")
 #   INSTALLER_IDENTITY    Installer signing identity (default: "Developer ID Installer")
 #   APPLE_ID              Apple ID for notarization (optional)
@@ -19,6 +19,9 @@
 #   APPLE_APP_PASSWORD    App-specific password for notarization (optional)
 #   SKIP_PKG_SIGNING      Set to "1" to skip installer signing for local builds
 #   PRODUCTSIGN_TIMESTAMP Set to "none" to disable trusted timestamping
+#   SQUIRRELOPS_RELEASE_BUILD
+#                         Set to "1" in release automation to require signing,
+#                         notarization, stapling, and Gatekeeper acceptance
 #
 set -euo pipefail
 
@@ -47,14 +50,85 @@ error() { echo -e "${RED}[x]${NC} $*" >&2; exit 1; }
 step()  { echo ""; echo -e "${BOLD}=== $* ===${NC}"; }
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration and release invariants
 # ---------------------------------------------------------------------------
-VERSION="${SQUIRRELOPS_VERSION:-$(cat "$REPO_ROOT/VERSION")}"
+VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-Developer ID Application}"
 INSTALLER_IDENTITY="${INSTALLER_IDENTITY:-Developer ID Installer}"
 SKIP_PKG_SIGNING="${SKIP_PKG_SIGNING:-0}"
 PRODUCTSIGN_TIMESTAMP="${PRODUCTSIGN_TIMESTAMP:-}"
+RELEASE_BUILD="${SQUIRRELOPS_RELEASE_BUILD:-0}"
+
+case "$RELEASE_BUILD" in
+    0|1) ;;
+    *) error "SQUIRRELOPS_RELEASE_BUILD must be 0 or 1." ;;
+esac
+
+if [ "$RELEASE_BUILD" = "1" ]; then
+    if [ "$SKIP_PKG_SIGNING" = "1" ]; then
+        error "Release builds cannot set SKIP_PKG_SIGNING=1."
+    fi
+    if [ "$PRODUCTSIGN_TIMESTAMP" = "none" ]; then
+        error "Release builds require trusted timestamping."
+    fi
+    if [ -z "${APPLE_ID:-}" ] \
+        || [ -z "${APPLE_TEAM_ID:-}" ] \
+        || [ -z "${APPLE_APP_PASSWORD:-}" ]; then
+        error "Release builds require notarization credentials (APPLE_ID, APPLE_TEAM_ID, and APPLE_APP_PASSWORD)."
+    fi
+fi
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    error "VERSION must contain a semantic version (for example, 1.2.3)."
+fi
+if [ -n "${SQUIRRELOPS_VERSION:-}" ] \
+    && [ "$SQUIRRELOPS_VERSION" != "$VERSION" ]; then
+    error "SQUIRRELOPS_VERSION does not match authoritative VERSION ($VERSION)."
+fi
+
+PYPROJECT_VERSION=$(
+    /usr/bin/awk -F'"' '/^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' \
+        "$REPO_ROOT/sensor/pyproject.toml"
+)
+INSTALL_SCRIPT_VERSION=$(
+    /usr/bin/awk -F'"' '/^SQUIRRELOPS_VERSION="[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' \
+        "$REPO_ROOT/scripts/install.sh"
+)
+if [ "$PYPROJECT_VERSION" != "$VERSION" ]; then
+    error "sensor/pyproject.toml version ($PYPROJECT_VERSION) does not match VERSION ($VERSION)."
+fi
+if [ "$INSTALL_SCRIPT_VERSION" != "$VERSION" ]; then
+    error "scripts/install.sh version ($INSTALL_SCRIPT_VERSION) does not match VERSION ($VERSION)."
+fi
+
+case "$BUILD_ARCH" in
+    arm64|x86_64) ;;
+    universal)
+        error "Universal packages are unsupported because the embedded Python runtime is architecture-specific. Build one package per architecture."
+        ;;
+    *)
+        error "Unsupported package architecture: $BUILD_ARCH"
+        ;;
+esac
+
+validate_macho_arch() {
+    local binary="$1"
+    local expected_arch="$2"
+    local actual_arches
+    if [ ! -x "$binary" ]; then
+        error "Required executable is missing or unusable: $binary"
+    fi
+    if ! actual_arches=$(/usr/bin/lipo -archs "$binary" 2>/dev/null); then
+        error "Could not inspect Mach-O architectures for $binary"
+    fi
+    case " $actual_arches " in
+        *" $expected_arch "*) ;;
+        *)
+            error "$binary does not contain required architecture $expected_arch (found: $actual_arches)."
+            ;;
+    esac
+}
 
 BUILD_DIR="$REPO_ROOT/build/pkg"
 APP_ROOT="$BUILD_DIR/app-root"
@@ -101,6 +175,11 @@ if [ ! -d "$APP_BUNDLE" ]; then
     error "App bundle not found at $APP_BUNDLE"
 fi
 
+APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/SquirrelOpsHome"
+HELPER_PATH="$APP_BUNDLE/Contents/Library/LaunchServices/com.squirrelops.helper"
+validate_macho_arch "$APP_EXECUTABLE" "$BUILD_ARCH"
+validate_macho_arch "$HELPER_PATH" "$BUILD_ARCH"
+
 info "App built: $APP_BUNDLE"
 
 # ===========================================================================
@@ -110,32 +189,54 @@ step "Step 2: Sign App"
 
 info "Running code signing script..."
 bash "$SCRIPT_DIR/sign-app.sh" "$APP_BUNDLE" "$SIGNING_IDENTITY"
+if [ "$RELEASE_BUILD" = "1" ]; then
+    codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+    info "Release app signature verified."
+fi
 
 # ===========================================================================
-# Step 3: Build sensor venv
+# Step 3: Build standalone sensor runtime
 # ===========================================================================
-step "Step 3: Build Sensor Venv"
+step "Step 3: Build Standalone Sensor Runtime"
 
 SENSOR_BUILD_DIR="$BUILD_DIR/sensor-build"
-info "Building sensor venv..."
-bash "$SCRIPT_DIR/build-sensor-venv.sh" "$SENSOR_BUILD_DIR"
+info "Building pinned standalone sensor runtime..."
+PYTHON_BUILD_MODE=standalone bash "$SCRIPT_DIR/build-sensor-venv.sh" "$SENSOR_BUILD_DIR"
 
 # ===========================================================================
 # Step 3b: Sign sensor Python native binaries
 # ===========================================================================
 step "Step 3b: Sign Sensor Python Binaries"
 
-# Determine which Python environment was built (venv or standalone)
-SENSOR_PYTHON_MODE=$(cat "$SENSOR_BUILD_DIR/.python-mode" 2>/dev/null || echo "venv")
+# A distributable package must never inherit the build host's Python runtime.
+SENSOR_PYTHON_MODE=$(cat "$SENSOR_BUILD_DIR/.python-mode" 2>/dev/null || true)
+if [ "$SENSOR_PYTHON_MODE" != "standalone" ]; then
+    error "Sensor package builder did not produce the required standalone Python runtime."
+fi
 info "Sensor Python mode: $SENSOR_PYTHON_MODE"
 
-if [ "$SENSOR_PYTHON_MODE" = "standalone" ]; then
-    SENSOR_PYTHON_DIR="$SENSOR_BUILD_DIR/python"
-else
-    SENSOR_PYTHON_DIR="$SENSOR_BUILD_DIR/venv"
+SENSOR_PYTHON_DIR="$SENSOR_BUILD_DIR/python"
+SENSOR_PYTHON_BIN="$SENSOR_PYTHON_DIR/bin/python3"
+SENSOR_REQUIREMENTS_LOCK="$SENSOR_BUILD_DIR/requirements.lock"
+SENSOR_BUILD_REQUIREMENTS_LOCK="$SENSOR_BUILD_DIR/build-requirements.lock"
+validate_macho_arch "$SENSOR_PYTHON_BIN" "$BUILD_ARCH"
+if [ ! -s "$SENSOR_REQUIREMENTS_LOCK" ]; then
+    error "Sensor package builder did not produce requirements.lock."
+fi
+if [ ! -s "$SENSOR_BUILD_REQUIREMENTS_LOCK" ]; then
+    error "Sensor package builder did not produce build-requirements.lock."
 fi
 
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDENTITY"; then
+BUILT_SENSOR_VERSION=$(
+    PYTHONDONTWRITEBYTECODE=1 "$SENSOR_PYTHON_BIN" -c \
+        'from importlib.metadata import version; print(version("squirrelops-home-sensor"))'
+)
+if [ "$BUILT_SENSOR_VERSION" != "$VERSION" ]; then
+    error "Embedded sensor reports $BUILT_SENSOR_VERSION, expected $VERSION."
+fi
+
+if security find-identity -v -p codesigning 2>/dev/null \
+    | grep -Fq -- "$SIGNING_IDENTITY"; then
     # Find all Mach-O binaries: .so, .dylib, and the Python interpreter
     MACHO_FILES=()
     while IFS= read -r -d '' f; do
@@ -151,7 +252,7 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
         MACHO_FILES+=("$PYTHON_BIN")
     elif [ "$SENSOR_PYTHON_MODE" = "standalone" ]; then
         # Follow symlinks to find the real binary
-        REAL_PYTHON="$(readlink -f "$PYTHON_BIN" 2>/dev/null || "$PYTHON_BIN" -c "import os,sys; print(os.path.realpath(sys.executable))" 2>/dev/null || true)"
+        REAL_PYTHON="$(readlink -f "$PYTHON_BIN" 2>/dev/null || PYTHONDONTWRITEBYTECODE=1 "$PYTHON_BIN" -c "import os,sys; print(os.path.realpath(sys.executable))" 2>/dev/null || true)"
         if [ -n "$REAL_PYTHON" ] && [ -f "$REAL_PYTHON" ] && [[ "$REAL_PYTHON" == "$SENSOR_PYTHON_DIR"* ]]; then
             MACHO_FILES+=("$REAL_PYTHON")
         else
@@ -166,10 +267,11 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
     SIGN_FAIL=0
     for macho in "${MACHO_FILES[@]}"; do
         if codesign --force \
-            --options runtime \
-            --sign "$SIGNING_IDENTITY" \
-            --timestamp \
-            "$macho" 2>/dev/null; then
+                --options runtime \
+                --sign "$SIGNING_IDENTITY" \
+                --timestamp \
+                "$macho" 2>/dev/null \
+            && codesign --verify --strict --verbose=2 "$macho" 2>/dev/null; then
             :
         else
             warn "Failed to sign: $(basename "$macho")"
@@ -179,10 +281,15 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGNING_IDEN
 
     if [ "$SIGN_FAIL" -eq 0 ]; then
         info "All sensor Python binaries signed successfully."
+    elif [ "$RELEASE_BUILD" = "1" ]; then
+        error "Release builds require every sensor Mach-O binary to be signed and verified; $SIGN_FAIL failed."
     else
         warn "$SIGN_FAIL binaries failed to sign (notarization may fail)."
     fi
 else
+    if [ "$RELEASE_BUILD" = "1" ]; then
+        error "Release builds require an available app signing identity: $SIGNING_IDENTITY"
+    fi
     warn "Signing identity '$SIGNING_IDENTITY' not found."
     warn "Skipping sensor Python binary signing."
 fi
@@ -195,25 +302,34 @@ step "Step 4: Assemble Payload"
 # App payload: goes to /Applications
 info "Assembling app payload..."
 mkdir -p "$APP_ROOT/Applications"
-cp -R "$APP_BUNDLE" "$APP_ROOT/Applications/SquirrelOps Home.app"
+STAGED_APP_BUNDLE="$APP_ROOT/Applications/SquirrelOps Home.app"
+cp -R "$APP_BUNDLE" "$STAGED_APP_BUNDLE"
+if [ "$RELEASE_BUILD" = "1" ]; then
+    codesign --verify --deep --strict --verbose=2 "$STAGED_APP_BUNDLE"
+fi
+if LC_ALL=C /usr/bin/grep -aFRl "$REPO_ROOT" "$APP_ROOT" >/dev/null; then
+    error "Staged app payload still contains the build-host repository path."
+fi
 
 # Sensor payload: goes to /Library/SquirrelOps/sensor
 SENSOR_INSTALL="$SENSOR_ROOT/Library/SquirrelOps/sensor"
 mkdir -p "$SENSOR_INSTALL"
 
-info "Copying sensor Python environment ($SENSOR_PYTHON_MODE)..."
-if [ "$SENSOR_PYTHON_MODE" = "standalone" ]; then
-    cp -R "$SENSOR_BUILD_DIR/python" "$SENSOR_INSTALL/python"
-else
-    cp -R "$SENSOR_BUILD_DIR/venv" "$SENSOR_INSTALL/venv"
-fi
+info "Copying standalone sensor Python environment..."
+cp -R "$SENSOR_BUILD_DIR/python" "$SENSOR_INSTALL/python"
 
 # Write the mode marker into the install payload so postinstall knows which
 # Python path to use in the LaunchDaemon plist.
 echo "$SENSOR_PYTHON_MODE" > "$SENSOR_INSTALL/.python-mode"
+printf '%s\n' "$VERSION" > "$SENSOR_INSTALL/VERSION"
 
 info "Copying launchd plist template..."
 cp "$SENSOR_BUILD_DIR/com.squirrelops.sensor.plist" "$SENSOR_INSTALL/"
+
+info "Copying locked dependency manifest..."
+cp "$SENSOR_REQUIREMENTS_LOCK" "$SENSOR_INSTALL/requirements.lock"
+cp "$SENSOR_BUILD_REQUIREMENTS_LOCK" \
+    "$SENSOR_INSTALL/build-requirements.lock"
 
 info "Copying device signatures..."
 mkdir -p "$SENSOR_INSTALL/signatures"
@@ -222,6 +338,10 @@ cp "$REPO_ROOT/sensor/signatures/device_signatures.json" "$SENSOR_INSTALL/signat
 info "Copying uninstall script..."
 cp "$SCRIPT_DIR/pkg/uninstall.sh" "$SENSOR_INSTALL/uninstall.sh"
 chmod +x "$SENSOR_INSTALL/uninstall.sh"
+
+info "Validating staged sensor payload contains no build-host paths..."
+bash "$SCRIPT_DIR/sanitize-python-runtime.sh" validate \
+    "$SENSOR_INSTALL" "$REPO_ROOT" "$BUILD_DIR"
 
 # ===========================================================================
 # Step 5: Build component packages
@@ -275,6 +395,7 @@ sed \
     -e "s|__VERSION__|${VERSION}|g" \
     -e "s|__APP_SIZE__|${APP_SIZE}|g" \
     -e "s|__SENSOR_SIZE__|${SENSOR_SIZE}|g" \
+    -e "s|__HOST_ARCH__|${BUILD_ARCH}|g" \
     "$SCRIPT_DIR/pkg/distribution.xml" > "$DIST_XML"
 
 info "Building product archive: $PKG_NAME"
@@ -291,8 +412,12 @@ info "Product archive created: $OUTPUT_DIR/$PKG_NAME"
 step "Step 7: Sign Installer Package"
 
 if [ "$SKIP_PKG_SIGNING" = "1" ]; then
+    if [ "$RELEASE_BUILD" = "1" ]; then
+        error "Release builds cannot set SKIP_PKG_SIGNING=1."
+    fi
     warn "SKIP_PKG_SIGNING=1; skipping .pkg signing."
-elif security find-identity -v -p basic 2>/dev/null | grep -q "$INSTALLER_IDENTITY"; then
+elif security find-identity -v -p basic 2>/dev/null \
+    | grep -Fq -- "$INSTALLER_IDENTITY"; then
     info "Signing .pkg with '$INSTALLER_IDENTITY'..."
     UNSIGNED_PKG="$OUTPUT_DIR/$PKG_NAME"
     SIGNED_PKG="$OUTPUT_DIR/${PKG_NAME%.pkg}-signed.pkg"
@@ -311,8 +436,12 @@ elif security find-identity -v -p basic 2>/dev/null | grep -q "$INSTALLER_IDENTI
 
     # Replace unsigned with signed
     mv "$SIGNED_PKG" "$UNSIGNED_PKG"
+    pkgutil --check-signature "$UNSIGNED_PKG"
     info "Installer package signed."
 else
+    if [ "$RELEASE_BUILD" = "1" ]; then
+        error "Release builds require an available installer signing identity: $INSTALLER_IDENTITY"
+    fi
     warn "Installer signing identity '$INSTALLER_IDENTITY' not found."
     warn "Skipping .pkg signing (expected for local dev builds)."
 fi
@@ -324,23 +453,32 @@ step "Step 8: Notarize"
 
 if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_PASSWORD:-}" ]; then
     info "Submitting for notarization (15 minute timeout)..."
-    NOTARY_OUTPUT="/tmp/notarytool-output.txt"
-    xcrun notarytool submit \
-        "$OUTPUT_DIR/$PKG_NAME" \
-        --apple-id "$APPLE_ID" \
-        --team-id "$APPLE_TEAM_ID" \
-        --password "$APPLE_APP_PASSWORD" \
-        --wait --timeout 15m 2>&1 | tee "$NOTARY_OUTPUT" || true
+    NOTARY_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/squirrelops-notary.XXXXXX")"
+    cleanup_notary_output() {
+        rm -f "$NOTARY_OUTPUT"
+    }
+    trap cleanup_notary_output EXIT
+
+    NOTARY_SUBMIT_SUCCEEDED=0
+    if xcrun notarytool submit \
+            "$OUTPUT_DIR/$PKG_NAME" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait --timeout 15m 2>&1 | tee "$NOTARY_OUTPUT"; then
+        NOTARY_SUBMIT_SUCCEEDED=1
+    fi
 
     # Check if notarization was accepted
-    if grep -q "status: Accepted" "$NOTARY_OUTPUT"; then
+    if [ "$NOTARY_SUBMIT_SUCCEEDED" = "1" ] \
+        && grep -Fq "status: Accepted" "$NOTARY_OUTPUT"; then
         info "Notarization accepted. Stapling ticket..."
         xcrun stapler staple "$OUTPUT_DIR/$PKG_NAME"
+        xcrun stapler validate "$OUTPUT_DIR/$PKG_NAME"
         info "Notarization complete."
     else
         warn "Notarization was not accepted (likely 'Invalid')."
         warn "The .pkg is signed but not notarized."
-        warn "Users may need to right-click → Open on first launch."
         # Try to extract submission ID and fetch log for debugging
         SUBMISSION_ID=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$NOTARY_OUTPUT" | head -1 || true)
         if [ -n "$SUBMISSION_ID" ]; then
@@ -350,16 +488,41 @@ if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ] && [ -n "${APPLE_APP_PA
                 --team-id "$APPLE_TEAM_ID" \
                 --password "$APPLE_APP_PASSWORD" 2>&1 || true
         fi
+        if [ "$RELEASE_BUILD" = "1" ]; then
+            error "Release notarization was not accepted; refusing to publish the installer."
+        fi
+        warn "Local build will continue without notarization."
     fi
+
+    rm -f "$NOTARY_OUTPUT"
+    trap - EXIT
 else
+    if [ "$RELEASE_BUILD" = "1" ]; then
+        error "Release builds require notarization credentials (APPLE_ID, APPLE_TEAM_ID, and APPLE_APP_PASSWORD)."
+    fi
     warn "Notarization credentials not set (APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD)."
     warn "Skipping notarization."
 fi
 
 # ===========================================================================
-# Step 9: Generate checksum
+# Step 9: Verify release artifact
 # ===========================================================================
-step "Step 9: Checksum"
+step "Step 9: Verify Release Artifact"
+
+if [ "$RELEASE_BUILD" = "1" ]; then
+    codesign --verify --deep --strict --verbose=2 "$STAGED_APP_BUNDLE"
+    pkgutil --check-signature "$OUTPUT_DIR/$PKG_NAME"
+    xcrun stapler validate "$OUTPUT_DIR/$PKG_NAME"
+    spctl --assess --type install --verbose=2 "$OUTPUT_DIR/$PKG_NAME"
+    info "Release signature, notarization ticket, and Gatekeeper checks passed."
+else
+    info "Local build mode; strict release verification was not requested."
+fi
+
+# ===========================================================================
+# Step 10: Generate checksum
+# ===========================================================================
+step "Step 10: Checksum"
 
 CHECKSUM_FILE="$OUTPUT_DIR/${PKG_NAME}.sha256"
 (cd "$OUTPUT_DIR" && shasum -a 256 "$PKG_NAME" > "$CHECKSUM_FILE")

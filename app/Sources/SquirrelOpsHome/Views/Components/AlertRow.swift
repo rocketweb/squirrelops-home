@@ -74,7 +74,7 @@ struct AlertRow: View {
             Spacer()
 
             // Timestamp
-            Text(alert.createdAt)
+            Text(TimestampPresentation.local(alert.createdAt))
                 .font(Typography.mono)
                 .tracking(Typography.monoTracking)
                 .foregroundStyle(Theme.textTertiary(colorScheme))

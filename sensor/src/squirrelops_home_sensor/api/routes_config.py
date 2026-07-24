@@ -112,6 +112,17 @@ async def update_config(
     Top-level keys are merged; nested dicts are replaced entirely.
     Changes are persisted to data_dir/config.yaml for restart survival.
     """
+    decoy_update = body.get("decoys")
+    if isinstance(decoy_update, dict) and "dns_canaries" in decoy_update:
+        logger.warning("Rejected unsupported DNS-canary configuration update")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                "DNS canaries are not supported in this release; "
+                "no DNS canary hostnames are planted or monitored."
+            ),
+        )
+
     rejected = [k for k in body if k not in ALLOWED_CONFIG_KEYS]
     if rejected:
         logger.warning("Config update rejected unknown keys: %s", rejected)

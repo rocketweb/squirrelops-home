@@ -8,7 +8,7 @@ observations, and event logging.
 from __future__ import annotations
 
 # Current schema version -- increment when adding migrations
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # All table names managed by this schema (does NOT include Pingting's tables)
 _TABLE_NAMES: list[str] = [
@@ -18,6 +18,7 @@ _TABLE_NAMES: list[str] = [
     "device_trust",
     "incidents",
     "home_alerts",
+    "decoy_hosts",
     "decoys",
     "planted_credentials",
     "decoy_connections",
@@ -171,6 +172,8 @@ CREATE TABLE IF NOT EXISTS decoys (
     credential_trip_count INTEGER NOT NULL DEFAULT 0,
     failure_count INTEGER NOT NULL DEFAULT 0,
     last_failure_at TEXT,
+    retired_at TEXT,
+    retirement_reason TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

@@ -13,6 +13,12 @@ final class MockSensorClient: SensorClientProtocol, @unchecked Sendable {
         lock.withLock { _requestedEndpoints }
     }
 
+    private var _statusEventSeq = 0
+    var statusEventSeq: Int {
+        get { lock.withLock { _statusEventSeq } }
+        set { lock.withLock { _statusEventSeq = newValue } }
+    }
+
     private var _shouldFail = false
     var shouldFail: Bool {
         get { lock.withLock { _shouldFail } }
@@ -36,12 +42,35 @@ final class MockSensorClient: SensorClientProtocol, @unchecked Sendable {
         }
 
         if T.self == HealthResponse.self {
-            return HealthResponse(version: "0.1.0", sensorId: "test-sensor", uptimeSeconds: 100.0) as! T
+            return HealthResponse(sensorId: "test-sensor", uptimeSeconds: 100.0) as! T
         }
         if T.self == StatusResponse.self {
-            return StatusResponse(
-                profile: "standard", learningMode: false,
-                deviceCount: 5, decoyCount: 2, alertCount: 3
+            let eventSeq = statusEventSeq
+            let data = Data(
+                """
+                {
+                  "version": "1.1.4",
+                  "profile": "standard",
+                  "learning_mode": false,
+                  "device_count": 5,
+                  "decoy_count": 2,
+                  "alert_count": 3,
+                  "event_seq": \(eventSeq)
+                }
+                """.utf8
+            )
+            return try JSONDecoder().decode(StatusResponse.self, from: data) as! T
+        }
+        if T.self == ResourceProfileResponse.self {
+            return ResourceProfileResponse(
+                profile: "standard",
+                scanIntervalSeconds: 300,
+                maxDecoys: 8,
+                llmClassification: "cloud_llm",
+                scoutIntervalMinutes: 60,
+                maxMimicDecoys: 10,
+                maxVirtualIPs: 10,
+                totalDecoyCapacity: 18
             ) as! T
         }
         if T.self == PaginatedDevices.self {
@@ -84,6 +113,9 @@ final class MockWSManager: WebSocketManagerProtocol, @unchecked Sendable {
     private var _replaySent = false
     var replaySent: Bool { lock.withLock { _replaySent } }
 
+    private var _requestedReplaySeq: Int?
+    var requestedReplaySeq: Int? { lock.withLock { _requestedReplaySeq } }
+
     var framesToDeliver: [WSFrame] = []
 
     func connect() { lock.withLock { _isConnected = true } }
@@ -94,14 +126,18 @@ final class MockWSManager: WebSocketManagerProtocol, @unchecked Sendable {
     }
 
     func requestReplay(sinceSeq: Int) async throws {
-        lock.withLock { _replaySent = true }
+        lock.withLock {
+            _replaySent = true
+            _requestedReplaySeq = sinceSeq
+        }
     }
 
     func receiveMessages() -> AsyncStream<WSFrame> {
         let frames = framesToDeliver
         return AsyncStream { continuation in
             for frame in frames { continuation.yield(frame) }
-            continuation.finish()
+            // A live WebSocket remains open after replay completes. Individual
+            // tests disconnect the service, which cancels the consumer task.
         }
     }
 }
@@ -133,6 +169,7 @@ struct ConnectionServiceTests {
             webSocketManager: wsManager,
             onEvent: { _ in }
         )
+        defer { service.disconnect() }
 
         await service.connect(
             baseURL: URL(string: "https://192.168.1.50:8443")!,
@@ -142,11 +179,33 @@ struct ConnectionServiceTests {
         #expect(service.state == .live)
         #expect(client.requestedEndpoints.contains("/system/health"))
         #expect(client.requestedEndpoints.contains("/system/status"))
+        #expect(client.requestedEndpoints.contains("/system/profile"))
         #expect(client.requestedEndpoints.contains("/devices"))
         #expect(client.requestedEndpoints.contains("/alerts"))
         #expect(client.requestedEndpoints.contains("/decoys"))
         #expect(wsManager.authSent == true)
         #expect(wsManager.replaySent == true)
+    }
+
+    @Test("Initial REST snapshot replays only events after its server cursor")
+    func initialSnapshotUsesServerEventCursor() async {
+        let client = MockSensorClient()
+        client.statusEventSeq = 9_876
+        let wsManager = MockWSManager()
+        wsManager.framesToDeliver = [.replayComplete(lastSeq: 9_876)]
+        let service = SensorConnectionService(
+            sensorClient: client,
+            webSocketManager: wsManager,
+            onEvent: { _ in }
+        )
+        defer { service.disconnect() }
+
+        await service.connect(
+            baseURL: URL(string: "https://192.168.1.50:8443")!,
+            certFingerprint: "sha256:test"
+        )
+
+        #expect(wsManager.requestedReplaySeq == 9_876)
     }
 
     @Test("Failed health check sets state to disconnected with error")
@@ -263,6 +322,7 @@ struct ConnectionServiceTests {
             appState: appState,
             onEvent: { _ in }
         )
+        defer { service.disconnect() }
 
         await service.connect(
             baseURL: URL(string: "https://192.168.1.50:8443")!,
@@ -270,8 +330,40 @@ struct ConnectionServiceTests {
         )
 
         #expect(appState.sensorInfo != nil)
+        #expect(appState.sensorInfo?.version == "1.1.4")
         #expect(appState.systemStatus != nil)
+        #expect(appState.resourceProfile?.totalDecoyCapacity == 18)
         #expect(appState.connectionState == .live)
+    }
+
+    @Test("Alert collection failure does not hide version or disconnect")
+    @MainActor
+    func alertCollectionFailureKeepsAuthenticatedStatus() async {
+        let client = MockSensorClient()
+        client.setError(
+            .connectionFailed("history is slow"),
+            for: "/alerts"
+        )
+        let wsManager = MockWSManager()
+        wsManager.framesToDeliver = [.replayComplete(lastSeq: 0)]
+        let appState = AppState()
+        let service = SensorConnectionService(
+            sensorClient: client,
+            webSocketManager: wsManager,
+            appState: appState,
+            onEvent: { _ in }
+        )
+        defer { service.disconnect() }
+
+        await service.connect(
+            baseURL: URL(string: "https://192.168.1.50:8443")!,
+            certFingerprint: "sha256:test"
+        )
+
+        #expect(service.state == .live)
+        #expect(appState.sensorInfo?.version == "1.1.4")
+        #expect(appState.systemStatus?.deviceCount == 5)
+        #expect(appState.alerts.isEmpty)
     }
 
     @Test("Disconnect updates AppState connectionState")
@@ -338,6 +430,7 @@ struct ConnectionServiceTests {
             webSocketManager: wsManager,
             onEvent: { _ in }
         )
+        defer { service.disconnect() }
 
         await service.connect(
             baseURL: URL(string: "https://192.168.1.50:8443")!,
@@ -361,6 +454,7 @@ struct ConnectionServiceTests {
             appState: appState,
             onEvent: { _ in }
         )
+        defer { service.disconnect() }
 
         await service.connect(
             baseURL: URL(string: "https://192.168.1.50:8443")!,

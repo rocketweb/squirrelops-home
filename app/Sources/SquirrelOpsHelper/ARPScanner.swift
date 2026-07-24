@@ -11,19 +11,7 @@ enum ARPScanner {
     /// - Parameter subnet: CIDR string (e.g., "192.168.1.0/24")
     /// - Returns: Array of dictionaries with ip and mac keys.
     static func scan(subnet: String) throws -> [[String: String]] {
-        // Validate the CIDR before proceeding
-        let _ = try parseCIDR(subnet)
-
-        // Create raw socket for ARP
-        let sock = socket(AF_INET, SOCK_DGRAM, 0)
-        guard sock >= 0 else {
-            throw RPCError.internalError("Failed to create socket: \(String(cString: strerror(errno)))")
-        }
-        defer { close(sock) }
-
-        // For each IP, send ARP request and collect responses
-        // In practice, we use a broadcast ARP request via BPF or similar
-        // For simplicity, we delegate to the `arp` command-line tool
+        _ = try parseCIDR(subnet)
         return try arpViaCLI(subnet: subnet)
     }
 
@@ -31,34 +19,58 @@ enum ARPScanner {
     /// Sends a ping sweep first to populate the ARP cache, then reads it.
     static func arpViaCLI(subnet: String) throws -> [[String: String]] {
         // Ping sweep to populate ARP table
-        let (_, prefixLen) = try parseCIDR(subnet)
-        let ips = generateIPs(network: try parseCIDR(subnet).0, prefixLen: prefixLen)
+        let (network, prefixLen) = try parseCIDR(subnet)
+        let ips = generateIPs(network: network, prefixLen: prefixLen)
 
-        // Ping each IP with 1 packet, 100ms timeout (async via Process)
-        for ip in ips.prefix(254) { // Cap at /24
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/sbin/ping")
-            process.arguments = ["-c", "1", "-W", "100", ip]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            try? process.run()
-            // Don't wait — fire and forget
+        // Keep a bounded number of child processes and reap every one. The old
+        // implementation launched 254 fire-and-forget pings per allocation,
+        // which could exhaust process resources when a full profile deployed
+        // many mimics in sequence.
+        for batchStart in stride(from: 0, to: ips.count, by: 32) {
+            let batchEnd = min(batchStart + 32, ips.count)
+            var processes: [Process] = []
+            for ip in ips[batchStart..<batchEnd] {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/sbin/ping")
+                process.arguments = ["-n", "-c", "1", "-W", "100", ip]
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                do {
+                    try process.run()
+                    processes.append(process)
+                } catch {
+                    // One failed probe does not invalidate the ARP table read;
+                    // an entirely empty result still fails closed in Python.
+                    continue
+                }
+            }
+            for process in processes {
+                process.waitUntilExit()
+            }
         }
-
-        // Wait briefly for responses
-        Thread.sleep(forTimeInterval: 2.0)
 
         // Read ARP table
         let arpProcess = Process()
         arpProcess.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
         arpProcess.arguments = ["-an"]
-        let pipe = Pipe()
-        arpProcess.standardOutput = pipe
-        arpProcess.standardError = FileHandle.nullDevice
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        arpProcess.standardOutput = stdoutPipe
+        arpProcess.standardError = stderrPipe
         try arpProcess.run()
         arpProcess.waitUntilExit()
 
-        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard arpProcess.terminationStatus == 0 else {
+            let stderr = String(
+                data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8
+            ) ?? ""
+            throw RPCError.internalError("arp table read failed: \(stderr)")
+        }
+        let output = String(
+            data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
         return parseARPTable(output, subnet: subnet)
     }
 
@@ -71,10 +83,10 @@ enum ARPScanner {
             throw RPCError.internalError("Invalid CIDR: \(cidr)")
         }
 
-        let octets = parts[0].split(separator: ".").compactMap { UInt32($0) }
-        guard octets.count == 4, octets.allSatisfy({ $0 <= 255 }) else {
+        guard isValidIPv4(String(parts[0])) else {
             throw RPCError.internalError("Invalid IP in CIDR: \(cidr)")
         }
+        let octets = parts[0].split(separator: ".").compactMap { UInt32($0) }
 
         let network = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]
         return (network, prefixLen)

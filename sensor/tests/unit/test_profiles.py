@@ -68,15 +68,19 @@ class TestProfileSettings:
         settings = PROFILE_SETTINGS[ResourceProfile.STANDARD]
         assert isinstance(settings, ProfileSettings)
         assert settings.scan_interval == 300
-        assert settings.max_decoys == 8
+        assert settings.max_decoys == 3
         assert settings.llm_mode == LLMMode.CLOUD_LLM
 
     def test_full_settings(self) -> None:
         settings = PROFILE_SETTINGS[ResourceProfile.FULL]
         assert isinstance(settings, ProfileSettings)
         assert settings.scan_interval == 60
-        assert settings.max_decoys == 16
+        assert settings.max_decoys == 3
         assert settings.llm_mode == LLMMode.LOCAL_LLM
+        assert settings.scout_interval_minutes == 30
+        assert settings.max_mimic_decoys == 30
+        assert settings.max_virtual_ips == 30
+        assert settings.total_decoy_capacity == 33
 
     def test_all_profiles_have_settings(self) -> None:
         for profile in ResourceProfile:
@@ -161,14 +165,17 @@ class TestGetProfileLimits:
     def test_standard_limits(self) -> None:
         limits = get_profile_limits(ResourceProfile.STANDARD)
         assert limits["scan_interval"] == 300
-        assert limits["max_decoys"] == 8
+        assert limits["max_decoys"] == 3
         assert limits["llm_mode"] == "cloud_llm"
 
     def test_full_limits(self) -> None:
         limits = get_profile_limits(ResourceProfile.FULL)
         assert limits["scan_interval"] == 60
-        assert limits["max_decoys"] == 16
+        assert limits["max_decoys"] == 3
         assert limits["llm_mode"] == "local_llm"
+        assert limits["max_mimic_decoys"] == 30
+        assert limits["max_virtual_ips"] == 30
+        assert limits["total_decoy_capacity"] == 33
 
 
 class TestApplyProfile:
@@ -183,7 +190,7 @@ class TestApplyProfile:
     def test_applies_max_decoys(self) -> None:
         config: dict[str, object] = {}
         result = apply_profile(config, ResourceProfile.STANDARD)
-        assert result["max_decoys"] == 8
+        assert result["max_decoys"] == 3
 
     def test_applies_llm_mode(self) -> None:
         config: dict[str, object] = {}
@@ -210,9 +217,10 @@ class TestApplyProfile:
 
         config = apply_profile(config, ResourceProfile.FULL)
         assert config["scan_interval"] == 60
-        assert config["max_decoys"] == 16
+        assert config["max_decoys"] == 3
         assert config["llm_mode"] == "local_llm"
         assert config["profile"] == "full"
+        assert config["max_mimic_decoys"] == 30
 
     def test_switching_from_full_to_lite_reduces_limits(self) -> None:
         config: dict[str, object] = {}

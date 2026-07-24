@@ -9,12 +9,45 @@ permissions:
   contents: read
 
 jobs:
+  verify-release-version:
+    name: Verify release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Require all release versions to match VERSION
+        id: version
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          EXPECTED_TAG="v${VERSION}"
+          PYPROJECT_VERSION="$(awk -F'"' '/^version = / { print $2; exit }' sensor/pyproject.toml)"
+          INSTALL_VERSION="$(awk -F'"' '/^SQUIRRELOPS_VERSION=/ { print $2; exit }' scripts/install.sh)"
+
+          [ "$GITHUB_REF_NAME" = "$EXPECTED_TAG" ] || {
+            echo "Tag $GITHUB_REF_NAME does not match VERSION $VERSION" >&2
+            exit 1
+          }
+          [ "$PYPROJECT_VERSION" = "$VERSION" ] || {
+            echo "sensor/pyproject.toml version $PYPROJECT_VERSION does not match $VERSION" >&2
+            exit 1
+          }
+          [ "$INSTALL_VERSION" = "$VERSION" ] || {
+            echo "scripts/install.sh version $INSTALL_VERSION does not match $VERSION" >&2
+            exit 1
+          }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   # ---------------------------------------------------------------------------
   # Job 1: Build & push multi-arch Docker image to GHCR
   # ---------------------------------------------------------------------------
   build-docker:
     name: Build & Push Docker Image
     runs-on: ubuntu-latest
+    needs: verify-release-version
     permissions:
       contents: read
       packages: write
@@ -55,7 +88,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ needs.verify-release-version.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -65,17 +98,30 @@ jobs:
   build-macos-pkg:
     name: Build macOS .pkg
     runs-on: macos-15
+    needs: verify-release-version
     permissions:
       contents: read
     env:
-      HAS_CERTS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+      SQUIRRELOPS_RELEASE_BUILD: "1"
+      HAS_CERTS: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+      HAS_NOTARY_CREDENTIALS: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
 
+      - name: Require release signing and notarization credentials
+        run: |
+          if [ "$HAS_CERTS" != "true" ]; then
+            echo "Signing certificate secrets are required for release builds." >&2
+            exit 1
+          fi
+          if [ "$HAS_NOTARY_CREDENTIALS" != "true" ]; then
+            echo "Notarization secrets are required for release builds." >&2
+            exit 1
+          fi
+
       - name: Import signing certificates
-        if: ${{ env.HAS_CERTS == 'true' }}
         env:
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -119,17 +165,30 @@ jobs:
         with:
           enable-cache: false
 
-      - name: Strip version prefix
-        id: version
-        run: echo "clean=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Build .pkg
         env:
-          SQUIRRELOPS_VERSION: ${{ steps.version.outputs.clean }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: bash scripts/build-pkg.sh
+
+      - name: Verify signed and notarized installer
+        run: |
+          shopt -s nullglob
+          PKG_FILES=(build/pkg/output/SquirrelOpsHome-*.pkg)
+          if [ "${#PKG_FILES[@]}" -ne 1 ]; then
+            echo "Expected exactly one release package; found ${#PKG_FILES[@]}." >&2
+            exit 1
+          fi
+
+          BUILD_ARCH="$(uname -m)"
+          APP_PATH="app/.build/${BUILD_ARCH}-apple-macosx/release/SquirrelOpsHome.app"
+          PKG_PATH="${PKG_FILES[0]}"
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          pkgutil --check-signature "$PKG_PATH"
+          xcrun stapler validate "$PKG_PATH"
+          spctl --assess --type install --verbose=2 "$PKG_PATH"
 
       - name: Upload .pkg artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -144,6 +203,7 @@ jobs:
   publish-sensor-wheel:
     name: Publish Sensor Wheel to PyPI
     runs-on: ubuntu-latest
+    needs: verify-release-version
     permissions:
       contents: read
     continue-on-error: true
@@ -161,11 +221,6 @@ jobs:
 
       - name: Install build tooling
         run: pip install build
-
-      - name: Set version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version = .*/version = \"${VERSION}\"/" sensor/pyproject.toml
 
       - name: Build wheel
         run: python -m build sensor/
@@ -187,7 +242,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-docker, build-macos-pkg]
+    needs: [verify-release-version, build-docker, build-macos-pkg]
     permissions:
       contents: write
     steps:
@@ -210,14 +265,19 @@ jobs:
           cp scripts/install.sh scripts/install-macos.sh release-assets/
           (cd release-assets && shasum -a 256 install.sh > install.sh.sha256)
           (cd release-assets && shasum -a 256 install-macos.sh > install-macos.sh.sha256)
-          cat > release-body.md << 'RELEASE_EOF'
+          : > release-body.md
+          if [ -f "docs/releases/${VERSION}.md" ]; then
+            cat "docs/releases/${VERSION}.md" >> release-body.md
+            printf '\n' >> release-body.md
+          fi
+          cat >> release-body.md << 'RELEASE_EOF'
           ## Install
 
           ### macOS (recommended)
 
           **[Download SquirrelOpsHome-VERSION.pkg](PLACEHOLDER)** - open the installer and follow the prompts.
 
-          The notarized installer sets up everything - the app and the network sensor - in one step. No terminal required.
+          The signed and notarized installer is verified by macOS Gatekeeper before publication. It sets up the app and network sensor in one step. No terminal required.
 
           After installing, open **SquirrelOps Home** from your Applications folder and follow the on-screen pairing flow.
 
@@ -278,19 +338,29 @@ jobs:
 
           DOWNLOAD_BASE="https://github.com/${REPO}/releases/download/${TAG_NAME}"
           PKG_BASENAME=$(basename "$PKG_FILE")
+          PKG_URL="${DOWNLOAD_BASE}/${PKG_BASENAME}"
+          DOCKER_IMAGE="ghcr.io/${REPO%%/*}/squirrelops-sensor:${VERSION}"
+          UPDATED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
           # Update manifest using jq
           jq \
             --arg version "$VERSION" \
-            --arg pkg_url "${DOWNLOAD_BASE}/${PKG_BASENAME}" \
+            --arg pkg_url "$PKG_URL" \
             --arg pkg_sha "${PKG_SHA256}" \
+            --arg docker_image "$DOCKER_IMAGE" \
             --arg release_url "https://github.com/${REPO}/releases/tag/${TAG_NAME}" \
-            '.sensor.latest_version = $version |
+            --arg updated_at "$UPDATED_AT" \
+            '.latest.sensor = $version |
+             .latest.app = $version |
+             .downloads.macos_pkg = $pkg_url |
+             .downloads.macos_pkg_sha256 = $pkg_sha |
+             .downloads.docker_image = $docker_image |
+             .updated_at = $updated_at |
+             .sensor.latest_version = $version |
              .app.latest_version = $version |
              .app.download_url = $pkg_url |
              .app.release_notes_url = $release_url |
              .sensor.release_notes_url = $release_url |
-             .downloads.macos_pkg_sha256 = $pkg_sha |
              .app.sha256 = $pkg_sha' \
             site/public/manifest.json > site/public/manifest.json.tmp
 

@@ -10,7 +10,7 @@ struct RootView: View {
         if appState.isPaired {
             ZStack {
                 DashboardView(appState: appState)
-                if appState.hasCriticalAlert {
+                if appState.shouldPresentCriticalAlertModal {
                     CriticalAlertModal(appState: appState)
                 }
             }

@@ -5,9 +5,9 @@
 #   docker compose logs -f        # view logs (setup key is here)
 #   docker compose down           # stop sensor
 #
-# The sensor needs host networking for full network visibility (ARP
-# scanning, passive DNS monitoring). NET_RAW and NET_ADMIN capabilities
-# are required for raw socket operations.
+# The sensor needs host networking for ARP discovery and virtual-IP decoys.
+# NET_RAW and NET_ADMIN capabilities are required for raw socket and network
+# configuration operations.
 
 services:
   sensor:

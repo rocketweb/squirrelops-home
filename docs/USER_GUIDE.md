@@ -2,14 +2,14 @@
 
 ## What is SquirrelOps Home?
 
-SquirrelOps Home is a local-first home network security platform. It passively monitors your network, learns what "normal" looks like, and deploys realistic decoy services (honeypots) that generate zero-false-positive alerts when anything touches them.
+SquirrelOps Home is a local-first home network security platform. It passively monitors your network, learns what "normal" looks like, and deploys realistic decoy services (honeypots) that generate high-confidence alerts when anything touches them.
 
 **How it works:**
 
 1. A lightweight **sensor** scans your network and builds a device inventory
 2. The sensor deploys **decoys** — fake services like file shares, dev servers, and Home Assistant instances — that no legitimate device should ever contact
-3. **Squirrel Scouts** probe real devices to build mimic decoys that clone their exact responses, deployed across virtual IPs with spoofed mDNS hostnames
-4. When something connects to a decoy, you get an alert. No tuning, no false positives.
+3. **Squirrel Scouts** probe real devices to build coherent fake hosts, with one service decoy per observed port and a shared virtual IP and editable hostname for services copied from the same source
+4. When something connects to a decoy, you get a high-confidence alert with the connection preserved as forensic evidence.
 5. The sensor also monitors for **new devices** joining your network and **behavioral anomalies** after a 48-hour learning period
 
 **What stays local:** All data is stored in a local SQLite database on the sensor. No telemetry. No cloud dependency. The only things that leave your network are the ones you explicitly enable (push notifications, cloud LLM classification, Slack webhooks, update checks).
@@ -222,11 +222,17 @@ The dashboard shows a progress bar with time remaining. After 48 hours, the sens
 
 The sensor auto-detects your hardware and recommends a profile. You can change it anytime in Settings.
 
-| Profile | Scan Interval | Max Decoys | Max Mimics | Classification | Best For |
-|---------|--------------|------------|------------|---------------|----------|
+| Profile | Scan Interval | Classic Decoys | Fake-host Ceiling | Classification | Best For |
+|---------|--------------|----------------|-------------------|----------------|----------|
 | **Lite** | 15 min | 3 | Disabled | Local signature DB only | Raspberry Pi 3, low-resource devices |
-| **Standard** | 5 min | 8 | 10 | Cloud LLM (your API key) | Raspberry Pi 4, NAS, most setups |
-| **Full** | 1 min | 16 | 10+ | Local LLM (LM Studio/Ollama) | Dedicated server, power users |
+| **Standard** | 5 min | 3 | Up to 10 | Cloud LLM (your API key) | Raspberry Pi 4, NAS, most setups |
+| **Full** | 1 min | 3 | Up to 30 | Local LLM (LM Studio/Ollama) | Dedicated server, power users |
+
+The ceiling applies to fake hosts, not service rows. Scouts creates at most one
+active fake host per eligible real source device. A fake host with several open
+ports has one service-decoy row for each port, so its service count can exceed
+the fake-host count. Full mode raises the ceiling; it does not create repeated
+copies of the same source merely to reach 30.
 
 ---
 
@@ -317,12 +323,14 @@ Click **Edit** in the device detail view to change:
 
 ### Decoy Grid
 
-The **Decoys** tab shows a card grid of **all** deployed deception — both traditional honeypot decoys and mimic decoys from Squirrel Scouts. Each card displays:
+The **Decoys** tab shows all deployed deception. Traditional honeypots appear as
+individual cards. Service decoys copied from the same source are grouped into
+one fake-host card with a shared virtual IP and hostname.
 
 - Decoy name and type icon
-- Bind address and port
+- Bind address and advertised service ports
 - Status badge (Active, Degraded, Stopped)
-- Enable/disable toggle
+- One fake-host enable/disable control
 - Connection count and credential trip count
 
 **Decoy types:**
@@ -332,7 +340,7 @@ The **Decoys** tab shows a card grid of **all** deployed deception — both trad
 | Dev Server | `</>` | Fake development server (Express, Next.js, Flask) |
 | Home Assistant | House | Fake Home Assistant login page and API |
 | File Share | Folder | Fake SMB/AFP share with planted credentials |
-| Mimic | Device-specific | Cloned from a real device via Squirrel Scouts — responds with realistic service fingerprints on a virtual IP |
+| Mimic | Device-specific | A grouped fake host built from the observed services of one real source device |
 
 Traditional honeypot decoys are automatically selected based on what real services exist on your network. The sensor deploys complementary decoys — it won't duplicate services already present. Mimic decoys are deployed by the Squirrel Scouts subsystem and appear in the grid alongside honeypots, giving you a single view of all deception deployed on your network.
 
@@ -344,7 +352,9 @@ Traditional honeypot decoys are automatically selected based on what real servic
 | **Degraded** | Failed to restart after 3 crashes in 5 minutes — restart manually or wait for the 30-minute health check |
 | **Stopped** | Disabled by user |
 
-For degraded decoys, a **Restart** button appears on the card.
+For degraded decoys, a **Restart** button appears on the card. Restart, stop,
+remove, and hostname changes apply to the whole fake host rather than one
+service row.
 
 ### Decoy Detail Sheet
 
@@ -362,13 +372,21 @@ Squirrel Scouts is an advanced reconnaissance and deception subsystem that makes
 
 ### How Squirrel Scouts Works
 
-1. The **Scout Engine** probes every open port on every discovered device to capture exactly what an intruder would see — HTTP responses, headers, TLS certificates, SSH version strings, mDNS service types
-2. **Mimic Templates** are generated from scout data — route configurations that replicate real device responses with planted credentials injected in realistic locations
-3. **Virtual IPs** are allocated from unused addresses in your subnet (typically .200-.250) using interface aliases, so mimic decoys appear as distinct physical devices on the network
+1. The **Scout Engine** probes open ports on discovered devices to collect bounded HTTP samples, TLS certificate metadata, protocol banners, and mDNS service types
+2. **Fake-host templates** group the services observed on one source device under one virtual IP and hostname. Every port remains a separate service-decoy record with its own behavior and evidence.
+3. **Virtual IPs** are allocated from verified-free addresses in your subnet (typically .200-.250) and published with proxy ARP
 4. **Port Forwarding** (pfctl on macOS, iptables on Linux) transparently redirects privileged ports to the mimic servers
-5. **mDNS Hostnames** are registered with device-appropriate names (e.g., `tapo-plug-A3F2`, `synology-ds-B1C8`) so network scanners see plausible device names
+5. **mDNS Services** are registered under persistent, device-appropriate hostnames. You can edit a fake host's hostname, and the change applies to every service sharing its IP.
 
-The result: a network scan from an intruder's perspective reveals more devices than actually exist, each responding with realistic service fingerprints and containing planted credentials that trigger alerts when used.
+The result is a set of internally consistent fake hosts whose advertised ports
+resemble real systems already present on the network. Supported HTTP credential
+routes trigger alerts when accessed.
+
+On macOS, proxy-ARP virtual IPs share the Mac's physical-interface MAC address.
+A reverse-DNS scan can also report the Mac's real hostname for those addresses.
+These are known Layer 2 limitations of this architecture. The fake services are
+designed to withstand ordinary service discovery, but this release does not
+claim that a virtual IP is indistinguishable from a separate physical device.
 
 ### Squirrel Scouts Tab
 
@@ -379,28 +397,33 @@ The **Squirrel Scouts** tab in the sidebar has three sections:
 Shows the status of the reconnaissance engine:
 
 - **Profiles** — Total service profiles collected across all devices
-- **Active Mimics** — Currently deployed mimic decoys out of the maximum allowed
+- **Fake Hosts** — Currently deployed fake hosts out of the profile ceiling
+- **Service Decoys** — Individual per-port decoy records across those hosts
 - **Interval** — Time between automated scout cycles
 - **Status** — Whether a scout cycle is currently running or idle
-- **Last Scout** — Timestamp and duration of the most recent scout cycle
+- **Last Scout** — Local timestamp of the most recent scout cycle, shown as `YYYY-MM-DD HH:MM:SS`
 
 The **Run Scout** button triggers an immediate scout cycle (useful after adding new devices to your network).
 
 #### Virtual Network
 
-Shows all deployed mimic decoys in a card grid. Each mimic card displays:
+Shows all deployed fake hosts in a card grid. Each card displays:
 
 - **Name** — Derived from the source device being mimicked (e.g., "Mimic: tp-link-plug")
 - **Status badge** — Active, Stopped, or Degraded
 - **Virtual IP** — The allocated IP address on your subnet
-- **Port** — Primary listening port
+- **Services** — Every observed port and protocol advertised by the fake host
 - **Hits** — Connection count (highlighted in yellow when > 0, meaning something probed the mimic)
 - **Category** — Device type being mimicked (Smart Home, Camera, NAS, Media, Printer, Router, Dev Server)
-- **mDNS hostname** — The registered hostname visible via Bonjour (e.g., `tapo-plug-A3F2.local`)
+- **Hostname** — The persistent, editable hostname used by all services in the group
 
-Each card has **Remove** and (for stopped mimics) **Restart** buttons.
+Each card has host-level **Remove** and, for stopped hosts, **Restart** buttons.
+Editing the hostname updates every service row sharing the virtual IP and
+persists across sensor restarts.
 
-The **Deploy** button triggers the mimic evaluation and deployment pipeline, deploying new mimics for scouted devices that don't already have one.
+The **Fill Capacity** button deploys one fake host for each eligible source that
+is not represented yet, up to the active profile ceiling. It does not create
+repeated clones of already represented sources simply to fill every slot.
 
 #### Service Profiles
 
@@ -413,9 +436,11 @@ Lists all collected service fingerprints in a scrollable table:
 - **HTTP status** — Response code from the probe
 - **TLS** — Certificate CN if TLS was detected (shown with a lock icon)
 
-### Mimic Decoy Categories
+### Fake-host credential routes
 
-The mimic system generates device-appropriate planted credentials:
+The mimic system exposes synthetic credential bait only on credible supported
+HTTP routes. Banner-only services, including SSH in this release, do not claim
+to implement a full authentication server.
 
 | Category | Credential Strategy |
 |----------|-------------------|
@@ -432,6 +457,23 @@ The mimic system generates device-appropriate planted credentials:
 ### Alert Feed
 
 The **Alerts** tab shows a chronological feed of alerts within the 90-day retention window. By default, only **active (undismissed) alerts** are shown. Click the **History** toggle in the toolbar to include previously dismissed alerts.
+
+All timestamps in the app use local system time in
+`YYYY-MM-DD HH:MM:SS` format.
+
+### High and Critical Alert Prompt
+
+New High and Critical alerts open a prompt over the dashboard:
+
+- **Review** closes the prompt, opens the Alerts panel, and leaves the presented
+  alerts unread so you can inspect them individually.
+- **Clear** acknowledges only the batch represented by the prompt and removes
+  it from the unread count. The alert records remain available in the Alerts
+  panel and are not deleted from the database.
+
+Several decoy connections from the same source are coalesced into one active
+scan alert instead of creating one alert row per port. Every individual
+connection is still retained in the decoy's forensic connection log.
 
 **Alert types:**
 
@@ -480,7 +522,7 @@ Click any alert in the feed to open a detail sheet showing the full context of t
 
 - **Header** — Severity indicator, title, alert type badge (e.g., "Port Scan Detected", "Credential Accessed"), severity label, and timestamp
 - **Source** — IP address, MAC address (if the device was identified), hostname, vendor, and device ID
-- **Intrusion Details** — Destination port, protocol, request path (for HTTP-based detections), and detection method (HTTP Decoy, Mimic Decoy, DNS Canary)
+- **Intrusion Details** — Destination port, protocol, request path (for HTTP-based detections), and detection method (HTTP Decoy or Mimic Decoy)
 - **Credential Access** (only for credential trip alerts) — Which planted credential was accessed and the request path used
 - **Decoy** — Which decoy was tripped, with name and ID
 
@@ -533,7 +575,12 @@ Choose between **System** (follows macOS setting), **Light**, and **Dark** appea
 
 ### Resource Profile
 
-Switch between **Lite**, **Standard**, and **Full** profiles. Each profile shows a brief description of its scan interval, decoy limit, mimic limit, and classification method. Changes take effect immediately. Switching from Lite to Standard/Full enables Squirrel Scouts.
+Switch between **Lite**, **Standard**, and **Full** profiles. Each profile shows
+its scan interval, classic-decoy count, fake-host ceiling, and classification
+method. Changes take effect immediately. Switching from Lite to Standard/Full
+enables Squirrel Scouts. The ceiling does not guarantee that many fake hosts;
+the available count is limited by eligible, uniquely represented source
+devices and verified-free virtual IPs.
 
 ### Alert Methods
 
@@ -566,31 +613,18 @@ When a returning device's fingerprint confidence falls between 0.50 and the thre
 
 Set the filename for the planted credential file served by decoy file shares. Default is `passwords.txt`. Change this if you want the credential artifact to look more natural for your network (e.g., `credentials.env`, `secrets.txt`).
 
-Seven credential types are planted across decoy services. When an intruder accesses a credential via HTTP (e.g., by requesting `/.env` or `/passwords.txt` on a decoy), a **Critical** severity "Credential Accessed" alert fires immediately.
+Synthetic credentials are exposed on supported HTTP decoy routes. When an
+intruder requests a planted endpoint such as `/.env` or `/passwords.txt`, a
+**Critical** severity "Credential Accessed" alert fires immediately. Services
+that only replay a protocol banner do not accept or validate credentials.
 
-### DNS Canary Configuration
+### DNS Canary Status
 
-DNS canary hostnames are **disabled by default**. When enabled, unique hostnames are embedded in three credential types (AWS keys, GitHub PATs, Home Assistant tokens). If an intruder steals one of these credentials and attempts to use it, the resulting DNS lookup is detected by the sensor's local DNS monitor.
-
-**Configuration** (in `config.yaml` or via environment variables):
-
-```yaml
-decoys:
-  dns_canaries:
-    enabled: false          # set to true to activate
-    domain: "canary.local"  # the domain suffix for generated hostnames
-```
-
-Or via environment variables:
-
-```bash
-SQUIRRELOPS_DECOYS__DNS_CANARIES__ENABLED=true
-SQUIRRELOPS_DECOYS__DNS_CANARIES__DOMAIN=canary.example.com
-```
-
-When enabled, credentials like AWS keys will contain hostnames in the format `{32-hex-chars}.{domain}` (e.g., `a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.canary.local`). The sensor's DNS monitor passively sniffs DNS traffic on the local network and matches queries against known canary hostnames. A match triggers a Critical "Credential Accessed" alert with `detection_method: dns_canary`.
-
-**Important:** DNS canary detection is purely local and passive. No external server is contacted. However, to receive canary callbacks from credentials used *outside* your local network, you would need to set up a canary collection server. See [DNS Canary Setup](#dns-canary-setup) for details.
+DNS canaries are not available in this release. The sensor does not plant or
+monitor DNS canary hostnames. Legacy `decoys.dns_canaries` settings are ignored
+at startup with a warning, and runtime attempts to configure them are rejected.
+Credential alerts fire when a planted file or credential endpoint on a decoy is
+accessed.
 
 ### LLM Configuration
 
@@ -729,14 +763,14 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 
 ### Mimic Decoys Not Deploying
 
-**Symptoms:** The Virtual Network section in Squirrel Scouts is empty, or Deploy returns an error.
+**Symptoms:** The Virtual Network section in Squirrel Scouts is empty, or Fill Capacity returns an error.
 
 **Possible causes:**
-- **Helper not running (macOS)** — Deploy returns a "Privileged helper is not running" error. The helper is required for creating virtual IP aliases. Open the macOS app to install it, or see the [helper documentation](#privileged-helper-required-for-macos) above.
-- **Scouts haven't run yet** — Click **Run Scout** to trigger a manual scout cycle, then click **Deploy**
+- **Helper not running (macOS)** — Fill Capacity returns a "Privileged helper is not running" error. The helper is required for creating isolated virtual IPs. Open the macOS app to install it, or see the [helper documentation](#privileged-helper-required-for-macos) above.
+- **Scouts haven't run yet** — Click **Run Scout** to refresh service profiles and fill available mimic capacity
 - **Profile is Lite** — Mimic decoys require Standard or Full profile. Switch profiles in Settings.
-- **No suitable candidates** — The scout engine needs devices with open HTTP ports or protocol banners to generate mimic templates. If all devices only have encrypted services, fewer mimics will be available.
-- **Virtual IPs exhausted** — The default range is .200-.250 (51 IPs). If many are in use or conflict with real devices, fewer slots are available.
+- **No suitable candidates** — The scout engine needs eligible real devices with observed service ports. It creates one fake host per source, so a Full profile can legitimately have fewer than 30 fake hosts.
+- **Virtual IPs exhausted** — The default range is .200-.250. Every address is checked on the physical LAN before use; real devices are skipped, so fewer slots may be available.
 
 ### Settings Won't Save
 
@@ -776,188 +810,6 @@ All locally stored data (databases, configuration, logs, alert history) is delet
 
 ---
 
-## DNS Canary Setup
-
-DNS canary hostnames let the sensor detect when a stolen credential is *used* — not just accessed. This section explains how the feature works and how to set up a canary collection server if you want detection beyond your local network.
-
-### How DNS Canaries Work
-
-1. The sensor generates credentials with unique hostnames embedded in them (e.g., an AWS key whose secret references `a1b2...c5d6.canary.example.com`)
-2. If an intruder steals the credential and tries to use it, their machine performs a DNS lookup for that hostname
-3. Detection can happen in two ways:
-   - **Local detection** (built-in): The sensor passively sniffs DNS queries on your LAN (UDP port 53) and matches them against known canary hostnames. This works when the intruder is still on your network.
-   - **Remote detection** (requires your own server): If you control the DNS zone for the canary domain, queries from *anywhere on the internet* are logged by your authoritative DNS server and can be forwarded back to the sensor.
-
-### Local-Only Setup (No External Server)
-
-This is the simplest configuration. It detects credential use only while the intruder is on your local network.
-
-1. Edit your sensor config (`config.yaml` or environment variables):
-
-```yaml
-decoys:
-  dns_canaries:
-    enabled: true
-    domain: "canary.local"    # .local is fine for LAN-only detection
-```
-
-2. Restart the sensor. New decoys deployed after this point will have canary hostnames embedded in their AWS key, GitHub PAT, and HA token credentials.
-
-3. Existing decoys are not retroactively updated. To regenerate credentials with canaries, disable and re-enable each decoy, or redeploy the sensor.
-
-That's it. The sensor's DNS monitor will detect any DNS queries for `*.canary.local` on your LAN and create Critical alerts.
-
-### Remote Detection Setup (External Canary Server)
-
-To detect credential use after an intruder has left your network, you need:
-
-1. **A domain you control** (e.g., `canary.example.com`)
-2. **A VPS or cloud server** to run an authoritative DNS server for that domain
-3. **DNS delegation** from your registrar pointing the canary subdomain to your server
-
-#### Requirements
-
-- A registered domain (or subdomain you can delegate)
-- A server with a public IP address (any small VPS will do — minimal CPU/RAM needed)
-- Ability to configure NS records at your domain registrar
-
-#### Step 1: Configure DNS Delegation
-
-At your domain registrar, create an NS record that delegates the canary subdomain to your server:
-
-```
-canary.example.com.  NS  ns1.canary.example.com.
-ns1.canary.example.com.  A  <your-server-public-ip>
-```
-
-This tells the global DNS system that your server is authoritative for `*.canary.example.com`.
-
-#### Step 2: Run a Logging DNS Server
-
-On your server, run a DNS server that logs all incoming queries and responds with a valid (but meaningless) answer. A minimal Python implementation using `dnslib`:
-
-```
-pip install dnslib
-```
-
-Create `canary_dns.py`:
-
-```python
-"""Minimal authoritative DNS server that logs all queries to a canary zone."""
-
-import datetime
-import json
-import sys
-
-from dnslib import DNSRecord, RR, QTYPE, A
-from dnslib.server import DNSServer, BaseResolver
-
-ZONE = sys.argv[1] if len(sys.argv) > 1 else "canary.example.com"
-LOG_FILE = sys.argv[2] if len(sys.argv) > 2 else "/var/log/canary-dns.jsonl"
-# Respond with a routable but harmless IP (RFC 5737 TEST-NET)
-ANSWER_IP = "192.0.2.1"
-
-
-class CanaryResolver(BaseResolver):
-    def resolve(self, request, handler):
-        reply = request.reply()
-        qname = str(request.q.qname).rstrip(".")
-        qtype = QTYPE[request.q.qtype]
-        source = handler.client_address[0]
-
-        entry = {
-            "ts": datetime.datetime.utcnow().isoformat() + "Z",
-            "query": qname,
-            "type": qtype,
-            "source_ip": source,
-        }
-
-        with open(LOG_FILE, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-
-        print(f"[CANARY] {source} -> {qname} ({qtype})")
-
-        if qname.endswith(ZONE) and qtype == "A":
-            reply.add_answer(RR(qname, QTYPE.A, rdata=A(ANSWER_IP), ttl=60))
-
-        return reply
-
-
-if __name__ == "__main__":
-    print(f"Starting canary DNS server for zone: {ZONE}")
-    print(f"Logging to: {LOG_FILE}")
-    resolver = CanaryResolver()
-    server = DNSServer(resolver, port=53, address="0.0.0.0")
-    server.start()
-```
-
-Run it:
-
-```bash
-sudo python3 canary_dns.py canary.example.com /var/log/canary-dns.jsonl
-```
-
-Or run it as a systemd service for persistence:
-
-```ini
-# /etc/systemd/system/canary-dns.service
-[Unit]
-Description=Canary DNS Server
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/python3 /opt/canary-dns/canary_dns.py canary.example.com /var/log/canary-dns.jsonl
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
-```
-
-#### Step 3: Configure the Sensor
-
-Update your sensor config to use your domain:
-
-```yaml
-decoys:
-  dns_canaries:
-    enabled: true
-    domain: "canary.example.com"
-```
-
-Restart the sensor. New credentials will now contain hostnames like `a1b2...c5d6.canary.example.com`.
-
-#### Step 4: Monitor for Hits
-
-Check your canary DNS server logs for queries:
-
-```bash
-tail -f /var/log/canary-dns.jsonl
-```
-
-Each line is a JSON object with the query name, type, source IP, and timestamp. Cross-reference the hex subdomain against your sensor's `planted_credentials` table to identify which credential was compromised.
-
-#### Verification
-
-To verify the setup is working end-to-end:
-
-1. Deploy a decoy with canaries enabled
-2. Access the decoy's credential endpoint (e.g., `curl http://<decoy-ip>:<port>/.env`)
-3. Extract a canary hostname from the credential content
-4. From a different machine, run `nslookup <canary-hostname>` or `dig <canary-hostname>`
-5. Confirm the query appears in your canary DNS server logs
-6. Confirm the sensor creates a Critical alert (for local LAN queries)
-
-### Security Considerations
-
-- The canary domain does not need to host any web content — it only needs to answer DNS queries
-- The DNS server should be hardened: disable recursion, rate-limit responses, and restrict zone transfers
-- Canary hostnames are random 32-character hex strings, making them unguessable
-- The canary DNS server logs source IPs of queries, which can help attribute where stolen credentials were used
-- Consider rotating canary domains periodically if you suspect an intruder has identified your canary infrastructure
-
----
-
 ## Privacy & Security
 
 ### What Stays on Your Network
@@ -972,11 +824,8 @@ Everything, by default. All device data, alert history, scan results, and config
 | **Cloud LLM Classification** (Standard mode) | Manufacturer OUI, DHCP fingerprint hash, mDNS service types, open port list. No IPs, MACs, or hostnames. | Your configured LLM provider (Anthropic or OpenAI), using your own API key | Switch to Lite or Full profile |
 | **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers." | Your Slack workspace | Toggle off in Settings > Alert Methods |
 | **Update Checks** | Current version number and platform identifier | SquirrelOps update endpoint | Don't click "Check for Updates" |
-| **DNS Canaries** (if enabled with external domain) | Canary hostnames appear in DNS queries initiated by intruders using stolen credentials. Your external canary DNS server receives these queries. | Your own canary DNS server | Set `decoys.dns_canaries.enabled: false` (this is the default) |
 
 In **Full mode** with a local LLM, no classification data leaves your network.
-
-**Note on DNS canaries:** When disabled (the default), no canary hostnames are generated and no DNS-related data leaves your network. When enabled with a `.local` domain, detection is purely local. Only when you configure an external domain and run your own canary DNS server do DNS queries from stolen credentials leave your network — and those queries go to a server *you* control, not to any third party.
 
 ### Certificate Pinning
 
@@ -997,6 +846,12 @@ Virtual IPs used by mimic decoys are:
 - Excluded from the sensor's own scan loop to prevent false device discoveries
 - Automatically evacuated if a real device claims the same IP — the mimic is stopped, the alias is removed, and the IP is reallocated
 
+On macOS, the virtual IPs are published through proxy ARP and therefore share
+the sensor Mac's physical MAC address. The sensor advertises distinct mDNS
+services and an editable hostname, but it cannot override every client's
+reverse-DNS view. Distinct virtual MAC addresses require a different virtual
+Ethernet or VM-style network architecture.
+
 ### Port Forwarding Safety
 
 On macOS, the sensor uses pfctl packet filter rules (loaded into a dedicated `com.apple/squirrelops` anchor) to redirect privileged ports to mimic servers. These rules:
@@ -1007,5 +862,3 @@ On macOS, the sensor uses pfctl packet filter rules (loaded into a dedicated `co
 ### Credential Safety
 
 The only credentials the sensor stores are **synthetic credentials it generates for deception**. These are clearly marked as synthetic in the database (`planted_credentials` table with `credential_type` and `planted_location` columns). The sensor never stores your real service credentials.
-
-When DNS canaries are enabled, canary hostnames are stored alongside the credential in the `canary_hostname` column. These hostnames are random hex strings that do not contain any identifying information about your network, devices, or real credentials.

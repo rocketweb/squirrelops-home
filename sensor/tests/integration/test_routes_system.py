@@ -1,6 +1,8 @@
 """Integration tests for system routes: health, status, profile, learning."""
 import asyncio
 from datetime import UTC
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 
 class TestHealthEndpoint:
@@ -38,11 +40,18 @@ class TestStatusEndpoint:
     def test_status_contains_required_fields(self, client, db):
         response = client.get("/system/status")
         data = response.json()
+        assert "version" in data
         assert "profile" in data
         assert "learning_mode" in data
         assert "device_count" in data
         assert "decoy_count" in data
         assert "alert_count" in data
+
+    def test_status_exposes_version_only_after_authentication(self, client):
+        from squirrelops_home_sensor import __version__
+
+        data = client.get("/system/status").json()
+        assert data["version"] == __version__
 
     def test_status_profile_matches_config(self, client, sensor_config):
         response = client.get("/system/status")
@@ -61,6 +70,85 @@ class TestStatusEndpoint:
         assert data["device_count"] == 5
         assert data["decoy_count"] == 3
         assert data["alert_count"] == 7
+
+    def test_status_counts_only_operational_mimics(
+        self,
+        client,
+        app,
+        db,
+    ):
+        from squirrelops_home_sensor.api.routes_scouts import (
+            get_mimic_orchestrator,
+        )
+        from tests.integration.conftest import seed_decoys
+
+        asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=3))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                "UPDATE decoys SET decoy_type = 'mimic' WHERE id IN (1, 2)"
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        async def mimic_dependency():
+            return SimpleNamespace(active_count=1)
+
+        app.dependency_overrides[get_mimic_orchestrator] = mimic_dependency
+        try:
+            response = client.get("/system/status")
+        finally:
+            app.dependency_overrides.pop(get_mimic_orchestrator, None)
+
+        assert response.status_code == 200
+        # One classic plus one operational mimic; the second DB-active mimic
+        # is excluded until its network publication is verified.
+        assert response.json()["decoy_count"] == 2
+
+    def test_status_includes_event_cursor_for_snapshot_replay(self, client, db):
+        """REST bootstrap exposes the point from which WebSocket replay starts."""
+        asyncio.get_event_loop().run_until_complete(
+            db.executemany(
+                """INSERT INTO events (event_type, payload, created_at)
+                   VALUES (?, '{}', '2026-07-23T00:00:00Z')""",
+                [
+                    ("device.updated",),
+                    ("alert.new",),
+                    ("system.status_changed",),
+                ],
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+        cursor = asyncio.get_event_loop().run_until_complete(
+            db.execute("SELECT MAX(seq) FROM events")
+        )
+        latest_seq = asyncio.get_event_loop().run_until_complete(
+            cursor.fetchone()
+        )[0]
+
+        response = client.get("/system/status")
+
+        assert response.status_code == 200
+        assert response.json()["event_seq"] == latest_seq
+
+    def test_status_decoy_count_excludes_stopped_records(self, client, db):
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    created_at, updated_at)
+                   VALUES
+                   ('active', 'file_share', '192.168.1.18', 63217, 'active',
+                    '{}', '2026-07-23T00:00:00Z', '2026-07-23T00:00:00Z'),
+                   ('stopped mimic', 'mimic', '192.168.1.202', 80, 'stopped',
+                    '{}', '2026-07-23T00:00:00Z', '2026-07-23T00:00:00Z')"""
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        response = client.get("/system/status")
+
+        assert response.status_code == 200
+        assert response.json()["decoy_count"] == 1
 
     def test_status_device_count_excludes_mimic_decoys(self, client, db):
         from tests.integration.conftest import seed_devices
@@ -132,7 +220,180 @@ class TestProfileEndpoints:
         )
         data = response.json()
         assert data["scan_interval_seconds"] == 60  # 1 min for full
-        assert data["max_decoys"] >= 16
+        assert data["max_decoys"] == 3
+        assert data["max_mimic_decoys"] == 30
+        assert data["total_decoy_capacity"] == 33
+
+    def test_put_profile_reconfigures_all_live_subsystems(
+        self, client, app, sensor_config,
+    ):
+        from squirrelops_home_sensor.api.routes_decoys import get_decoy_orchestrator
+        from squirrelops_home_sensor.api.routes_scouts import (
+            get_mimic_orchestrator,
+            get_scout_scheduler,
+        )
+        from squirrelops_home_sensor.api.routes_system import get_scan_loop
+
+        scan_loop = SimpleNamespace(scan_interval=300, set_scan_interval=Mock())
+        scheduler = SimpleNamespace(
+            interval_minutes=60,
+            reconfigure=AsyncMock(),
+        )
+        decoys = SimpleNamespace(
+            max_decoys=8,
+            reconfigure=AsyncMock(return_value=[]),
+        )
+        mimics = SimpleNamespace(
+            max_mimics=10,
+            reconfigure=AsyncMock(return_value=[]),
+        )
+
+        async def scan_dependency():
+            return scan_loop
+
+        async def scheduler_dependency():
+            return scheduler
+
+        async def decoy_dependency():
+            return decoys
+
+        async def mimic_dependency():
+            return mimics
+
+        app.dependency_overrides[get_scan_loop] = scan_dependency
+        app.dependency_overrides[get_scout_scheduler] = scheduler_dependency
+        app.dependency_overrides[get_decoy_orchestrator] = decoy_dependency
+        app.dependency_overrides[get_mimic_orchestrator] = mimic_dependency
+
+        response = client.put("/system/profile", json={"profile": "full"})
+
+        assert response.status_code == 200
+        scan_loop.set_scan_interval.assert_called_once_with(60)
+        scheduler.reconfigure.assert_awaited_once_with(30)
+        decoys.reconfigure.assert_awaited_once_with(3)
+        mimics.reconfigure.assert_awaited_once_with(30)
+        assert sensor_config["network"]["scan_interval"] == 60
+        assert sensor_config["scouts"]["max_mimic_decoys"] == 30
+
+    def test_failed_live_profile_change_is_not_persisted(
+        self, client, app, sensor_config,
+    ):
+        from squirrelops_home_sensor.api.routes_decoys import get_decoy_orchestrator
+        from squirrelops_home_sensor.api.routes_scouts import (
+            get_mimic_orchestrator,
+            get_scout_scheduler,
+        )
+        from squirrelops_home_sensor.api.routes_system import get_scan_loop
+
+        scan_loop = SimpleNamespace(scan_interval=300, set_scan_interval=Mock())
+        scheduler = SimpleNamespace(
+            interval_minutes=60,
+            reconfigure=AsyncMock(),
+        )
+        decoys = SimpleNamespace(
+            max_decoys=8,
+            reconfigure=AsyncMock(return_value=[]),
+        )
+        mimics = SimpleNamespace(
+            max_mimics=10,
+            reconfigure=AsyncMock(side_effect=RuntimeError("no helper")),
+        )
+
+        async def scan_dependency():
+            return scan_loop
+
+        async def scheduler_dependency():
+            return scheduler
+
+        async def decoy_dependency():
+            return decoys
+
+        async def mimic_dependency():
+            return mimics
+
+        app.dependency_overrides[get_scan_loop] = scan_dependency
+        app.dependency_overrides[get_scout_scheduler] = scheduler_dependency
+        app.dependency_overrides[get_decoy_orchestrator] = decoy_dependency
+        app.dependency_overrides[get_mimic_orchestrator] = mimic_dependency
+
+        with patch(
+            "squirrelops_home_sensor.api.routes_config._persist_config"
+        ) as persist:
+            response = client.put("/system/profile", json={"profile": "full"})
+
+        assert response.status_code == 500
+        assert sensor_config["profile"] == "standard"
+        persist.assert_not_called()
+
+    def test_persistence_failure_restores_config_and_live_limits(
+        self, client, app, sensor_config,
+    ):
+        from squirrelops_home_sensor.api.routes_decoys import get_decoy_orchestrator
+        from squirrelops_home_sensor.api.routes_scouts import (
+            get_mimic_orchestrator,
+            get_scout_scheduler,
+        )
+        from squirrelops_home_sensor.api.routes_system import get_scan_loop
+
+        scan_loop = SimpleNamespace(scan_interval=300, set_scan_interval=Mock())
+        scheduler = SimpleNamespace(
+            interval_minutes=60,
+            reconfigure=AsyncMock(),
+        )
+        decoys = SimpleNamespace(
+            max_decoys=8,
+            reconfigure=AsyncMock(return_value=[]),
+        )
+        mimics = SimpleNamespace(
+            max_mimics=10,
+            reconfigure=AsyncMock(return_value=[]),
+        )
+
+        async def scan_dependency():
+            return scan_loop
+
+        async def scheduler_dependency():
+            return scheduler
+
+        async def decoy_dependency():
+            return decoys
+
+        async def mimic_dependency():
+            return mimics
+
+        app.dependency_overrides[get_scan_loop] = scan_dependency
+        app.dependency_overrides[get_scout_scheduler] = scheduler_dependency
+        app.dependency_overrides[get_decoy_orchestrator] = decoy_dependency
+        app.dependency_overrides[get_mimic_orchestrator] = mimic_dependency
+
+        with patch(
+            "squirrelops_home_sensor.api.routes_config._persist_config",
+            side_effect=RuntimeError("disk full"),
+        ):
+            response = client.put("/system/profile", json={"profile": "full"})
+
+        assert response.status_code == 500
+        assert sensor_config["profile"] == "standard"
+        assert sensor_config["scan_interval_seconds"] == 300
+        assert sensor_config["max_decoys"] == 8
+        assert "network" not in sensor_config
+        assert "scouts" not in sensor_config
+        assert [call.args for call in scan_loop.set_scan_interval.call_args_list] == [
+            (60,),
+            (300,),
+        ]
+        assert [call.args for call in scheduler.reconfigure.await_args_list] == [
+            (30,),
+            (60,),
+        ]
+        assert [call.args for call in decoys.reconfigure.await_args_list] == [
+            (3,),
+            (8,),
+        ]
+        assert [call.args for call in mimics.reconfigure.await_args_list] == [
+            (30,),
+            (10,),
+        ]
 
 
 class TestLearningEndpoint:

@@ -24,6 +24,10 @@ struct AlertFeedView: View {
     @State private var showDismissed = false
     @State private var selectedAlertId: Int?
     @State private var alertDetailId: Int?
+    @State private var showClearConfirmation = false
+    @State private var isClearingHistory = false
+    @State private var historyClearMessage: String?
+    @State private var historyClearError: String?
 
     // MARK: - Severity filter options
 
@@ -97,6 +101,13 @@ struct AlertFeedView: View {
             toolbar
             Divider()
 
+            if let historyClearMessage {
+                historyNotice(historyClearMessage, isError: false)
+            }
+            if let historyClearError {
+                historyNotice(historyClearError, isError: true)
+            }
+
             if filteredAlerts.isEmpty {
                 emptyState
             } else {
@@ -158,6 +169,21 @@ struct AlertFeedView: View {
                     .padding()
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
+        }
+        .confirmationDialog(
+            "Clear all alert history?",
+            isPresented: $showClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Alert History", role: .destructive) {
+                Task { await clearAlertHistory() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "This removes every alert and incident from the dashboard. "
+                + "The sensor creates a recovery backup before deleting them."
+            )
         }
     }
 
@@ -227,6 +253,37 @@ struct AlertFeedView: View {
                         )
                     }
                     .buttonStyle(.plain)
+                }
+
+                if hasAlertHistory {
+                    Button {
+                        showClearConfirmation = true
+                    } label: {
+                        HStack(spacing: Spacing.xs) {
+                            if isClearingHistory {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "trash")
+                            }
+                            Text("Clear History")
+                                .font(Typography.bodySmall)
+                        }
+                        .foregroundStyle(Theme.statusError(colorScheme))
+                        .padding(.horizontal, Spacing.s12)
+                        .padding(.vertical, Spacing.xs)
+                        .background(Theme.statusError(colorScheme).opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Spacing.radiusFull)
+                                .stroke(
+                                    Theme.statusError(colorScheme).opacity(0.35),
+                                    lineWidth: 1
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isClearingHistory)
                 }
 
                 Button {
@@ -520,6 +577,44 @@ struct AlertFeedView: View {
     }
 
     // MARK: - Actions
+
+    private var hasAlertHistory: Bool {
+        !appState.alerts.isEmpty || (appState.systemStatus?.alertCount ?? 0) > 0
+    }
+
+    private func historyNotice(_ message: String, isError: Bool) -> some View {
+        let color = isError
+            ? Theme.statusError(colorScheme)
+            : Theme.statusSuccess(colorScheme)
+        return Label(
+            message,
+            systemImage: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
+        )
+        .font(Typography.bodySmall)
+        .foregroundStyle(color)
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(color.opacity(0.08))
+    }
+
+    private func clearAlertHistory() async {
+        isClearingHistory = true
+        historyClearMessage = nil
+        historyClearError = nil
+        do {
+            let response = try await appState.clearAlertHistory()
+            selectedAlertId = nil
+            alertDetailId = nil
+            selectedAlertDetail = nil
+            selectedIncident = nil
+            showDismissed = false
+            historyClearMessage = response.userSummary
+        } catch {
+            historyClearError = "Could not clear alert history: \(error.localizedDescription)"
+        }
+        isClearingHistory = false
+    }
 
     private func dismissAlert(_ alert: AlertSummary) {
         appState.markAlertRead(alert.id)

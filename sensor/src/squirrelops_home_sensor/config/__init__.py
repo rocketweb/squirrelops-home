@@ -41,17 +41,11 @@ class NetworkConfig(BaseModel):
     learning_duration_hours: int = 48
 
 
-class DNSCanaryConfig(BaseModel):
-    enabled: bool = False
-    domain: str = "canary.local"
-
-
 class DecoyConfig(BaseModel):
-    max_decoys: int = 8
+    max_decoys: int = 3
     health_check_interval: int = 1800
     restart_max_attempts: int = 3
     restart_window_seconds: int = 300
-    dns_canaries: DNSCanaryConfig = Field(default_factory=DNSCanaryConfig)
 
 
 class AlertMethodsConfig(BaseModel):
@@ -134,7 +128,7 @@ class PairingConfig(BaseModel):
 
 class ProfileLimits(BaseModel):
     scan_interval: int = 300
-    max_decoys: int = 8
+    max_decoys: int = 3
     llm_mode: str = "none"
 
 
@@ -144,10 +138,10 @@ class ProfilesConfig(BaseModel):
         default_factory=lambda: ProfileLimits(scan_interval=900, max_decoys=3, llm_mode="none")
     )
     standard: ProfileLimits = Field(
-        default_factory=lambda: ProfileLimits(scan_interval=300, max_decoys=8, llm_mode="cloud")
+        default_factory=lambda: ProfileLimits(scan_interval=300, max_decoys=3, llm_mode="cloud")
     )
     full: ProfileLimits = Field(
-        default_factory=lambda: ProfileLimits(scan_interval=60, max_decoys=16, llm_mode="local")
+        default_factory=lambda: ProfileLimits(scan_interval=60, max_decoys=3, llm_mode="local")
     )
 
 
@@ -267,6 +261,19 @@ def _normalize_flat_keys(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _remove_unsupported_dns_canary_config(data: dict[str, Any]) -> None:
+    """Remove the legacy DNS-canary surface with an explicit operator warning."""
+    decoys = data.get("decoys")
+    if not isinstance(decoys, dict) or "dns_canaries" not in decoys:
+        return
+
+    decoys.pop("dns_canaries")
+    logger.warning(
+        "DNS canaries are not supported in this release; ignoring "
+        "decoys.dns_canaries. No DNS canary hostnames will be planted or monitored."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
@@ -327,6 +334,8 @@ def load_settings(
     if env_overrides:
         base = _deep_merge(base, env_overrides)
         _normalize_flat_keys(base)
+
+    _remove_unsupported_dns_canary_config(base)
 
     known_fields = set(Settings.model_fields)
     unknown_fields = sorted(set(base) - known_fields)

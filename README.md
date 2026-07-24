@@ -1,14 +1,14 @@
 # SquirrelOps Home
 
-**Local-first home network security with zero-false-positive deception.**
+**Local-first home network security with high-signal deception.**
 
 - **Honeypots that blend in** — auto-deploys realistic decoy services (file shares, dev servers, Home Assistant instances) based on what's actually on your network
-- **Squirrel Scouts** — deep service fingerprinting that builds mimic decoys cloned from real devices, deployed across virtual IPs with spoofed mDNS hostnames so your network looks bigger and more diverse to intruders
-- **Zero false positives** — legitimate devices never touch decoys, so every alert means something
+- **Squirrel Scouts** — service fingerprinting that builds coherent fake hosts from real devices, with one decoy service per observed port and a shared virtual IP and hostname for services copied from the same source
+- **High-confidence decoy alerts** — a connection to an isolated decoy is inherently suspicious and is kept separate from lower-confidence behavioral detections
 - **Device fingerprinting** — identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional LLM-powered classification
 - **Behavioral baselines** — learns normal connection patterns during a 48-hour training period, then alerts on anomalies
-- **Credential canaries** — plants realistic-looking credentials (AWS keys, SSH keys, .env files, database URIs, GitHub PATs, Home Assistant tokens) that trigger critical alerts when accessed. Optional DNS canary hostnames can be embedded in select credential types for out-of-band detection.
-- **Completely local** — all data stays in a local SQLite database. No cloud. No telemetry. No accounts.
+- **Credential canaries** — plants realistic-looking credentials (AWS keys, SSH keys, .env files, database URIs, GitHub PATs, Home Assistant tokens) that trigger critical alerts when accessed through a decoy
+- **Local by default** — inventory, alerts, and configuration stay in local SQLite. Optional cloud classification and notification integrations are explicit opt-ins.
 - **Push notifications** — optional APNs alerts to your iPhone/Mac when a decoy is tripped
 - **Home Assistant integration** — enriches device data with names, areas, and types from your HA instance
 
@@ -53,45 +53,47 @@ Communication between the app and sensor uses mutual TLS with certificates excha
 | File Share | nginx-served directory with sensitive-looking files | `passwords.txt` (username:password pairs), SSH private key |
 | Dev Server | Express/Next.js dev server with debug endpoints | `.env` file with API keys, DB URLs, tokens |
 | Home Assistant | HA login page and API with realistic error responses | Long-lived access token |
-| **Mimic** | **Cloned from real devices — same HTTP responses, headers, TLS certs, protocol banners, mDNS hostnames** | Category-appropriate credentials injected into realistic locations |
+| **Mimic** | **A fake host assembled from a real device's observed ports, sanitized HTTP behavior, service banners, TLS metadata, and mDNS services** | Synthetic credentials exposed by supported HTTP routes |
 
 ### Credential Types
 
 Seven credential types are generated and planted across decoy services:
 
-| Credential | Format | DNS Canary Support |
-|------------|--------|-------------------|
-| Password pairs | `username:AdjNoun1234!` (8-12 per decoy) | No |
-| AWS Access Key | `AKIA` + 16 alphanumeric chars | Yes (opt-in) |
-| Database URI | `postgresql://user:pass@host:5432/db` | No |
-| SSH Private Key | PEM-formatted RSA key (~1600 bytes) | No |
-| HA Token | 183-char base64-like string | Yes (opt-in) |
-| .env File | Multi-line config with mixed secrets | No |
-| GitHub PAT | `ghp_` + 36 alphanumeric chars | Yes (opt-in) |
-
-DNS canary hostnames are disabled by default. When enabled, they are embedded in credential values so that if an intruder uses a stolen credential, the resulting DNS lookup is detected by the sensor's local DNS monitor. See the [User Guide](docs/USER_GUIDE.md#dns-canary-setup) for setup instructions.
+| Credential | Format |
+|------------|--------|
+| Password pairs | `username:AdjNoun1234!` (8-12 per decoy) |
+| AWS Access Key | `AKIA` + 16 alphanumeric chars |
+| Database URI | `postgresql://user:pass@host:5432/db` |
+| SSH Private Key | PEM-formatted RSA key (~1600 bytes) |
+| HA Token | 183-char base64-like string |
+| .env File | Multi-line config with mixed secrets |
+| GitHub PAT | `ghp_` + 36 alphanumeric chars |
 
 ### Squirrel Scouts
 
 Squirrel Scouts is an optional subsystem that makes the deception layer significantly more convincing:
 
-1. **Scout Engine** probes every open port on every discovered device to capture what an intruder would see — HTTP responses, TLS certificates, SSH version strings, mDNS service types
-2. **Mimic Templates** are generated from scout data: route configs that replicate real device responses with planted credentials injected into realistic locations
-3. **Virtual IPs** are allocated from unused addresses in your subnet (.200-.250 range) using interface aliases, so mimic decoys appear as distinct physical devices
+1. **Scout Engine** probes open ports on discovered devices to collect bounded HTTP samples, TLS certificate metadata, protocol banners, and mDNS service types
+2. **Fake-host templates** group every observed service from one source device under one virtual IP and hostname. Each port remains a separate service decoy so its behavior and evidence stay protocol-specific.
+3. **Virtual IPs** are allocated from verified-free addresses in your subnet (.200-.250 range), published with scoped proxy ARP, and bound as isolated loopback /32 addresses so they cannot expose unrelated sensor-host ports
 4. **Port Forwarding** (pfctl on macOS, iptables on Linux) redirects privileged ports (22, 80, 443) to high ports where the unprivileged mimic servers bind
-5. **mDNS Hostnames** are registered via zeroconf with device-appropriate names (e.g., `tapo-plug-A3F2`, `synology-ds-B1C8`), so Bonjour/mDNS discovery shows plausible device names
+5. **mDNS Services** are registered via zeroconf under a persistent, editable, device-appropriate hostname. HTTPS services use a persistent certificate generated for the fake host rather than copying a real device's private identity.
 
-The result: a network scan from an intruder's perspective reveals more devices than actually exist, each responding with realistic service fingerprints and containing planted credentials that trigger alerts when used.
+The result is a set of internally consistent fake hosts whose ports resemble real systems already present on the network. Supported HTTP credential routes trigger alerts when accessed.
+
+On macOS, these virtual IPs use proxy ARP through the Mac's physical interface. They therefore share its Layer 2 MAC address, and a reverse-DNS lookup may still return the Mac's real hostname. This release improves service-level realism but does not claim to be indistinguishable from a separate physical device to an advanced Layer 2 scan.
 
 ### Resource Profiles
 
 The sensor adapts to available resources:
 
-| Profile | Scan Interval | Max Decoys | Max Mimics | Classification |
-|---------|--------------|------------|------------|----------------|
+| Profile | Scan Interval | Classic Decoys | Fake-host Ceiling | Classification |
+|---------|--------------|----------------|-------------------|----------------|
 | **Lite** | 15 min | 3 | Disabled | Local signature DB only |
-| **Standard** | 5 min | 8 | 10 | Cloud LLM (your API key) |
-| **Full** | 1 min | 16 | 10+ | Local LLM (LM Studio/Ollama) |
+| **Standard** | 5 min | 3 | Up to 10 | Cloud LLM (your API key) |
+| **Full** | 1 min | 3 | Up to 30 | Local LLM (LM Studio/Ollama) |
+
+The ceiling counts fake hosts, not service rows. Squirrel Scouts deploys at most one fake host for each eligible real source device, so a network with six eligible sources produces at most six fake hosts even in Full mode. A multi-port host has one service-decoy row per observed port and can therefore contribute several rows.
 
 ## Installation
 
@@ -100,7 +102,7 @@ The sensor adapts to available resources:
 Install from a pinned release and verify its checksum before running it, rather than piping an unverified script straight into a root shell. Each release publishes `install.sh` and `install.sh.sha256` on the [Releases page](https://github.com/rocketweb/squirrelops-home/releases).
 
 ```bash
-VERSION=v1.1.3   # pick a released version
+VERSION=v1.1.14   # pick a released version
 base="https://github.com/rocketweb/squirrelops-home/releases/download/${VERSION}"
 curl -fsSLO "${base}/install.sh"
 curl -fsSLO "${base}/install.sh.sha256"
@@ -116,7 +118,7 @@ Installs the sensor only on any Linux host with Docker (ARM64 and x86_64). The d
 Same verify-then-run flow. Requires Python 3.11+. Installs as a launchd agent under `~/.squirrelops/sensor/`.
 
 ```bash
-VERSION=v1.1.3
+VERSION=v1.1.14
 base="https://github.com/rocketweb/squirrelops-home/releases/download/${VERSION}"
 curl -fsSLO "${base}/install-macos.sh"
 curl -fsSLO "${base}/install-macos.sh.sha256"
@@ -161,7 +163,7 @@ cd app && swift build
 cd app && swift test
 
 # Sensor (Python 3.11+)
-cd sensor && uv run pytest     # ~1258 tests
+cd sensor && uv run pytest     # 1,669 tests in v1.1.14
 
 # Docker
 docker compose -f sensor/docker-compose.yml build
@@ -170,8 +172,8 @@ docker compose -f sensor/docker-compose.yml build
 ### Project Structure
 
 ```
-app/          SwiftUI macOS app + privileged helper (54 Swift files)
-sensor/       Python sensor (92 source files, 69 test files)
+app/          SwiftUI macOS app + privileged helper
+sensor/       Python sensor and test suite
 relay/        APNs push notification relay (Vercel Edge Function)
 site/         Distribution site (get.squirrelops.io)
 scripts/      Install scripts and tooling
@@ -185,14 +187,14 @@ sensor/src/squirrelops_home_sensor/
 ├── alerts/        Alert dispatch, decoy/device handlers, incident grouping, retention
 ├── api/           FastAPI routers (8 routers), WebSocket, DI
 ├── config/        YAML config with env var overrides
-├── db/            SQLite schema (v8, 19 tables), migrations
+├── db/            SQLite schema (v9), migrations
 ├── decoys/        Decoy orchestrator + types (dev_server, home_assistant, file_share, mimic)
 ├── devices/       Device manager, classifier, signatures, OUI
 ├── events/        Pub/sub event bus with audit log
 ├── fingerprint/   Multi-signal compositor and matcher
 ├── network/       Virtual IP allocation, port forwarding
 ├── privileged/    macOS Swift helper RPC, Linux direct ops
-├── scanner/       ARP/port/mDNS/SSDP/DNS scanning
+├── scanner/       ARP/port/mDNS/SSDP scanning
 ├── scouts/        Scout engine, scheduler, mimic orchestrator, templates, mDNS
 ├── secrets/       Keychain, encrypted file storage
 └── security/      Port risk analysis, security insights
@@ -206,7 +208,6 @@ sensor/src/squirrelops_home_sensor/
 - **Decoys never collide** — decoy services avoid real ports and don't respond to broadcast discovery
 - **Virtual IPs avoid conflicts** — allocated from high end of subnet, excluded from scan loop, evacuated if a real device claims the IP
 - **48-hour learning** — behavioral anomaly alerts are suppressed during learning; decoy trip alerts fire immediately
-- **Canaries off by default** — DNS canary hostnames are opt-in; no external server dependency unless you configure one
 
 ## License
 

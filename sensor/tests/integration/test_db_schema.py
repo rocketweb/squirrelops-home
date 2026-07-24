@@ -5,6 +5,7 @@ from __future__ import annotations
 import aiosqlite
 import pytest
 
+from squirrelops_home_sensor.db import migrations as db_migrations
 from squirrelops_home_sensor.db.migrations import apply_migrations
 from squirrelops_home_sensor.db.schema import (
     SCHEMA_VERSION,
@@ -59,6 +60,14 @@ async def _get_foreign_keys(
     return [(row[3], row[2], row[4]) for row in rows]
 
 
+async def _apply_through_v8(db: aiosqlite.Connection) -> None:
+    """Build the exact pre-V9 schema for migration regressions."""
+    for version, migration in db_migrations._MIGRATIONS:
+        if version >= 9:
+            break
+        await migration(db)
+
+
 # ---------------------------------------------------------------------------
 # Tests: Fresh database creation
 # ---------------------------------------------------------------------------
@@ -101,8 +110,9 @@ class TestFreshDatabase:
     async def test_all_table_names_helper(self) -> None:
         names = get_all_table_names()
         assert "events" in names
+        assert "decoy_hosts" in names
         assert "schema_version" in names
-        assert len(names) == 18
+        assert len(names) == 19
 
     @pytest.mark.asyncio
     async def test_idempotent_migration(self) -> None:
@@ -135,7 +145,7 @@ class TestEventsTable:
                 "INSERT INTO events (event_type, payload) VALUES ('test2', '{}')"
             )
             cursor = await db.execute("SELECT seq FROM events ORDER BY seq")
-            rows = await cursor.fetchall()
+            rows = list(await cursor.fetchall())
             assert rows[0][0] == 1
             assert rows[1][0] == 2
 
@@ -430,3 +440,716 @@ class TestIndexes:
             }
             for idx in expected_indexes:
                 assert idx in indexes, f"Missing index: {idx}"
+
+
+class TestV9MimicMigration:
+    """Verify legacy fake hosts migrate without unsafe bindings or lost evidence."""
+
+    @pytest.mark.asyncio
+    async def test_unspecified_legacy_binding_is_retired_and_released(
+        self,
+    ) -> None:
+        async with aiosqlite.connect(":memory:") as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            await _apply_through_v8(db)
+            await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    created_at, updated_at)
+                   VALUES ('broken.local', 'mimic', '0.0.0.0', 8080,
+                           'active', '{}', '2026-01-01', '2026-01-01')"""
+            )
+            decoy_id = (await (
+                await db.execute("SELECT id FROM decoys")
+            ).fetchone())["id"]
+            await db.execute(
+                """INSERT INTO virtual_ips
+                   (ip_address, interface, decoy_id, created_at)
+                   VALUES ('0.0.0.0', 'en0', ?, '2026-01-01')""",
+                (decoy_id,),
+            )
+            await db.commit()
+
+            await db_migrations._apply_v9(db)
+
+            service = await (
+                await db.execute(
+                    """SELECT status, retired_at, retirement_reason
+                       FROM decoys WHERE id = ?""",
+                    (decoy_id,),
+                )
+            ).fetchone()
+            host = await (
+                await db.execute(
+                    """SELECT retired_at, retirement_reason
+                       FROM decoy_hosts WHERE bind_address = '0.0.0.0'"""
+                )
+            ).fetchone()
+            assert service["status"] == "stopped"
+            assert service["retired_at"] is not None
+            assert service["retirement_reason"] == (
+                "invalid_legacy_bind_address"
+            )
+            assert host["retired_at"] is not None
+            assert host["retirement_reason"] == (
+                "invalid_legacy_bind_address"
+            )
+            assert await (
+                await db.execute(
+                    "SELECT id FROM virtual_ips WHERE ip_address = '0.0.0.0'"
+                )
+            ).fetchone() is None
+
+    @pytest.mark.asyncio
+    async def test_partial_overlap_remaps_evidence_without_deleting_history(
+        self,
+    ) -> None:
+        async with aiosqlite.connect(":memory:") as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            await _apply_through_v8(db)
+            common = (
+                "legacy.local",
+                "mimic",
+                "192.168.1.200",
+                "active",
+                "2026-01-01",
+                "2026-01-01",
+            )
+            first = await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    connection_count, credential_trip_count,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, 80, ?, ?, 0, 0, ?, ?)""",
+                (*common[:4], '{"port_configs":[{"port":80}]}', *common[4:]),
+            )
+            second = await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    connection_count, credential_trip_count,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, 80, ?, ?, 2, 1, ?, ?)""",
+                (
+                    *common[:4],
+                    (
+                        '{"port_configs":['
+                        '{"port":80},{"port":443,"tls":true}]}'
+                    ),
+                    *common[4:],
+                ),
+            )
+            primary_id = int(first.lastrowid)
+            overlap_id = int(second.lastrowid)
+            credential = await db.execute(
+                """INSERT INTO planted_credentials
+                   (credential_type, credential_value, planted_location,
+                    decoy_id, created_at)
+                   VALUES ('password', 'secret', '/passwords.txt', ?,
+                           '2026-01-01')""",
+                (overlap_id,),
+            )
+            credential_id = int(credential.lastrowid)
+            await db.execute(
+                """INSERT INTO decoy_connections
+                   (decoy_id, source_ip, port, protocol, timestamp)
+                   VALUES (?, '192.168.1.50', 80, 'tcp', '2026-01-01')""",
+                (overlap_id,),
+            )
+            await db.execute(
+                """INSERT INTO decoy_connections
+                   (decoy_id, source_ip, port, protocol, credential_used,
+                    credential_id, timestamp)
+                   VALUES (?, '192.168.1.50', 443, 'tcp', 'secret', ?,
+                           '2026-01-01')""",
+                (overlap_id, credential_id),
+            )
+            incident = await db.execute(
+                """INSERT INTO incidents
+                   (source_ip, severity, first_alert_at, last_alert_at)
+                   VALUES ('192.168.1.50', 'high', '2026-01-01',
+                           '2026-01-01')"""
+            )
+            incident_id = int(incident.lastrowid)
+            for title, detail in (
+                ("HTTP", '{"dest_port":80,"protocol":"tcp"}'),
+                ("HTTPS", '{"dest_port":443,"protocol":"tcp"}'),
+                ("Malformed", "{not-json"),
+                (
+                    "NonInteger",
+                    '{"dest_port":"443oops","protocol":"tcp"}',
+                ),
+            ):
+                await db.execute(
+                    """INSERT INTO home_alerts
+                       (incident_id, alert_type, severity, title, detail,
+                        decoy_id, created_at)
+                       VALUES (?, 'decoy_trip', 'high', ?, ?, ?,
+                               '2026-01-01')""",
+                    (incident_id, title, detail, overlap_id),
+                )
+            await db.commit()
+
+            await db_migrations._apply_v9(db)
+
+            services = list(await (
+                await db.execute(
+                    """SELECT id, port, connection_count,
+                              credential_trip_count
+                       FROM decoys
+                       WHERE bind_address = '192.168.1.200'
+                       ORDER BY port"""
+                )
+            ).fetchall())
+            assert [
+                (
+                    row["id"],
+                    row["port"],
+                    row["connection_count"],
+                    row["credential_trip_count"],
+                )
+                for row in services
+            ] == [
+                (primary_id, 80, 1, 0),
+                (overlap_id, 443, 1, 1),
+            ]
+            connections = list(await (
+                await db.execute(
+                    """SELECT port, decoy_id
+                       FROM decoy_connections ORDER BY port"""
+                )
+            ).fetchall())
+            assert [(row["port"], row["decoy_id"]) for row in connections] == [
+                (80, primary_id),
+                (443, overlap_id),
+            ]
+            alerts = list(await (
+                await db.execute(
+                    "SELECT title, decoy_id, incident_id FROM home_alerts"
+                )
+            ).fetchall())
+            assert {
+                row["title"]: (row["decoy_id"], row["incident_id"])
+                for row in alerts
+            } == {
+                "HTTP": (primary_id, incident_id),
+                "HTTPS": (overlap_id, incident_id),
+                "Malformed": (primary_id, incident_id),
+                "NonInteger": (primary_id, incident_id),
+            }
+            owner = await (
+                await db.execute(
+                    """SELECT decoy_id FROM planted_credentials
+                       WHERE id = ?""",
+                    (credential_id,),
+                )
+            ).fetchone()
+            assert owner["decoy_id"] == primary_id
+
+    @pytest.mark.asyncio
+    async def test_full_overlap_dispatches_evidence_to_retained_services(
+        self,
+    ) -> None:
+        async with aiosqlite.connect(":memory:") as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            await _apply_through_v8(db)
+            config = (
+                '{"port_configs":['
+                '{"port":80,"protocol":"tcp"},'
+                '{"port":443,"protocol":"tcp","tls":true}]}'
+            )
+            first = await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    connection_count, credential_trip_count,
+                    created_at, updated_at)
+                   VALUES ('legacy.local', 'mimic', '192.168.1.200', 80,
+                           'active', ?, 1, 0, '2026-01-01',
+                           '2026-01-01')""",
+                (config,),
+            )
+            duplicate = await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    connection_count, credential_trip_count,
+                    created_at, updated_at)
+                   VALUES ('legacy.local', 'mimic', '192.168.1.200', 80,
+                           'active', ?, 3, 1, '2026-01-01',
+                           '2026-01-01')""",
+                (config,),
+            )
+            primary_id = int(first.lastrowid)
+            duplicate_id = int(duplicate.lastrowid)
+            await db.execute(
+                """INSERT INTO decoy_connections
+                   (decoy_id, source_ip, port, protocol, timestamp)
+                   VALUES (?, '192.168.1.50', 80, 'tcp', '2026-01-01')""",
+                (primary_id,),
+            )
+            credential = await db.execute(
+                """INSERT INTO planted_credentials
+                   (credential_type, credential_value, planted_location,
+                    decoy_id, created_at)
+                   VALUES ('password', 'secret', '/passwords.txt', ?,
+                           '2026-01-01')""",
+                (duplicate_id,),
+            )
+            credential_id = int(credential.lastrowid)
+            await db.execute(
+                """INSERT INTO decoy_connections
+                   (decoy_id, source_ip, port, protocol, credential_used,
+                    credential_id, timestamp)
+                   VALUES (?, '192.168.1.51', 443, 'tcp', 'secret', ?,
+                           '2026-01-01')""",
+                (duplicate_id, credential_id),
+            )
+            await db.execute(
+                """INSERT INTO decoy_connections
+                   (decoy_id, source_ip, port, protocol, timestamp)
+                   VALUES (?, '192.168.1.52', 9999, 'tcp', '2026-01-01')""",
+                (duplicate_id,),
+            )
+            for title, detail in (
+                ("HTTPS", '{"dest_port":443,"protocol":"tcp"}'),
+                ("Unknown", '{"dest_port":9999,"protocol":"tcp"}'),
+                ("Malformed", "{not-json"),
+            ):
+                await db.execute(
+                    """INSERT INTO home_alerts
+                       (alert_type, severity, title, detail, decoy_id,
+                        created_at)
+                       VALUES ('decoy_trip', 'high', ?, ?, ?,
+                               '2026-01-01')""",
+                    (title, detail, duplicate_id),
+                )
+            await db.execute(
+                """INSERT INTO virtual_ips
+                   (ip_address, interface, decoy_id, created_at)
+                   VALUES ('192.168.1.200', 'en0', ?, '2026-01-01')""",
+                (duplicate_id,),
+            )
+            await db.commit()
+
+            await db_migrations._apply_v9(db)
+
+            services = list(await (
+                await db.execute(
+                    """SELECT id, port, connection_count,
+                              credential_trip_count
+                       FROM decoys
+                       WHERE bind_address = '192.168.1.200'
+                       ORDER BY port"""
+                )
+            ).fetchall())
+            assert len(services) == 2
+            service_ids = {
+                int(row["port"]): int(row["id"])
+                for row in services
+            }
+            assert service_ids[80] == primary_id
+            assert [
+                (
+                    int(row["port"]),
+                    int(row["connection_count"]),
+                    int(row["credential_trip_count"]),
+                )
+                for row in services
+            ] == [(80, 3, 0), (443, 1, 1)]
+
+            connections = list(await (
+                await db.execute(
+                    """SELECT port, decoy_id
+                       FROM decoy_connections ORDER BY id"""
+                )
+            ).fetchall())
+            assert [
+                (int(row["port"]), int(row["decoy_id"]))
+                for row in connections
+            ] == [
+                (80, service_ids[80]),
+                (443, service_ids[443]),
+                (9999, service_ids[80]),
+            ]
+            alerts = list(await (
+                await db.execute(
+                    "SELECT title, decoy_id FROM home_alerts ORDER BY id"
+                )
+            ).fetchall())
+            assert {
+                row["title"]: int(row["decoy_id"])
+                for row in alerts
+            } == {
+                "HTTPS": service_ids[443],
+                "Unknown": service_ids[80],
+                "Malformed": service_ids[80],
+            }
+            credential_owner = await (
+                await db.execute(
+                    """SELECT decoy_id FROM planted_credentials
+                       WHERE id = ?""",
+                    (credential_id,),
+                )
+            ).fetchone()
+            assert int(credential_owner["decoy_id"]) == service_ids[80]
+            virtual_ip = await (
+                await db.execute(
+                    """SELECT decoy_id FROM virtual_ips
+                       WHERE ip_address = '192.168.1.200'"""
+                )
+            ).fetchone()
+            assert int(virtual_ip["decoy_id"]) == service_ids[80]
+
+    @pytest.mark.asyncio
+    async def test_full_overlap_keeps_ambiguous_service_evidence_primary(
+        self,
+    ) -> None:
+        async with aiosqlite.connect(":memory:") as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            await _apply_through_v8(db)
+            config = (
+                '{"port_configs":['
+                '{"port":80,"protocol":"tcp"},'
+                '{"port":443,"protocol":"tcp","tls":true},'
+                '{"port":443,"protocol":"udp"},'
+                '{"port":8443,"protocol":"tcp","tls":true}]}'
+            )
+            first = await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    created_at, updated_at)
+                   VALUES ('legacy.local', 'mimic', '192.168.1.200', 80,
+                           'active', ?, '2026-01-01', '2026-01-01')""",
+                (config,),
+            )
+            duplicate = await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    connection_count, created_at, updated_at)
+                   VALUES ('legacy.local', 'mimic', '192.168.1.200', 80,
+                           'active', ?, 4, '2026-01-01',
+                           '2026-01-01')""",
+                (config,),
+            )
+            primary_id = int(first.lastrowid)
+            duplicate_id = int(duplicate.lastrowid)
+            subset = await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    connection_count, created_at, updated_at)
+                   VALUES ('legacy.local', 'mimic', '192.168.1.200', 443,
+                           'active', ?, 1, '2026-01-01', '2026-01-01')""",
+                (
+                    '{"port_configs":['
+                    '{"port":443,"protocol":"tcp"}]}',
+                ),
+            )
+            subset_id = int(subset.lastrowid)
+            for port, protocol in (
+                (443, None),
+                (443, "tcp"),
+                (443, "udp"),
+                (8443, None),
+            ):
+                await db.execute(
+                    """INSERT INTO decoy_connections
+                       (decoy_id, source_ip, port, protocol, timestamp)
+                       VALUES (?, '192.168.1.50', ?, ?, '2026-01-01')""",
+                    (duplicate_id, port, protocol),
+                )
+            await db.execute(
+                """INSERT INTO decoy_connections
+                   (decoy_id, source_ip, port, protocol, timestamp)
+                   VALUES (?, '192.168.1.51', 443, NULL, '2026-01-01')""",
+                (subset_id,),
+            )
+            for title, detail in (
+                ("Ambiguous", '{"dest_port":443}'),
+                ("TCP", '{"dest_port":443,"protocol":"tcp"}'),
+                ("UDP", '{"dest_port":443,"protocol":"udp"}'),
+                ("Single", '{"dest_port":8443}'),
+                ("Real", '{"dest_port":443.9,"protocol":"tcp"}'),
+                ("Prefix", '{"dest_port":"443oops","protocol":"tcp"}'),
+                ("String", '{"dest_port":"443","protocol":"tcp"}'),
+                ("Fallback", '{"port":443,"protocol":"tcp"}'),
+            ):
+                await db.execute(
+                    """INSERT INTO home_alerts
+                       (alert_type, severity, title, detail, decoy_id,
+                        created_at)
+                       VALUES ('decoy_trip', 'high', ?, ?, ?,
+                               '2026-01-01')""",
+                    (title, detail, duplicate_id),
+                )
+            await db.execute(
+                """INSERT INTO home_alerts
+                   (alert_type, severity, title, detail, decoy_id,
+                    created_at)
+                   VALUES ('decoy_trip', 'high', 'SubsetAmbiguous',
+                           '{"dest_port":443}', ?, '2026-01-01')""",
+                (subset_id,),
+            )
+            await db.commit()
+
+            await db_migrations._apply_v9(db)
+
+            services = list(await (
+                await db.execute(
+                    """SELECT id, port, protocol, connection_count
+                       FROM decoys
+                       WHERE bind_address = '192.168.1.200'"""
+                )
+            ).fetchall())
+            service_ids = {
+                (int(row["port"]), row["protocol"]): int(row["id"])
+                for row in services
+            }
+            assert service_ids[(80, "tcp")] == primary_id
+            assert {
+                key: int(row["connection_count"])
+                for row in services
+                if (key := (int(row["port"]), row["protocol"]))
+            } == {
+                (80, "tcp"): 2,
+                (443, "tcp"): 1,
+                (443, "udp"): 1,
+                (8443, "tcp"): 1,
+            }
+            connections = list(await (
+                await db.execute(
+                    """SELECT port, protocol, decoy_id
+                       FROM decoy_connections ORDER BY id"""
+                )
+            ).fetchall())
+            assert [
+                (int(row["port"]), row["protocol"], int(row["decoy_id"]))
+                for row in connections
+            ] == [
+                (443, None, service_ids[(80, "tcp")]),
+                (443, "tcp", service_ids[(443, "tcp")]),
+                (443, "udp", service_ids[(443, "udp")]),
+                (8443, None, service_ids[(8443, "tcp")]),
+                (443, None, service_ids[(80, "tcp")]),
+            ]
+            alerts = list(await (
+                await db.execute(
+                    "SELECT title, decoy_id FROM home_alerts ORDER BY id"
+                )
+            ).fetchall())
+            assert {
+                row["title"]: int(row["decoy_id"])
+                for row in alerts
+            } == {
+                "Ambiguous": service_ids[(80, "tcp")],
+                "TCP": service_ids[(443, "tcp")],
+                "UDP": service_ids[(443, "udp")],
+                "Single": service_ids[(8443, "tcp")],
+                "Real": service_ids[(80, "tcp")],
+                "Prefix": service_ids[(80, "tcp")],
+                "String": service_ids[(80, "tcp")],
+                "Fallback": service_ids[(443, "tcp")],
+                "SubsetAmbiguous": service_ids[(80, "tcp")],
+            }
+
+    @pytest.mark.asyncio
+    async def test_full_overlap_conservatively_merges_failure_metadata(
+        self,
+    ) -> None:
+        async with aiosqlite.connect(":memory:") as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            await _apply_through_v8(db)
+            config = '{"port_configs":[{"port":80,"protocol":"tcp"}]}'
+            rows = (
+                (
+                    "192.168.1.210",
+                    "active",
+                    2,
+                    "2026-01-02T00:00:00+00:00",
+                ),
+                (
+                    "192.168.1.210",
+                    "degraded",
+                    3,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    "192.168.1.211",
+                    "active",
+                    1,
+                    "2026-01-05T00:00:00+00:00",
+                ),
+                (
+                    "192.168.1.211",
+                    "stopped",
+                    7,
+                    "2026-01-04T00:00:00+00:00",
+                ),
+            )
+            primary_ids: dict[str, int] = {}
+            for bind_address, status, failures, last_failure_at in rows:
+                inserted = await db.execute(
+                    """INSERT INTO decoys
+                       (name, decoy_type, bind_address, port, status, config,
+                        failure_count, last_failure_at, created_at,
+                        updated_at)
+                       VALUES ('legacy.local', 'mimic', ?, 80, ?, ?, ?, ?,
+                               '2026-01-01', '2026-01-01')""",
+                    (
+                        bind_address,
+                        status,
+                        config,
+                        failures,
+                        last_failure_at,
+                    ),
+                )
+                primary_ids.setdefault(
+                    bind_address,
+                    int(inserted.lastrowid),
+                )
+            await db.commit()
+
+            await db_migrations._apply_v9(db)
+
+            migrated = list(await (
+                await db.execute(
+                    """SELECT id, bind_address, status, failure_count,
+                              last_failure_at
+                       FROM decoys
+                       WHERE bind_address IN (
+                           '192.168.1.210',
+                           '192.168.1.211'
+                       )
+                       ORDER BY bind_address"""
+                )
+            ).fetchall())
+            assert [
+                (
+                    int(row["id"]),
+                    row["bind_address"],
+                    row["status"],
+                    int(row["failure_count"]),
+                    row["last_failure_at"],
+                )
+                for row in migrated
+            ] == [
+                (
+                    primary_ids["192.168.1.210"],
+                    "192.168.1.210",
+                    "degraded",
+                    5,
+                    "2026-01-03T00:00:00+00:00",
+                ),
+                (
+                    primary_ids["192.168.1.211"],
+                    "192.168.1.211",
+                    "active",
+                    8,
+                    "2026-01-05T00:00:00+00:00",
+                ),
+            ]
+
+    @pytest.mark.asyncio
+    async def test_initial_split_keeps_ambiguous_service_evidence_primary(
+        self,
+    ) -> None:
+        async with aiosqlite.connect(":memory:") as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA foreign_keys = ON")
+            await _apply_through_v8(db)
+            config = (
+                '{"port_configs":['
+                '{"port":80,"protocol":"tcp"},'
+                '{"port":443,"protocol":"tcp","tls":true},'
+                '{"port":443,"protocol":"udp"},'
+                '{"port":8443,"protocol":"tcp","tls":true}]}'
+            )
+            inserted = await db.execute(
+                """INSERT INTO decoys
+                   (name, decoy_type, bind_address, port, status, config,
+                    connection_count, created_at, updated_at)
+                   VALUES ('legacy.local', 'mimic', '192.168.1.200', 80,
+                           'active', ?, 2, '2026-01-01',
+                           '2026-01-01')""",
+                (config,),
+            )
+            primary_id = int(inserted.lastrowid)
+            for port in (443, 8443):
+                await db.execute(
+                    """INSERT INTO decoy_connections
+                       (decoy_id, source_ip, port, protocol, timestamp)
+                       VALUES (?, '192.168.1.50', ?, NULL,
+                               '2026-01-01')""",
+                    (primary_id, port),
+                )
+            for title, detail in (
+                ("Ambiguous", '{"dest_port":443}'),
+                ("Single", '{"dest_port":8443}'),
+                ("Real", '{"dest_port":443.9,"protocol":"tcp"}'),
+                ("Prefix", '{"dest_port":"443oops","protocol":"tcp"}'),
+                ("Exact", '{"dest_port":443,"protocol":"tcp"}'),
+            ):
+                await db.execute(
+                    """INSERT INTO home_alerts
+                       (alert_type, severity, title, detail, decoy_id,
+                        created_at)
+                       VALUES ('decoy_trip', 'high', ?, ?, ?,
+                               '2026-01-01')""",
+                    (title, detail, primary_id),
+                )
+            await db.commit()
+
+            await db_migrations._apply_v9(db)
+
+            services = list(await (
+                await db.execute(
+                    """SELECT id, port, protocol, connection_count
+                       FROM decoys
+                       WHERE bind_address = '192.168.1.200'"""
+                )
+            ).fetchall())
+            service_ids = {
+                (int(row["port"]), row["protocol"]): int(row["id"])
+                for row in services
+            }
+            assert service_ids[(80, "tcp")] == primary_id
+            assert {
+                (int(row["port"]), row["protocol"]): int(
+                    row["connection_count"]
+                )
+                for row in services
+            } == {
+                (80, "tcp"): 1,
+                (443, "tcp"): 0,
+                (443, "udp"): 0,
+                (8443, "tcp"): 1,
+            }
+            connections = list(await (
+                await db.execute(
+                    "SELECT port, decoy_id FROM decoy_connections ORDER BY id"
+                )
+            ).fetchall())
+            assert [
+                (int(row["port"]), int(row["decoy_id"]))
+                for row in connections
+            ] == [
+                (443, service_ids[(80, "tcp")]),
+                (8443, service_ids[(8443, "tcp")]),
+            ]
+            alerts = list(await (
+                await db.execute(
+                    "SELECT title, decoy_id FROM home_alerts ORDER BY id"
+                )
+            ).fetchall())
+            assert {
+                row["title"]: int(row["decoy_id"])
+                for row in alerts
+            } == {
+                "Ambiguous": service_ids[(80, "tcp")],
+                "Single": service_ids[(8443, "tcp")],
+                "Real": service_ids[(80, "tcp")],
+                "Prefix": service_ids[(80, "tcp")],
+                "Exact": service_ids[(443, "tcp")],
+            }

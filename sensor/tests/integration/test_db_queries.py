@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 
 import aiosqlite
@@ -62,7 +63,7 @@ from squirrelops_home_sensor.db.queries import (
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-async def db() -> aiosqlite.Connection:
+async def db() -> AsyncGenerator[aiosqlite.Connection, None]:
     """Create an in-memory database with schema applied.
 
     Foreign keys are OFF because the schema references Pingting's ``devices``

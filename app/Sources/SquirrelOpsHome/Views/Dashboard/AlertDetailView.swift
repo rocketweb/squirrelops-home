@@ -89,7 +89,7 @@ struct AlertDetailView: View {
                         .foregroundStyle(severityColor(alert.severity))
                 }
 
-                Text(alert.createdAt)
+                Text(TimestampPresentation.local(alert.createdAt))
                     .font(Typography.mono)
                     .tracking(Typography.monoTracking)
                     .foregroundStyle(Theme.textTertiary(colorScheme))

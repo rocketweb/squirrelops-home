@@ -14,6 +14,34 @@ from squirrelops_home_sensor.mdns import (
 )
 
 
+def test_entry_point_supplies_route_selected_sensor_ip() -> None:
+    import squirrelops_home_sensor.__main__ as entry
+
+    advertiser = MagicMock()
+    with (
+        patch.object(
+            entry,
+            "_detect_sensor_ip",
+            return_value="192.168.1.18",
+        ),
+        patch(
+            "squirrelops_home_sensor.mdns.ServiceAdvertiser",
+            return_value=advertiser,
+        ) as factory,
+    ):
+        created = entry.create_mdns_advertiser(
+            {"sensor": {"name": "TestSensor"}},
+            8443,
+        )
+
+    assert created is advertiser
+    factory.assert_called_once_with(
+        name="TestSensor",
+        port=8443,
+        preferred_ip="192.168.1.18",
+    )
+
+
 class TestServiceAdvertiser:
     """Verify mDNS service registration lifecycle."""
 
@@ -69,6 +97,36 @@ class TestServiceAdvertiser:
         registered_info = mock_zc.async_register_service.call_args[0][0]
         import socket
         assert registered_info.addresses == [socket.inet_aton("192.168.1.42")]
+
+    @pytest.mark.asyncio
+    async def test_route_selected_sensor_ip_wins_over_virtual_aliases(self) -> None:
+        """Loopback mimic addresses must never replace the real API address."""
+        mock_zc = AsyncMock()
+        with (
+            patch(
+                "squirrelops_home_sensor.mdns._collect_interface_ips",
+                return_value=[
+                    "192.168.1.200",
+                    "192.168.1.201",
+                    "192.168.1.18",
+                ],
+            ),
+            patch(
+                "squirrelops_home_sensor.mdns.AsyncZeroconf",
+                return_value=mock_zc,
+            ),
+        ):
+            adv = ServiceAdvertiser(
+                name="TestSensor",
+                port=8443,
+                preferred_ip="192.168.1.18",
+            )
+            await adv.start()
+
+        registered_info = mock_zc.async_register_service.call_args[0][0]
+        import socket
+
+        assert registered_info.addresses == [socket.inet_aton("192.168.1.18")]
 
 
 class TestIsLanIp:
@@ -171,3 +229,19 @@ class TestCollectInterfaceIps:
         """Should return empty list if OS command fails."""
         with patch("subprocess.run", side_effect=FileNotFoundError):
             assert _collect_interface_ips() == []
+
+    def test_macos_parser_excludes_non_loopback_addresses_on_lo0(self) -> None:
+        output = """\
+lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST>
+    inet 127.0.0.1 netmask 0xff000000
+    inet 192.168.1.200 netmask 0xffffffff
+    inet 192.168.1.201 netmask 0xffffffff
+en0: flags=8863<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST>
+    inet 192.168.1.18 netmask 0xffffff00 broadcast 192.168.1.255
+"""
+        result = MagicMock(stdout=output)
+        with (
+            patch("squirrelops_home_sensor.mdns.sys.platform", "darwin"),
+            patch("subprocess.run", return_value=result),
+        ):
+            assert _collect_interface_ips() == ["192.168.1.18"]

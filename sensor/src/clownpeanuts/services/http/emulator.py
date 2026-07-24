@@ -23,6 +23,10 @@ REQUEST_TIMEOUT_SECONDS = 5
 class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
     """Threaded HTTP server with a hard per-decoy concurrency ceiling."""
 
+    # Package upgrades stop and immediately restart active decoys. Reusing the
+    # listening address avoids leaving a decoy offline while prior connections
+    # finish their TCP TIME_WAIT lifecycle.
+    allow_reuse_address = True
     request_queue_size = MAX_CONCURRENT_REQUESTS
 
     def __init__(self, *args, **kwargs):

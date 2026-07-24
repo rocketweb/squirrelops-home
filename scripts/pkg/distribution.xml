@@ -8,7 +8,7 @@
         <os-version min="14.0"/>
     </allowed-os-versions>
 
-    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <options customize="never" require-scripts="false" hostArchitectures="__HOST_ARCH__"/>
 
     <pkg-ref id="com.squirrelops.home.app"/>
     <pkg-ref id="com.squirrelops.home.sensor"/>

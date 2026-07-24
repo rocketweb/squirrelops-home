@@ -121,9 +121,8 @@ async def probe_ports(
 ):
     """Probe specific ports on a device for service detection.
 
-    Uses the privileged operations layer (nmap -sV on Linux, Swift helper
-    on macOS) for deep service/version detection. Results are persisted
-    back to device_open_ports for caching.
+    Uses nmap service detection on Linux and bounded TCP/banner probes on
+    macOS. Results are persisted back to device_open_ports for caching.
     """
     if not body.ports:
         return []
@@ -134,9 +133,8 @@ async def probe_ports(
             detail="Maximum 50 ports per probe request",
         )
 
-    # The target reaches nmap argv in the privileged layer. Only allow a
-    # private LAN IPv4 address: this blocks option-injection (leading '-'),
-    # hostnames, and off-LAN / cloud-metadata SSRF amplification.
+    # Only allow a private LAN IPv4 address. This blocks option-injection for
+    # Linux nmap and off-LAN/cloud-metadata scanning on every platform.
     if not is_safe_scan_target(body.ip_address):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

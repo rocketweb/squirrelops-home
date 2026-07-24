@@ -14,6 +14,7 @@ import pytest
 from squirrelops_home_sensor.decoys.orchestrator import (
     DecoyHealth,
     DecoyOrchestrator,
+    _resolve_bind_address,
 )
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
@@ -193,6 +194,181 @@ class TestProfileLimits:
         assert len(candidates) == 0
 
 
+class TestAutoDeployment:
+    """Auto-deployment should scale and bind only to the real LAN address."""
+
+    def test_bind_resolution_defers_when_no_lan_address_exists(self, monkeypatch):
+        """Offline startup must not turn loopback into a persisted host listener."""
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._route_selected_ip",
+            lambda: None,
+        )
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._interface_ipv4_addresses",
+            lambda _: ["127.0.0.1", "169.254.12.34"],
+        )
+
+        assert _resolve_bind_address(
+            interface="en0",
+            excluded_ips=set(),
+            virtual_ip_range_start=200,
+            virtual_ip_range_end=250,
+        ) is None
+
+    def test_bind_resolution_never_selects_virtual_alias(self, monkeypatch):
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._route_selected_ip",
+            lambda: "192.168.1.200",
+        )
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._interface_ipv4_addresses",
+            lambda _: ["192.168.1.200", "192.168.1.79"],
+        )
+
+        assert _resolve_bind_address(
+            interface="en0",
+            excluded_ips={"192.168.1.200"},
+            virtual_ip_range_start=200,
+            virtual_ip_range_end=250,
+        ) == "192.168.1.79"
+
+    @pytest.mark.asyncio
+    async def test_later_scans_add_newly_discovered_decoy_types(
+        self, db, event_bus, monkeypatch,
+    ):
+        orchestrator = DecoyOrchestrator(
+            event_bus=event_bus,
+            db=db,
+            max_decoys=8,
+            bind_address="192.168.1.79",
+        )
+
+        def fake_factory(**kwargs):
+            return FakeDecoy(
+                decoy_id=kwargs["decoy_id"],
+                name=kwargs["name"],
+                port=kwargs["port"],
+                decoy_type=kwargs["decoy_type"],
+                bind_address=kwargs["bind_address"],
+            )
+
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._create_decoy_instance",
+            fake_factory,
+        )
+
+        first = await orchestrator.auto_deploy([
+            {"ip": "192.168.1.10", "port": 445, "protocol": "tcp"},
+        ])
+        second = await orchestrator.auto_deploy([
+            {"ip": "192.168.1.10", "port": 445, "protocol": "tcp"},
+            {"ip": "192.168.1.11", "port": 3000, "protocol": "tcp"},
+        ])
+
+        assert first == 1
+        assert second == 1
+        cursor = await db.execute(
+            "SELECT decoy_type, bind_address FROM decoys ORDER BY id"
+        )
+        rows = await cursor.fetchall()
+        assert [row["decoy_type"] for row in rows] == ["file_share", "dev_server"]
+        assert {row["bind_address"] for row in rows} == {"192.168.1.79"}
+
+    @pytest.mark.asyncio
+    async def test_resume_migrates_legacy_wildcard_bind(
+        self, db, event_bus, monkeypatch,
+    ):
+        await db.execute(
+            """INSERT INTO decoys
+               (name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at)
+               VALUES ('Legacy', 'file_share', '0.0.0.0', 9900, 'active', '{}',
+                       '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"""
+        )
+        await db.commit()
+        orchestrator = DecoyOrchestrator(
+            event_bus=event_bus,
+            db=db,
+            bind_address="192.168.1.79",
+        )
+
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._create_decoy_instance",
+            lambda **kwargs: FakeDecoy(
+                decoy_id=kwargs["decoy_id"],
+                name=kwargs["name"],
+                port=kwargs["port"],
+                decoy_type=kwargs["decoy_type"],
+                bind_address=kwargs["bind_address"],
+            ),
+        )
+
+        assert await orchestrator.resume_active() == 1
+        row = await (
+            await db.execute("SELECT bind_address FROM decoys WHERE name = 'Legacy'")
+        ).fetchone()
+        assert row["bind_address"] == "192.168.1.79"
+        record = orchestrator.get_decoy(1)
+        assert record is not None
+        assert record.decoy.bind_address == "192.168.1.79"
+
+    @pytest.mark.asyncio
+    async def test_deferred_resume_retries_after_network_returns(
+        self, db, event_bus, monkeypatch,
+    ):
+        """An offline startup stays degraded and a later scan restores the listener."""
+        await db.execute(
+            """INSERT INTO decoys
+               (name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at)
+               VALUES ('Legacy', 'file_share', '127.0.0.1', 9900, 'active', '{}',
+                       '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"""
+        )
+        await db.commit()
+
+        route_address: dict[str, str | None] = {"value": None}
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._route_selected_ip",
+            lambda: route_address["value"],
+        )
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._interface_ipv4_addresses",
+            lambda _: [],
+        )
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._create_decoy_instance",
+            lambda **kwargs: FakeDecoy(
+                decoy_id=kwargs["decoy_id"],
+                name=kwargs["name"],
+                port=kwargs["port"],
+                decoy_type=kwargs["decoy_type"],
+                bind_address=kwargs["bind_address"],
+            ),
+        )
+        orchestrator = DecoyOrchestrator(event_bus=event_bus, db=db)
+
+        assert await orchestrator.resume_active() == 0
+        row = await (
+            await db.execute(
+                "SELECT status, bind_address FROM decoys WHERE name = 'Legacy'"
+            )
+        ).fetchone()
+        assert (row["status"], row["bind_address"]) == ("degraded", "0.0.0.0")
+        assert orchestrator.get_decoy(1) is None
+
+        route_address["value"] = "192.168.1.79"
+        assert await orchestrator.auto_deploy([]) == 1
+        row = await (
+            await db.execute(
+                "SELECT status, bind_address FROM decoys WHERE name = 'Legacy'"
+            )
+        ).fetchone()
+        assert (row["status"], row["bind_address"]) == ("active", "192.168.1.79")
+        record = orchestrator.get_decoy(1)
+        assert record is not None
+        assert record.decoy.bind_address == "192.168.1.79"
+
+
 # ---------------------------------------------------------------------------
 # Deployment lifecycle
 # ---------------------------------------------------------------------------
@@ -256,10 +432,7 @@ class TestHealthStateMachine:
     """Health state machine: ACTIVE -> RESTARTING -> DEGRADED cycle."""
 
     @pytest.fixture
-    def orchestrator(self):
-        event_bus = AsyncMock()
-        event_bus.publish = AsyncMock(return_value=1)
-        db = AsyncMock()
+    def orchestrator(self, db, event_bus):
         return DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
 
     @pytest.mark.asyncio
@@ -319,9 +492,19 @@ class TestHealthStateMachine:
         assert record.health == DecoyHealth.DEGRADED
 
     @pytest.mark.asyncio
-    async def test_manual_restart_resets_failure_count(self, orchestrator):
+    async def test_manual_restart_resets_failure_count(
+        self, orchestrator, db, monkeypatch,
+    ):
         """Manual restart should reset failure count and return to ACTIVE."""
         decoy = FakeDecoy(decoy_id=1, name="test", port=9999)
+        await db.execute(
+            """INSERT INTO decoys
+               (id, name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at)
+               VALUES (1, 'test', 'file_share', '127.0.0.1', 9999, 'active',
+                       '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"""
+        )
+        await db.commit()
         await orchestrator.deploy_decoy(decoy)
 
         # Accumulate failures
@@ -332,7 +515,11 @@ class TestHealthStateMachine:
 
         # Manual restart with working decoy
         decoy.fail_on_start = False
-        await orchestrator.restart_decoy(1)
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._create_decoy_instance",
+            lambda **_: decoy,
+        )
+        assert await orchestrator.restart_decoy(1) is True
 
         record = orchestrator.get_decoy(1)
         assert record.health == DecoyHealth.ACTIVE

@@ -23,12 +23,12 @@ struct RPCServerTests {
     @Test("Parse valid request without params")
     func parseRequestNoParams() throws {
         let json = """
-        {"jsonrpc": "2.0", "method": "stopDNSSniff", "id": 2}
+        {"jsonrpc": "2.0", "method": "ping", "id": 2}
         """.data(using: .utf8)!
 
         let request = try RPCRequest(from: json)
         #expect(request.id == 2)
-        #expect(request.method == "stopDNSSniff")
+        #expect(request.method == "ping")
         #expect(request.params.isEmpty)
     }
 
@@ -124,5 +124,31 @@ struct RPCServerTests {
         let response = try! JSONSerialization.jsonObject(with: responseData) as! [String: Any]
         let error = response["error"] as! [String: Any]
         #expect(error["code"] as? Int == -32603)
+    }
+
+    @Test("Router preserves actionable helper error details")
+    func routerPreservesRPCErrorMessage() {
+        let router = RPCRouter()
+        router.handlers["fail"] = { _ in
+            throw RPCError.internalError(
+                "proxy ARP setup failed: no interface found"
+            )
+        }
+
+        let json = """
+        {"jsonrpc": "2.0", "method": "fail", "id": 7}
+        """.data(using: .utf8)!
+        let request = try! RPCRequest(from: json)
+
+        let responseData = router.dispatch(request)
+        let response = try! JSONSerialization.jsonObject(
+            with: responseData
+        ) as! [String: Any]
+        let error = response["error"] as! [String: Any]
+        #expect(error["code"] as? Int == -32603)
+        #expect(
+            error["message"] as? String
+                == "proxy ARP setup failed: no interface found"
+        )
     }
 }

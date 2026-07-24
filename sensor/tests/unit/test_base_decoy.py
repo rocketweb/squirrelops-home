@@ -109,7 +109,12 @@ class TestBaseDecoyAbstractContract:
     def test_cannot_instantiate_directly(self):
         """BaseDecoy itself cannot be instantiated."""
         with pytest.raises(TypeError):
-            BaseDecoy(decoy_id=1, name="test", port=8080, bind_address="127.0.0.1")
+            BaseDecoy(  # pyright: ignore[reportAbstractUsage]
+                decoy_id=1,
+                name="test",
+                port=8080,
+                bind_address="127.0.0.1",
+            )
 
     def test_concrete_subclass_instantiates(self):
         """A fully-implemented subclass can be instantiated."""

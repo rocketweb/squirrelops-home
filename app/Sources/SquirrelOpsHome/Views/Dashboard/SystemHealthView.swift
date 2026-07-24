@@ -35,11 +35,24 @@ struct SystemHealthView: View {
     }
 
     private var profileLabel: String {
-        appState.systemStatus?.profile.capitalized ?? "Unknown"
+        (appState.resourceProfile?.profile ?? appState.systemStatus?.profile)?.capitalized ?? "Unknown"
     }
 
     private var unreadAlertCount: Int {
         appState.alerts.filter { $0.readAt == nil }.count
+    }
+
+    private var decoyMetricValue: String {
+        let listedActiveCount = AppState.activeDecoyDeploymentCount(
+            in: appState.decoys
+        )
+        let activeCount = appState.decoys.isEmpty
+            ? (appState.systemStatus?.decoyCount ?? 0)
+            : listedActiveCount
+        guard let capacity = appState.resourceProfile?.totalDecoyCapacity else {
+            return "\(activeCount)"
+        }
+        return "\(activeCount)/\(capacity)"
     }
 
     private var formattedUptime: String {
@@ -81,8 +94,8 @@ struct SystemHealthView: View {
                     icon: "desktopcomputer"
                 )
                 MetricCard(
-                    title: "Decoys",
-                    value: "\(appState.decoys.count)",
+                    title: "Decoys Deployed",
+                    value: decoyMetricValue,
                     icon: "ant"
                 )
                 MetricCard(
@@ -90,6 +103,16 @@ struct SystemHealthView: View {
                     value: "\(unreadAlertCount)",
                     icon: "bell.badge"
                 )
+            }
+
+            if let profile = appState.resourceProfile {
+                Text(
+                    "Profile capacity is a ceiling: up to \(profile.maxDecoys) classic + "
+                    + "\(profile.maxMimicDecoys) fake hosts. Each fake host may "
+                    + "contain several per-port service decoys."
+                )
+                .font(Typography.bodySmall)
+                .foregroundStyle(Theme.textSecondary(colorScheme))
             }
 
             // MARK: - Learning Progress

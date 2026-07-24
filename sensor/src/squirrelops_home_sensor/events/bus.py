@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -56,8 +57,39 @@ class EventBus:
     ) -> int:
         """Persist an event and notify subscribers. Returns the sequence number."""
         async with self._lock:
-            seq = await self._log.append(event_type, payload, source_id=source_id)
+            return await self._publish_serialized(
+                event_type,
+                payload,
+                source_id=source_id,
+            )
 
+    async def _publish_serialized(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        source_id: str | None = None,
+    ) -> int:
+        """Publish while the caller owns the event-ordering lock."""
+        if not await self._log.entity_exists_for_event(event_type, payload):
+            logger.info(
+                "Suppressed orphaned %s event for cleared entity %r",
+                event_type,
+                payload.get("id"),
+            )
+            return 0
+
+        seq = await self._log.append(event_type, payload, source_id=source_id)
+        self._broadcast(seq, event_type, payload, source_id)
+        return seq
+
+    def _broadcast(
+        self,
+        seq: int,
+        event_type: str,
+        payload: dict[str, Any],
+        source_id: str | None,
+    ) -> None:
+        """Schedule delivery of one already-persisted event."""
         event = {
             "seq": seq,
             "event_type": event_type,
@@ -76,7 +108,24 @@ class EventBus:
                             "Error scheduling callback for subscription %s", sub.id
                         )
 
-        return seq
+    @asynccontextmanager
+    async def serialized(self):
+        """Hold event ordering across a related database transaction."""
+        async with self._lock:
+            yield
+
+    async def broadcast_persisted(
+        self,
+        *,
+        seq: int,
+        event_type: str,
+        payload: dict[str, Any],
+        source_id: str | None = None,
+    ) -> None:
+        """Broadcast an event inserted by a serialized database transaction."""
+        if not self._lock.locked():
+            raise RuntimeError("broadcast_persisted requires serialized()")
+        self._broadcast(seq, event_type, payload, source_id)
 
     def subscribe(
         self,

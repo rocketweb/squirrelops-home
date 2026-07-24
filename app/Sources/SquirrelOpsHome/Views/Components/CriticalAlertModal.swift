@@ -2,9 +2,9 @@ import SwiftUI
 
 /// Full-screen modal overlay for critical/high-severity alerts.
 ///
-/// Shown when `appState.hasCriticalAlert` is true. Displays the first unread
-/// critical/high alert and requires user acknowledgment before dismissing.
-/// If multiple are queued, shows a count and offers "Dismiss All".
+/// Displays the first unsuppressed critical/high alert. Review preserves the
+/// complete unread batch and navigates to Alerts; Clear acknowledges only the
+/// batch represented by this modal.
 struct CriticalAlertModal: View {
     let appState: AppState
     @Environment(\.colorScheme) private var colorScheme
@@ -13,8 +13,8 @@ struct CriticalAlertModal: View {
         appState.firstCriticalAlert
     }
 
-    private var unreadCriticalAlerts: [AlertSummary] {
-        appState.alerts.filter { $0.readAt == nil && ($0.severity == "critical" || $0.severity == "high") }
+    private var presentedAlerts: [AlertSummary] {
+        appState.presentedCriticalAlerts
     }
 
     var body: some View {
@@ -58,13 +58,13 @@ struct CriticalAlertModal: View {
                     }
 
                     // Timestamp
-                    Text(alert.createdAt)
+                    Text(TimestampPresentation.local(alert.createdAt))
                         .font(Typography.mono)
                         .tracking(Typography.monoTracking)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
 
                     // Remaining count
-                    let remaining = unreadCriticalAlerts.count
+                    let remaining = presentedAlerts.count
                     if remaining > 1 {
                         Text("\(remaining) unread alerts")
                             .font(Typography.bodySmall)
@@ -76,9 +76,9 @@ struct CriticalAlertModal: View {
                     // Buttons
                     VStack(spacing: Spacing.s12) {
                         Button {
-                            acknowledgeAll()
+                            appState.reviewPresentedCriticalAlerts()
                         } label: {
-                            Text(remaining > 1 ? "Dismiss All (\(remaining))" : "Dismiss")
+                            Text("Review")
                                 .font(Typography.body)
                                 .foregroundStyle(.white)
                                 .frame(minWidth: 200)
@@ -90,11 +90,11 @@ struct CriticalAlertModal: View {
                         .buttonStyle(.plain)
 
                         Button {
-                            appState.silenceUntil = Calendar.current.date(byAdding: .hour, value: 1, to: Date())
+                            clearPresentedAlerts()
                         } label: {
-                            Text("Later")
+                            Text("Clear")
                                 .font(Typography.bodySmall)
-                                .foregroundStyle(Theme.textSecondary(colorScheme))
+                                .foregroundStyle(Theme.statusError(colorScheme))
                         }
                         .buttonStyle(.plain)
                     }
@@ -114,21 +114,11 @@ struct CriticalAlertModal: View {
 
     // MARK: - Actions
 
-    private func acknowledge(_ alert: AlertSummary) {
-        appState.markAlertRead(alert.id)
+    private func clearPresentedAlerts() {
+        let alertIds = appState.clearPresentedCriticalAlerts()
         Task {
-            try? await appState.sensorClient?.request(.readAlert(id: alert.id))
-        }
-    }
-
-    private func acknowledgeAll() {
-        let alerts = unreadCriticalAlerts
-        for alert in alerts {
-            appState.markAlertRead(alert.id)
-        }
-        Task {
-            for alert in alerts {
-                try? await appState.sensorClient?.request(.readAlert(id: alert.id))
+            for alertId in alertIds {
+                try? await appState.sensorClient?.request(.readAlert(id: alertId))
             }
         }
     }

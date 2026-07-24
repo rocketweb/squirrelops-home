@@ -1,9 +1,12 @@
 """Tests for the configuration loader."""
 
+import logging
 import os
 import pathlib
+from typing import Any
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from squirrelops_home_sensor.config import (
@@ -48,7 +51,7 @@ class TestSettingsModels:
 
     def test_decoy_config_defaults(self) -> None:
         cfg = DecoyConfig()
-        assert cfg.max_decoys == 8
+        assert cfg.max_decoys == 3
         assert cfg.health_check_interval == 1800
         assert cfg.restart_max_attempts == 3
         assert cfg.restart_window_seconds == 300
@@ -80,7 +83,7 @@ class TestLoadDefaults:
         assert settings.sensor.name == "SquirrelOps Home Sensor"
         assert settings.profile == "standard"
         assert settings.network.scan_interval == 300
-        assert settings.decoys.max_decoys == 8
+        assert settings.decoys.max_decoys == 3
 
     def test_load_returns_settings_instance(self) -> None:
         settings = load_settings(config_path=DEFAULTS_PATH)
@@ -141,6 +144,31 @@ class TestLoadFromCustomFile:
 
         assert settings.sensor.name == "Persisted"
         assert settings.profile == "full"
+
+    def test_legacy_dns_canary_config_is_removed_with_warning(
+        self,
+        tmp_path: pathlib.Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        custom = tmp_path / "custom.yaml"
+        custom.write_text(
+            yaml.safe_dump(
+                {
+                    "decoys": {
+                        "dns_canaries": {
+                            "enabled": True,
+                            "domain": "canary.example.com",
+                        }
+                    }
+                }
+            )
+        )
+
+        with caplog.at_level(logging.WARNING):
+            settings = load_settings(config_path=custom)
+
+        assert not hasattr(settings.decoys, "dns_canaries")
+        assert "DNS canaries are not supported" in caplog.text
 
 
 class TestLoadFromEnvVars:
@@ -245,25 +273,25 @@ class TestFlatKeyNormalization:
     """Verify that legacy flat config keys are mapped to nested model paths."""
 
     def test_subnet_maps_to_network(self) -> None:
-        data = {"subnet": "10.0.0.0/24"}
+        data: dict[str, Any] = {"subnet": "10.0.0.0/24"}
         _normalize_flat_keys(data)
         assert data["network"]["subnet"] == "10.0.0.0/24"
         assert "subnet" not in data
 
     def test_scan_interval_maps_to_network(self) -> None:
-        data = {"scan_interval_seconds": 120}
+        data: dict[str, Any] = {"scan_interval_seconds": 120}
         _normalize_flat_keys(data)
         assert data["network"]["scan_interval"] == 120
         assert "scan_interval_seconds" not in data
 
     def test_max_decoys_maps_to_decoys(self) -> None:
-        data = {"max_decoys": 16}
+        data: dict[str, Any] = {"max_decoys": 16}
         _normalize_flat_keys(data)
         assert data["decoys"]["max_decoys"] == 16
         assert "max_decoys" not in data
 
     def test_sensor_name_maps_to_sensor(self) -> None:
-        data = {"sensor_name": "TestSensor"}
+        data: dict[str, Any] = {"sensor_name": "TestSensor"}
         _normalize_flat_keys(data)
         assert data["sensor"]["name"] == "TestSensor"
         assert "sensor_name" not in data

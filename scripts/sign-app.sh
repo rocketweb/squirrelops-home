@@ -2,8 +2,8 @@
 #
 # SquirrelOps Home — Code Signing Script
 #
-# Signs the .app bundle and embedded helper for distribution.
-# Gracefully skips if the signing identity is not found (local dev).
+# Signs the .app bundle and embedded helper for distribution. Local builds
+# gracefully skip a missing identity; release builds fail closed.
 #
 # Usage:
 #   bash scripts/sign-app.sh <path-to.app> [signing-identity]
@@ -45,6 +45,12 @@ fi
 
 APP_BUNDLE="$1"
 IDENTITY="${2:-Developer ID Application}"
+RELEASE_BUILD="${SQUIRRELOPS_RELEASE_BUILD:-0}"
+
+case "$RELEASE_BUILD" in
+    0|1) ;;
+    *) error "SQUIRRELOPS_RELEASE_BUILD must be 0 or 1." ;;
+esac
 
 # Resolve paths relative to the repo root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,13 +76,19 @@ fi
 if [ ! -f "$HELPER_ENTITLEMENTS" ]; then
     error "Helper entitlements not found: $HELPER_ENTITLEMENTS"
 fi
+if [ ! -x "$HELPER_PATH" ]; then
+    error "Required helper binary is missing or not executable: $HELPER_PATH"
+fi
 
 # ---------------------------------------------------------------------------
 # Check signing identity
 # ---------------------------------------------------------------------------
 info "Checking for signing identity: ${BOLD}$IDENTITY${NC}"
 
-if ! security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
+if ! security find-identity -v -p codesigning | grep -Fq -- "$IDENTITY"; then
+    if [ "$RELEASE_BUILD" = "1" ]; then
+        error "Release builds require an available app signing identity: $IDENTITY"
+    fi
     warn "Signing identity '$IDENTITY' not found in Keychain."
     warn "Skipping code signing (this is expected for local dev builds)."
     exit 0
@@ -87,18 +99,24 @@ info "Signing identity found."
 # ---------------------------------------------------------------------------
 # Step 1: Sign the helper binary (inside-out signing order)
 # ---------------------------------------------------------------------------
-if [ -f "$HELPER_PATH" ]; then
-    info "Signing helper binary: $HELPER_PATH"
-    codesign --force \
-        --options runtime \
-        --entitlements "$HELPER_ENTITLEMENTS" \
-        --sign "$IDENTITY" \
-        --timestamp \
-        "$HELPER_PATH"
-    info "Helper signed successfully."
-else
-    warn "Helper binary not found at $HELPER_PATH — skipping helper signing."
+info "Signing helper binary: $HELPER_PATH"
+codesign --force \
+    --options runtime \
+    --identifier "$HELPER_BUNDLE_ID" \
+    --entitlements "$HELPER_ENTITLEMENTS" \
+    --sign "$IDENTITY" \
+    --timestamp \
+    "$HELPER_PATH"
+if ! HELPER_SIGNATURE="$(codesign -d --verbose=4 "$HELPER_PATH" 2>&1)"; then
+    error "Could not read the helper signature."
 fi
+# Do not pipe codesign into grep -q under pipefail: grep closes the pipe after
+# the first match, which can make codesign exit on SIGPIPE and turn a valid
+# signature into a false build failure.
+if ! grep -Fxq "Identifier=${HELPER_BUNDLE_ID}" <<< "$HELPER_SIGNATURE"; then
+    error "Helper signature identifier is not ${HELPER_BUNDLE_ID}."
+fi
+info "Helper signed successfully."
 
 # ---------------------------------------------------------------------------
 # Step 2: Sign the app bundle
@@ -117,7 +135,7 @@ info "App bundle signed successfully."
 # Step 3: Verify signature
 # ---------------------------------------------------------------------------
 info "Verifying signature..."
-codesign --verify --verbose=2 "$APP_BUNDLE"
+codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 info "Signature verification passed."
 
 # ---------------------------------------------------------------------------

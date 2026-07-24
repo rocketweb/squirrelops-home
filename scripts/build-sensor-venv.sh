@@ -4,10 +4,11 @@
 # sensor package installed, suitable for embedding in the macOS .pkg installer.
 #
 # Strategy:
-#   1. Check if a suitable Python 3.11+ is already installed on this machine
-#   2. If found, create a venv from it (fast, small)
-#   3. If not found, download a standalone Python from python-build-standalone
-#      and install the sensor directly into it (no system Python needed)
+#   1. Download a pinned, checksum-verified standalone Python runtime
+#   2. Export and install the exact hash-locked runtime dependency graph
+#   3. Install the sensor project without re-resolving dependencies
+#   4. Permit a build-host venv only when explicitly requested for local
+#      development; release packages always request standalone mode
 #
 # Usage:
 #   bash scripts/build-sensor-venv.sh [output_dir]
@@ -17,8 +18,9 @@
 #               (default: $REPO_ROOT/build/sensor-pkg)
 #
 # Environment:
-#   BUILD_ARCH  Target architecture: "arm64", "x86_64", or "universal"
+#   BUILD_ARCH  Target architecture: "arm64" or "x86_64"
 #               (default: current arch). Used when downloading standalone Python.
+#   PYTHON_BUILD_MODE  "standalone" (default) or "venv" (local development only)
 #
 # The resulting layout (venv mode — system Python available):
 #   $output_dir/
@@ -42,6 +44,15 @@ PLIST_TEMPLATE="$SENSOR_DIR/resources/com.squirrelops.sensor.plist"
 
 OUTPUT_DIR="${1:-$REPO_ROOT/build/sensor-pkg}"
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+PYTHON_BUILD_MODE="${PYTHON_BUILD_MODE:-standalone}"
+
+case "$PYTHON_BUILD_MODE" in
+    standalone|venv) ;;
+    *)
+        echo "Unsupported Python build mode: $PYTHON_BUILD_MODE" >&2
+        exit 1
+        ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Standalone Python configuration
@@ -49,16 +60,21 @@ BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
 # python-build-standalone from https://github.com/astral-sh/python-build-standalone
 PBS_RELEASE="20260211"
 PBS_PYTHON="3.12.12"
+REQUIRED_UV_VERSION="0.10.2"
 
 # Map macOS arch names to python-build-standalone arch names
 case "$BUILD_ARCH" in
-    arm64|universal)
+    arm64)
         PBS_ARCH="aarch64"
         PBS_SHA256="20d98bd10cf59e3c16dc4e44b57be351b250fc1089e95b2839f440f79413ed47"
         ;;
     x86_64)
         PBS_ARCH="x86_64"
         PBS_SHA256="bc2a04a4afbb761f58c1df242f486dd9d3066f9eaf52ad422734eac2ccd41e67"
+        ;;
+    universal)
+        echo "Standalone Python cannot be universal; build one package per architecture." >&2
+        exit 1
         ;;
     *)
         echo "Unsupported build architecture: $BUILD_ARCH" >&2
@@ -87,25 +103,30 @@ warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
 error() { echo -e "${RED}[x]${NC} $*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# Step 1: Check for system Python 3.11+
+# Step 1: Locate Python only for an explicitly requested development venv
 # ---------------------------------------------------------------------------
 info "SquirrelOps Home Sensor — Environment Builder"
 echo ""
 
 PYTHON_CMD=""
-for candidate in python3.13 python3.12 python3.11 python3; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-        version=$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
-        major=$(echo "$version" | cut -d. -f1)
-        minor=$(echo "$version" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ]; then
-            PYTHON_CMD="$candidate"
-            PYTHON_VERSION="$version"
-            info "Found system Python $version at $(command -v "$candidate")"
-            break
+if [ "$PYTHON_BUILD_MODE" = "venv" ]; then
+    for candidate in python3.13 python3.12 python3.11 python3; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            version=$("$candidate" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
+            major=$(echo "$version" | cut -d. -f1)
+            minor=$(echo "$version" | cut -d. -f2)
+            if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ]; then
+                PYTHON_CMD="$candidate"
+                PYTHON_VERSION="$version"
+                info "Found system Python $version at $(command -v "$candidate")"
+                break
+            fi
         fi
+    done
+    if [ -z "$PYTHON_CMD" ]; then
+        error "PYTHON_BUILD_MODE=venv requires build-host Python 3.11 or newer."
     fi
-done
+fi
 
 # ---------------------------------------------------------------------------
 # Step 2: Validate sensor source
@@ -114,8 +135,20 @@ if [ ! -f "$SENSOR_DIR/pyproject.toml" ]; then
     error "Sensor pyproject.toml not found at $SENSOR_DIR/pyproject.toml"
 fi
 
+if [ ! -f "$SENSOR_DIR/uv.lock" ]; then
+    error "Sensor uv.lock not found at $SENSOR_DIR/uv.lock"
+fi
+
 if [ ! -f "$PLIST_TEMPLATE" ]; then
     error "Plist template not found at $PLIST_TEMPLATE"
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+    error "uv is required to export the locked sensor dependency graph."
+fi
+ACTUAL_UV_VERSION="$(uv --version | /usr/bin/awk '{ print $2 }')"
+if [ "$ACTUAL_UV_VERSION" != "$REQUIRED_UV_VERSION" ]; then
+    error "uv $REQUIRED_UV_VERSION is required (found $ACTUAL_UV_VERSION)."
 fi
 
 # ---------------------------------------------------------------------------
@@ -124,10 +157,47 @@ fi
 mkdir -p "$OUTPUT_DIR"
 info "Output directory: $OUTPUT_DIR"
 
+# Export hashes from the committed lock without emitting the local project or
+# build-host paths. The resulting file is retained with the build for audit and
+# copied into release payloads.
+LOCKED_REQUIREMENTS="$OUTPUT_DIR/requirements.lock"
+LOCKED_BUILD_REQUIREMENTS="$OUTPUT_DIR/build-requirements.lock"
+info "Exporting hash-locked sensor dependencies..."
+uv export \
+    --project "$SENSOR_DIR" \
+    --locked \
+    --no-dev \
+    --no-emit-project \
+    --no-header \
+    --no-annotate \
+    --format requirements.txt \
+    --output-file "$LOCKED_REQUIREMENTS" \
+    --quiet
+if grep -Eq '(^-e[[:space:]]|file://|[[:space:]]@[/])' \
+    "$LOCKED_REQUIREMENTS"; then
+    error "Locked dependency export contains a local or editable dependency."
+fi
+
+info "Exporting hash-locked sensor build dependencies..."
+uv export \
+    --project "$SENSOR_DIR" \
+    --locked \
+    --only-group build \
+    --no-emit-project \
+    --no-header \
+    --no-annotate \
+    --format requirements.txt \
+    --output-file "$LOCKED_BUILD_REQUIREMENTS" \
+    --quiet
+if grep -Eq '(^-e[[:space:]]|file://|[[:space:]]@[/])' \
+    "$LOCKED_BUILD_REQUIREMENTS"; then
+    error "Locked build dependency export contains a local or editable dependency."
+fi
+
 # ---------------------------------------------------------------------------
 # Step 4: Build the Python environment
 # ---------------------------------------------------------------------------
-if [ -n "$PYTHON_CMD" ]; then
+if [ "$PYTHON_BUILD_MODE" = "venv" ]; then
     # -----------------------------------------------------------------------
     # Mode A: System Python available — create a venv (fast, small)
     # -----------------------------------------------------------------------
@@ -145,8 +215,11 @@ if [ -n "$PYTHON_CMD" ]; then
     info "Upgrading pip, wheel, setuptools..."
     "$VENV_PIP" install --upgrade pip wheel setuptools --quiet
 
-    info "Installing squirrelops-home-sensor from $SENSOR_DIR..."
-    "$VENV_PIP" install "$SENSOR_DIR" --quiet
+    info "Installing locked sensor dependencies..."
+    "$VENV_PIP" install \
+        --require-hashes \
+        --requirement "$LOCKED_REQUIREMENTS" \
+        --quiet
 
     # Write a marker so build-pkg.sh knows which mode was used
     echo "venv" > "$OUTPUT_DIR/.python-mode"
@@ -157,7 +230,6 @@ else
     # -----------------------------------------------------------------------
     # Mode B: No system Python — download standalone Python
     # -----------------------------------------------------------------------
-    warn "No Python 3.11+ found on this machine."
     info "Downloading standalone Python ${PBS_PYTHON} (${PBS_ARCH})..."
 
     PYTHON_DIR="$OUTPUT_DIR/python"
@@ -193,9 +265,11 @@ else
     PYTHON_VERSION=$("$PYTHON_DIR/bin/python3" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
     info "Standalone Python $PYTHON_VERSION ready."
 
-    info "Installing squirrelops-home-sensor from $SENSOR_DIR..."
-    "$PYTHON_DIR/bin/python3" -m pip install --upgrade pip --quiet
-    "$PYTHON_DIR/bin/python3" -m pip install "$SENSOR_DIR" --quiet
+    info "Installing locked sensor dependencies..."
+    "$PYTHON_DIR/bin/python3" -m pip install \
+        --require-hashes \
+        --requirement "$LOCKED_REQUIREMENTS" \
+        --quiet
 
     # Clean up the tarball to save space
     rm -f "$TARBALL"
@@ -208,13 +282,93 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Copy launchd plist template
+# Step 5: Build the project with hash-locked isolated build dependencies
+# ---------------------------------------------------------------------------
+WHEEL_DIR="$OUTPUT_DIR/wheels"
+rm -rf "$WHEEL_DIR"
+mkdir -p "$WHEEL_DIR"
+info "Building the sensor wheel with locked PEP 517 dependencies..."
+uv build \
+    --wheel \
+    --python "$ENV_PYTHON" \
+    --no-python-downloads \
+    --build-constraints "$LOCKED_BUILD_REQUIREMENTS" \
+    --require-hashes \
+    --out-dir "$WHEEL_DIR" \
+    "$SENSOR_DIR"
+
+shopt -s nullglob
+SENSOR_WHEELS=("$WHEEL_DIR"/squirrelops_home_sensor-*.whl)
+shopt -u nullglob
+if [ "${#SENSOR_WHEELS[@]}" -ne 1 ]; then
+    error "Expected exactly one built sensor wheel, found ${#SENSOR_WHEELS[@]}."
+fi
+SENSOR_WHEEL="${SENSOR_WHEELS[0]}"
+
+info "Installing the locally built sensor wheel without network resolution..."
+"$ENV_PYTHON" -m pip install \
+    --no-index \
+    --no-deps \
+    "$SENSOR_WHEEL" \
+    --quiet
+
+# ---------------------------------------------------------------------------
+# Step 6: Verify the exact installed runtime against the locked export
+# ---------------------------------------------------------------------------
+info "Verifying installed distributions against requirements.lock..."
+"$ENV_PYTHON" - "$LOCKED_REQUIREMENTS" <<'PY'
+from __future__ import annotations
+
+import sys
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+
+from pip._vendor.packaging.requirements import Requirement
+
+lock_path = Path(sys.argv[1])
+active_requirements: list[Requirement] = []
+for line in lock_path.read_text(encoding="utf-8").splitlines():
+    if not line or line[0].isspace() or line.startswith(("#", "-")):
+        continue
+    requirement_text = line.removesuffix("\\").strip()
+    requirement = Requirement(requirement_text)
+    if requirement.marker is None or requirement.marker.evaluate():
+        active_requirements.append(requirement)
+
+problems: list[str] = []
+for requirement in active_requirements:
+    try:
+        installed = version(requirement.name)
+    except PackageNotFoundError:
+        problems.append(f"{requirement.name}: missing")
+        continue
+    if installed not in requirement.specifier:
+        problems.append(
+            f"{requirement.name}: installed {installed}, locked {requirement.specifier}"
+        )
+
+if problems:
+    raise SystemExit("Locked runtime mismatch:\n" + "\n".join(problems))
+print(f"Verified {len(active_requirements)} locked runtime distributions.")
+PY
+"$ENV_PYTHON" -m pip check
+"$ENV_PYTHON" -c \
+    'import aiohttp, aiosqlite, cryptography, fastapi, squirrelops_home_sensor, zeroconf'
+
+if [ "$PYTHON_BUILD_MODE" = "standalone" ]; then
+    info "Removing build-host paths from the verified standalone runtime..."
+    bash "$SCRIPT_DIR/sanitize-python-runtime.sh" sanitize \
+        "$PYTHON_DIR" "$REPO_ROOT" "$OUTPUT_DIR"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 7: Copy launchd plist template
 # ---------------------------------------------------------------------------
 info "Copying launchd plist template..."
 cp "$PLIST_TEMPLATE" "$OUTPUT_DIR/"
 
 # ---------------------------------------------------------------------------
-# Step 6: Summary
+# Step 8: Summary
 # ---------------------------------------------------------------------------
 PYTHON_MODE=$(cat "$OUTPUT_DIR/.python-mode")
 
@@ -227,6 +381,8 @@ echo "  Mode:            $PYTHON_MODE"
 echo "  Python version:  $PYTHON_VERSION"
 echo "  Environment:     $ENV_PYTHON"
 echo "  Size:            $ENV_SIZE"
+echo "  Dependency lock: $LOCKED_REQUIREMENTS"
+echo "  Build lock:      $LOCKED_BUILD_REQUIREMENTS"
 echo "  Plist:           $OUTPUT_DIR/com.squirrelops.sensor.plist"
 echo ""
 echo "  Verify:  $ENV_PYTHON -c \"import squirrelops_home_sensor; print('OK')\""

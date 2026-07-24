@@ -7,6 +7,7 @@ import aiosqlite
 DECOY_DEVICE_FILTER = """NOT EXISTS (
     SELECT 1 FROM decoys dx
     WHERE dx.decoy_type = 'mimic'
+      AND dx.status = 'active'
       AND dx.bind_address = d.ip_address
 )
 AND NOT EXISTS (
@@ -22,6 +23,7 @@ async def is_decoy_device_ip(db: aiosqlite.Connection, ip_address: str) -> bool:
         """SELECT 1
            FROM decoys
            WHERE decoy_type = 'mimic'
+             AND status = 'active'
              AND bind_address = ?
            LIMIT 1""",
         (ip_address,),

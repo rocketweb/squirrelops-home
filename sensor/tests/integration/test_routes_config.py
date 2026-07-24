@@ -116,6 +116,25 @@ class TestUpdateConfig:
         cred = cfg.get("decoys", {}).get("credential_filename") or cfg.get("credential_filename")
         assert cred is None or ("/" not in cred and ".." not in cred)
 
+    def test_update_rejects_unsupported_dns_canaries(self, client, sensor_config):
+        original_decoys = dict(sensor_config.get("decoys", {}))
+
+        response = client.put(
+            "/config",
+            json={
+                "decoys": {
+                    "dns_canaries": {
+                        "enabled": True,
+                        "domain": "canary.example.com",
+                    }
+                }
+            },
+        )
+
+        assert response.status_code == 422
+        assert "DNS canaries are not supported" in response.json()["detail"]
+        assert sensor_config.get("decoys", {}) == original_decoys
+
     def test_persisted_config_is_private_and_keeps_mutable_sensor_fields(
         self, client, sensor_config
     ):

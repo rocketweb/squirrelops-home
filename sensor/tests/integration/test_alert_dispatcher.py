@@ -107,6 +107,47 @@ class TestFanOut:
         mock_slack.assert_awaited_once()
         mock_log.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_failed_method_uses_backoff_without_logging_exception_text(
+        self, caplog
+    ):
+        from squirrelops_home_sensor.alerts.dispatcher import AlertDispatcher
+
+        secret = "https://hooks.slack.com/services/SECRET/WEBHOOK"
+        mock_slack = AsyncMock(side_effect=RuntimeError(secret))
+        dispatcher = AlertDispatcher(
+            methods=[
+                {"name": "slack", "handler": mock_slack, "min_severity": "low"},
+            ],
+            failure_backoff_base=10,
+            failure_backoff_max=60,
+        )
+        now = [100.0]
+        dispatcher._clock = lambda: now[0]
+        alert_payload = {
+            "alert_id": 1,
+            "alert_type": "decoy.trip",
+            "severity": "high",
+            "title": "Decoy tripped",
+            "detail": "Connection detected",
+            "source_ip": "192.168.1.99",
+            "created_at": "2026-07-23T10:00:00.000Z",
+        }
+
+        with caplog.at_level(
+            logging.ERROR,
+            logger="squirrelops_home_sensor.alerts.dispatcher",
+        ):
+            await dispatcher.dispatch(alert_payload)
+            await dispatcher.dispatch({**alert_payload, "alert_id": 2})
+            now[0] = 110.0
+            await dispatcher.dispatch({**alert_payload, "alert_id": 3})
+
+        assert mock_slack.await_count == 2
+        assert len(caplog.records) == 2
+        assert secret not in caplog.text
+        assert "RuntimeError" in caplog.text
+
 
 class TestSeverityFiltering:
     """Each method can have a minimum severity threshold."""
@@ -333,6 +374,67 @@ class TestSlackHandler:
         posted_json = call_args[1]["json"]
         assert "text" in posted_json
         assert "blocks" in posted_json
+
+    @pytest.mark.asyncio
+    async def test_slack_handler_replaces_url_bearing_client_errors(self):
+        from squirrelops_home_sensor.alerts.dispatcher import (
+            AlertDeliveryError,
+            create_slack_handler,
+        )
+
+        webhook_url = "https://hooks.slack.com/services/SECRET/WEBHOOK"
+        mock_session = AsyncMock()
+        mock_session.post = AsyncMock(side_effect=RuntimeError(webhook_url))
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        handler = create_slack_handler(
+            webhook_url, session_factory=lambda: mock_session
+        )
+
+        with pytest.raises(AlertDeliveryError) as exc_info:
+            await handler({
+                "alert_id": 1,
+                "alert_type": "decoy.trip",
+                "severity": "high",
+                "title": "Decoy tripped",
+                "detail": "Connection detected",
+                "source_ip": "192.168.1.99",
+                "created_at": "2026-07-23T10:00:00.000Z",
+            })
+
+        assert webhook_url not in str(exc_info.value)
+        assert "RuntimeError" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_slack_handler_uses_credential_safe_http_error(self):
+        from squirrelops_home_sensor.alerts.dispatcher import (
+            AlertDeliveryError,
+            create_slack_handler,
+        )
+
+        webhook_url = "https://hooks.slack.com/services/SECRET/WEBHOOK"
+        mock_response = AsyncMock()
+        mock_response.status = 403
+        mock_session = AsyncMock()
+        mock_session.post = AsyncMock(return_value=mock_response)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        handler = create_slack_handler(
+            webhook_url, session_factory=lambda: mock_session
+        )
+
+        with pytest.raises(AlertDeliveryError, match="HTTP 403") as exc_info:
+            await handler({
+                "alert_id": 1,
+                "alert_type": "decoy.trip",
+                "severity": "high",
+                "title": "Decoy tripped",
+                "detail": "Connection detected",
+                "source_ip": "192.168.1.99",
+                "created_at": "2026-07-23T10:00:00.000Z",
+            })
+
+        assert webhook_url not in str(exc_info.value)
 
 
 class TestLogHandler:

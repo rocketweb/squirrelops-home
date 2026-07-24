@@ -86,7 +86,7 @@ struct IncidentDetailView: View {
                 }
 
                 HStack(spacing: Spacing.xs) {
-                    Text(incident.firstAlertAt)
+                    Text(TimestampPresentation.local(incident.firstAlertAt))
                         .font(Typography.mono)
                         .tracking(Typography.monoTracking)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
@@ -95,7 +95,7 @@ struct IncidentDetailView: View {
                         Text("—")
                             .font(Typography.bodySmall)
                             .foregroundStyle(Theme.textTertiary(colorScheme))
-                        Text(incident.lastAlertAt)
+                        Text(TimestampPresentation.local(incident.lastAlertAt))
                             .font(Typography.mono)
                             .tracking(Typography.monoTracking)
                             .foregroundStyle(Theme.textTertiary(colorScheme))
@@ -210,7 +210,7 @@ struct IncidentDetailView: View {
 
                     Spacer()
 
-                    Text(alert.createdAt)
+                    Text(TimestampPresentation.local(alert.createdAt))
                         .font(Typography.mono)
                         .tracking(Typography.monoTracking)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
@@ -244,10 +244,18 @@ struct IncidentDetailView: View {
                         detailRow(label: "Decoy ID", value: "#\(decoyId)")
                     }
                     if let readAt = alert.readAt {
-                        detailRow(label: "Read", value: readAt, mono: true)
+                        detailRow(
+                            label: "Read",
+                            value: TimestampPresentation.local(readAt),
+                            mono: true
+                        )
                     }
                     if let actionedAt = alert.actionedAt {
-                        detailRow(label: "Actioned", value: actionedAt, mono: true)
+                        detailRow(
+                            label: "Actioned",
+                            value: TimestampPresentation.local(actionedAt),
+                            mono: true
+                        )
                     }
                     if let note = alert.actionNote {
                         detailRow(label: "Note", value: note)
@@ -304,7 +312,7 @@ struct IncidentDetailView: View {
 
     private func formatAnyCodableValue(_ value: AnyCodableValue) -> String {
         switch value {
-        case .string(let s): return s
+        case .string(let s): return TimestampPresentation.localIfRecognized(s)
         case .int(let i): return String(i)
         case .double(let d): return String(d)
         case .bool(let b): return b ? "true" : "false"

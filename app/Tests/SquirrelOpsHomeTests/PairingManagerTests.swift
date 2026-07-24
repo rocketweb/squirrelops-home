@@ -136,7 +136,7 @@ struct PairingManagerTests {
             _ = try await manager.pair(sensor: sensor, code: "000000")
             Issue.record("Expected pair to throw on 401")
         } catch let error as SensorClientError {
-            if case .badResponse(let statusCode) = error {
+            if case .badResponse(let statusCode, _) = error {
                 #expect(statusCode == 401)
             }
         } catch {
@@ -294,7 +294,7 @@ struct PairingManagerTests {
             try await manager.unpair(sensor: pairedSensor)
             Issue.record("Expected unpair to throw")
         } catch let error as SensorClientError {
-            if case .badResponse(let code) = error {
+            if case .badResponse(let code, _) = error {
                 #expect(code == 500)
             }
         } catch {

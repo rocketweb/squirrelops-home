@@ -76,6 +76,7 @@ mkdir -p "$CONFIG_DIR"
 mkdir -p "$LOG_DIR"
 mkdir -p "$RUN_DIR"
 mkdir -p "$HOME/Library/LaunchAgents"
+chmod 700 "$DATA_DIR" "$CONFIG_DIR" "$LOG_DIR"
 
 # ---------------------------------------------------------------------------
 # Step 3: Create Python venv
@@ -176,15 +177,17 @@ else
     <dict>
         <key>SQUIRRELOPS_DATA_DIR</key>
         <string>__DATA_DIR__</string>
+        <key>SQUIRRELOPS_LOG_PATH</key>
+        <string>__LOG_DIR__/squirrelops-sensor.log</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__LOG_DIR__/squirrelops-sensor.log</string>
+    <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
     <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/squirrelops-sensor.log</string>
+    <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
     <key>ThrottleInterval</key>
     <integer>10</integer>
 </dict>

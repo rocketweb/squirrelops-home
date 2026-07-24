@@ -109,7 +109,7 @@ class TestListDevices:
         assert data["total"] == 1
         assert [item["ip_address"] for item in data["items"]] == ["192.168.1.101"]
 
-    def test_list_excludes_stopped_mimic_decoy_ips(self, client, db):
+    def test_list_includes_stopped_mimic_decoy_ips(self, client, db):
         asyncio.get_event_loop().run_until_complete(seed_devices(db, count=2))
         asyncio.get_event_loop().run_until_complete(
             db.execute(
@@ -125,8 +125,11 @@ class TestListDevices:
 
         response = client.get("/devices")
         data = response.json()
-        assert data["total"] == 1
-        assert [item["ip_address"] for item in data["items"]] == ["192.168.1.101"]
+        assert data["total"] == 2
+        assert [item["ip_address"] for item in data["items"]] == [
+            "192.168.1.101",
+            "192.168.1.102",
+        ]
 
     def test_list_excludes_active_virtual_ip_without_decoy_row(self, client, db):
         asyncio.get_event_loop().run_until_complete(seed_devices(db, count=2))

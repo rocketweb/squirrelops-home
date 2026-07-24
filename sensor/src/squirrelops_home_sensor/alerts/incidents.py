@@ -25,7 +25,6 @@ from squirrelops_home_sensor.alerts.types import Severity
 
 class EventBusProtocol(Protocol):
     async def publish(self, event_type: str, payload: dict[str, Any]) -> int: ...
-    def subscribe(self, event_types: list[str], callback: Any) -> None: ...
 
 
 # -- Incident Grouper ------------------------------------------------
@@ -62,7 +61,12 @@ class IncidentGrouper:
 
     # -- Public API --------------------------------------------------
 
-    async def process_alert(self, alert_id: int) -> None:
+    async def process_alert(
+        self,
+        alert_id: int,
+        *,
+        source_event_seq: int,
+    ) -> None:
         """Process a newly inserted alert: attach to an existing incident
         or create a new one.
 
@@ -70,6 +74,13 @@ class IncidentGrouper:
         updates ``incident_id`` on the alert row and creates/updates
         the parent incident.
         """
+        if (
+            not isinstance(source_event_seq, int)
+            or isinstance(source_event_seq, bool)
+            or source_event_seq <= 0
+        ):
+            raise ValueError("source_event_seq must be a positive integer")
+
         alert = await self._fetch_alert(alert_id)
         if alert is None:
             return
@@ -86,9 +97,20 @@ class IncidentGrouper:
         incident = await self._find_active_incident(source_ip, alert_time)
 
         if incident is not None:
-            await self._attach_to_incident(alert, incident, alert_severity, alert_time)
+            await self._attach_to_incident(
+                alert,
+                incident,
+                alert_severity,
+                alert_time,
+                source_event_seq=source_event_seq,
+            )
         else:
-            await self._create_incident(alert, alert_severity, alert_time)
+            await self._create_incident(
+                alert,
+                alert_severity,
+                alert_time,
+                source_event_seq=source_event_seq,
+            )
 
     async def close_stale_incidents(self) -> int:
         """Close active incidents whose last alert is older than the
@@ -137,6 +159,8 @@ class IncidentGrouper:
         incident: aiosqlite.Row,
         alert_severity: Severity,
         alert_time: datetime,
+        *,
+        source_event_seq: int,
     ) -> None:
         """Attach an alert to an existing incident, escalate severity,
         regenerate summary."""
@@ -146,29 +170,88 @@ class IncidentGrouper:
         new_count = incident["alert_count"] + 1
 
         # Link alert to incident
-        await self._db.execute(
-            "UPDATE home_alerts SET incident_id = ? WHERE id = ?",
-            (incident_id, alert["id"]),
+        alert_update = await self._db.execute(
+            """UPDATE home_alerts
+               SET incident_id = ?
+               WHERE id = ?
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM events
+                     WHERE event_type = 'alerts.history_cleared'
+                       AND seq >= ?
+                 )""",
+            (incident_id, alert["id"], source_event_seq),
         )
+        if alert_update.rowcount != 1:
+            await self._db.commit()
+            return
 
         # Update incident
-        await self._db.execute(
+        incident_update = await self._db.execute(
             """UPDATE incidents
                SET alert_count = ?,
                    last_alert_at = ?,
                    severity = ?
-               WHERE id = ?""",
-            (new_count, _format_iso(alert_time), new_severity.value, incident_id),
+               WHERE id = ?
+                 AND EXISTS (
+                     SELECT 1
+                     FROM home_alerts
+                     WHERE id = ? AND incident_id = ?
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM events
+                     WHERE event_type = 'alerts.history_cleared'
+                       AND seq >= ?
+                 )""",
+            (
+                new_count,
+                _format_iso(alert_time),
+                new_severity.value,
+                incident_id,
+                alert["id"],
+                incident_id,
+                source_event_seq,
+            ),
         )
+        if incident_update.rowcount != 1:
+            await self._db.execute(
+                "UPDATE home_alerts SET incident_id = NULL "
+                "WHERE id = ? AND incident_id = ?",
+                (alert["id"], incident_id),
+            )
+            await self._db.commit()
+            return
         await self._db.commit()
 
         # Regenerate summary
         summary = await self._generate_summary(incident_id)
-        await self._db.execute(
-            "UPDATE incidents SET summary = ? WHERE id = ?",
-            (summary, incident_id),
+        summary_update = await self._db.execute(
+            """UPDATE incidents
+               SET summary = ?
+               WHERE id = ?
+                 AND EXISTS (
+                     SELECT 1
+                     FROM home_alerts
+                     WHERE id = ? AND incident_id = ?
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM events
+                     WHERE event_type = 'alerts.history_cleared'
+                       AND seq >= ?
+                 )""",
+            (
+                summary,
+                incident_id,
+                alert["id"],
+                incident_id,
+                source_event_seq,
+            ),
         )
         await self._db.commit()
+        if summary_update.rowcount != 1:
+            return
 
         await self._event_bus.publish(
             "incident.updated",
@@ -176,6 +259,7 @@ class IncidentGrouper:
                 "incident_id": incident_id,
                 "alert_count": new_count,
                 "severity": new_severity.value,
+                "source_event_seq": source_event_seq,
             },
         )
 
@@ -184,6 +268,8 @@ class IncidentGrouper:
         alert: aiosqlite.Row,
         alert_severity: Severity,
         alert_time: datetime,
+        *,
+        source_event_seq: int,
     ) -> None:
         """Create a new incident with this alert as the first child."""
         time_str = _format_iso(alert_time)
@@ -192,32 +278,81 @@ class IncidentGrouper:
             """INSERT INTO incidents
                (source_ip, source_mac, status, severity, alert_count,
                 first_alert_at, last_alert_at)
-               VALUES (?, ?, 'active', ?, 1, ?, ?)""",
+               SELECT ?, ?, 'active', ?, 1, ?, ?
+               WHERE EXISTS (
+                   SELECT 1 FROM home_alerts WHERE id = ?
+               )
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM events
+                     WHERE event_type = 'alerts.history_cleared'
+                       AND seq >= ?
+                 )""",
             (
                 alert["source_ip"],
                 alert["source_mac"],
                 alert_severity.value,
                 time_str,
                 time_str,
+                alert["id"],
+                source_event_seq,
             ),
         )
+        if cursor.rowcount != 1 or cursor.lastrowid is None:
+            await self._db.commit()
+            return
         incident_id = cursor.lastrowid
-        await self._db.commit()
 
         # Link alert to incident
-        await self._db.execute(
-            "UPDATE home_alerts SET incident_id = ? WHERE id = ?",
-            (incident_id, alert["id"]),
+        alert_update = await self._db.execute(
+            """UPDATE home_alerts
+               SET incident_id = ?
+               WHERE id = ?
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM events
+                     WHERE event_type = 'alerts.history_cleared'
+                       AND seq >= ?
+                 )""",
+            (incident_id, alert["id"], source_event_seq),
         )
+        if alert_update.rowcount != 1:
+            await self._db.execute(
+                "DELETE FROM incidents WHERE id = ?",
+                (incident_id,),
+            )
+            await self._db.commit()
+            return
         await self._db.commit()
 
         # Generate initial summary
         summary = await self._generate_summary(incident_id)
-        await self._db.execute(
-            "UPDATE incidents SET summary = ? WHERE id = ?",
-            (summary, incident_id),
+        summary_update = await self._db.execute(
+            """UPDATE incidents
+               SET summary = ?
+               WHERE id = ?
+                 AND EXISTS (
+                     SELECT 1
+                     FROM home_alerts
+                     WHERE id = ? AND incident_id = ?
+                 )
+                 AND NOT EXISTS (
+                     SELECT 1
+                     FROM events
+                     WHERE event_type = 'alerts.history_cleared'
+                       AND seq >= ?
+                 )""",
+            (
+                summary,
+                incident_id,
+                alert["id"],
+                incident_id,
+                source_event_seq,
+            ),
         )
         await self._db.commit()
+        if summary_update.rowcount != 1:
+            return
 
         await self._event_bus.publish(
             "incident.new",
@@ -225,6 +360,7 @@ class IncidentGrouper:
                 "incident_id": incident_id,
                 "source_ip": alert["source_ip"],
                 "severity": alert_severity.value,
+                "source_event_seq": source_event_seq,
             },
         )
 

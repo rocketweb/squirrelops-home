@@ -7,12 +7,27 @@ headers, credential injection points, and mDNS advertisement info.
 
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass, field
 
 from squirrelops_home_sensor.scouts.engine import ServiceProfile
 
 logger = logging.getLogger("squirrelops_home_sensor.scouts")
+
+_HOP_BY_HOP_HEADERS = {
+    "connection",
+    "content-encoding",
+    "content-length",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
 
 # Device category → credential types to plant
 _CREDENTIAL_STRATEGY: dict[str, list[str]] = {
@@ -82,7 +97,7 @@ class MimicTemplateGenerator:
 
         first = profiles[0]
         category = self._categorize(device_type)
-        routes = self._build_routes(profiles)
+        routes = self._build_routes(profiles, source_hostname=hostname)
         server_header = self._pick_server_header(profiles)
         credential_types = _CREDENTIAL_STRATEGY.get(category, ["password"])
         mdns_service = _MDNS_SERVICES.get(category)
@@ -114,7 +129,12 @@ class MimicTemplateGenerator:
         }
         return mapping.get(device_type, "generic")
 
-    def _build_routes(self, profiles: list[ServiceProfile]) -> list[dict]:
+    def _build_routes(
+        self,
+        profiles: list[ServiceProfile],
+        *,
+        source_hostname: str | None = None,
+    ) -> list[dict]:
         """Build HTTP route configs from profiles with HTTP data."""
         routes: list[dict] = []
         for profile in profiles:
@@ -126,16 +146,39 @@ class MimicTemplateGenerator:
                 "method": "GET",
                 "port": profile.port,
                 "status": profile.http_status,
-                "headers": profile.http_headers or {},
+                "headers": {
+                    key: value
+                    for key, value in (profile.http_headers or {}).items()
+                    if (
+                        key.lower() not in _HOP_BY_HOP_HEADERS
+                        and key.lower() != "date"
+                    )
+                },
                 "body": profile.http_body_snippet or "",
+                "_source_ip": profile.ip_address,
             }
-
-            # Strip out hop-by-hop headers that shouldn't be replayed
-            for hdr in ("transfer-encoding", "connection", "keep-alive",
-                        "content-length", "content-encoding"):
-                route["headers"].pop(hdr, None)
+            if source_hostname:
+                route["_source_hostname"] = source_hostname
+            if any(
+                key.lower() == "date"
+                for key in (profile.http_headers or {})
+            ):
+                route["_include_date"] = True
 
             routes.append(route)
+            if profile.favicon_body:
+                routes.append(
+                    {
+                        "path": "/favicon.ico",
+                        "method": "GET",
+                        "port": profile.port,
+                        "status": 200,
+                        "headers": {"Content-Type": "image/x-icon"},
+                        "body_base64": base64.b64encode(
+                            profile.favicon_body
+                        ).decode("ascii"),
+                    }
+                )
 
         return routes
 

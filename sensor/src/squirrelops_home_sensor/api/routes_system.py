@@ -1,39 +1,36 @@
 """System routes: health, status, profile switching, learning progress."""
 from __future__ import annotations
 
+import copy
+import logging
 import time
 from datetime import UTC, datetime
 from enum import Enum
 
 import aiosqlite
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from squirrelops_home_sensor import __version__
 from squirrelops_home_sensor.api.deps import get_config, get_db, verify_client_cert
+from squirrelops_home_sensor.api.routes_decoys import get_decoy_orchestrator
+from squirrelops_home_sensor.api.routes_scouts import (
+    get_mimic_orchestrator,
+    get_scout_scheduler,
+)
 from squirrelops_home_sensor.devices.decoy_filter import DECOY_DEVICE_FILTER
+from squirrelops_home_sensor.profiles import (
+    PROFILE_SETTINGS,
+    ResourceProfile,
+)
 
 router = APIRouter(prefix="/system", tags=["system"])
+logger = logging.getLogger(__name__)
 
-# ---------- Profile definitions ----------
 
-PROFILE_SETTINGS = {
-    "lite": {
-        "scan_interval_seconds": 900,  # 15 min
-        "max_decoys": 3,
-        "llm_classification": "local_signature_db",
-    },
-    "standard": {
-        "scan_interval_seconds": 300,  # 5 min
-        "max_decoys": 8,
-        "llm_classification": "cloud_llm",
-    },
-    "full": {
-        "scan_interval_seconds": 60,  # 1 min
-        "max_decoys": 16,
-        "llm_classification": "local_llm",
-    },
-}
+async def get_scan_loop():
+    """Return the live ScanLoop. Overridden by the production entry point."""
+    return None
 
 
 # ---------- Request/Response models ----------
@@ -57,11 +54,13 @@ class HealthResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    version: str
     profile: str
     learning_mode: bool
     device_count: int
     decoy_count: int
     alert_count: int
+    event_seq: int
 
 
 class ProfileResponse(BaseModel):
@@ -69,6 +68,10 @@ class ProfileResponse(BaseModel):
     scan_interval_seconds: int
     max_decoys: int
     llm_classification: str
+    scout_interval_minutes: int
+    max_mimic_decoys: int
+    max_virtual_ips: int
+    total_decoy_capacity: int
 
 
 class LearningResponse(BaseModel):
@@ -99,6 +102,7 @@ async def health(request: Request):
 async def status(
     db: aiosqlite.Connection = Depends(get_db),
     config: dict = Depends(get_config),
+    mimic_orchestrator=Depends(get_mimic_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """System status with counts. Requires authentication."""
@@ -111,24 +115,70 @@ async def status(
     if row:
         device_count = row[0]
 
-    cursor = await db.execute(
-        "SELECT COUNT(*) FROM decoys WHERE status = 'active' AND decoy_type != 'mimic'"
-    )
+    decoy_query = "SELECT COUNT(*) FROM decoys WHERE status = 'active'"
+    if mimic_orchestrator is not None:
+        decoy_query += " AND decoy_type != 'mimic'"
+    cursor = await db.execute(decoy_query)
     row = await cursor.fetchone()
     if row:
         decoy_count = row[0]
+    if mimic_orchestrator is not None:
+        decoy_count += mimic_orchestrator.active_count
 
     cursor = await db.execute("SELECT COUNT(*) FROM home_alerts")
     row = await cursor.fetchone()
     if row:
         alert_count = row[0]
 
+    # This high-water mark is captured before the client fetches its
+    # authoritative REST collections. Replaying only events after this point
+    # closes the REST-to-WebSocket race without streaming the full historical
+    # event log into a freshly launched dashboard.
+    cursor = await db.execute("SELECT COALESCE(MAX(seq), 0) FROM events")
+    row = await cursor.fetchone()
+    event_seq = row[0] if row else 0
+
     return StatusResponse(
+        version=__version__,
         profile=config.get("profile", "standard"),
         learning_mode=config.get("learning_mode", {}).get("enabled", False),
         device_count=device_count,
         decoy_count=decoy_count,
         alert_count=alert_count,
+        event_seq=event_seq,
+    )
+
+
+def _classification_mode(config: dict, profile: ResourceProfile) -> str:
+    """Describe the classifier that can actually run with current settings."""
+    from urllib.parse import urlparse
+
+    classifier = config.get("classifier", {})
+    endpoint = str(classifier.get("llm_endpoint") or "").strip()
+    model = str(classifier.get("llm_model") or "").strip()
+    if not endpoint or not model:
+        return "local_signatures"
+
+    host = (urlparse(endpoint).hostname or "").lower()
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return "local_llm"
+    if profile is ResourceProfile.LITE:
+        return "local_signatures"
+    return "cloud_llm"
+
+
+def _profile_response(profile: ResourceProfile, config: dict) -> ProfileResponse:
+    """Build the API representation from the canonical profile settings."""
+    settings = PROFILE_SETTINGS[profile]
+    return ProfileResponse(
+        profile=profile.value,
+        scan_interval_seconds=settings.scan_interval,
+        max_decoys=settings.max_decoys,
+        llm_classification=_classification_mode(config, profile),
+        scout_interval_minutes=settings.scout_interval_minutes,
+        max_mimic_decoys=settings.max_mimic_decoys,
+        max_virtual_ips=settings.max_virtual_ips,
+        total_decoy_capacity=settings.total_decoy_capacity,
     )
 
 
@@ -138,39 +188,135 @@ async def get_profile(
     _auth: dict = Depends(verify_client_cert),
 ):
     """Get current resource profile and its settings."""
-    profile_name = config.get("profile", "standard")
-    settings = PROFILE_SETTINGS.get(profile_name, PROFILE_SETTINGS["standard"])
-    return ProfileResponse(
-        profile=profile_name,
-        **settings,
-    )
+    try:
+        profile = ResourceProfile(config.get("profile", ResourceProfile.STANDARD.value))
+    except ValueError:
+        profile = ResourceProfile.STANDARD
+    return _profile_response(profile, config)
 
 
 @router.put("/profile", response_model=ProfileResponse)
 async def set_profile(
     body: ProfileUpdateRequest,
     config: dict = Depends(get_config),
+    decoy_orchestrator=Depends(get_decoy_orchestrator),
+    scout_scheduler=Depends(get_scout_scheduler),
+    mimic_orchestrator=Depends(get_mimic_orchestrator),
+    scan_loop=Depends(get_scan_loop),
     _auth: dict = Depends(verify_client_cert),
 ):
-    """Switch resource profile. Updates config and persists to disk."""
+    """Switch resource profile and reconcile every live governed subsystem."""
     from squirrelops_home_sensor.api.routes_config import _persist_config
 
-    profile_name = body.profile.value
-    settings = PROFILE_SETTINGS[profile_name]
+    profile = ResourceProfile(body.profile.value)
+    settings = PROFILE_SETTINGS[profile]
+    old_config = copy.deepcopy(config)
 
-    # Update the live config dict
-    config["profile"] = profile_name
-    config["scan_interval_seconds"] = settings["scan_interval_seconds"]
-    config["max_decoys"] = settings["max_decoys"]
-    config.setdefault("network", {})["scan_interval"] = settings["scan_interval_seconds"]
-    config.setdefault("decoys", {})["max_decoys"] = settings["max_decoys"]
-
-    _persist_config(config)
-
-    return ProfileResponse(
-        profile=profile_name,
-        **settings,
+    old_scan_interval = (
+        scan_loop.scan_interval
+        if scan_loop is not None
+        else config.get("network", {}).get("scan_interval", 300)
     )
+    old_scout_interval = (
+        scout_scheduler.interval_minutes
+        if scout_scheduler is not None
+        else config.get("scouts", {}).get("interval_minutes", 30)
+    )
+    old_decoy_limit = (
+        decoy_orchestrator.max_decoys
+        if decoy_orchestrator is not None
+        else config.get("decoys", {}).get("max_decoys", 8)
+    )
+    old_mimic_limit = (
+        mimic_orchestrator.max_mimics
+        if mimic_orchestrator is not None
+        else config.get("scouts", {}).get("max_mimic_decoys", 10)
+    )
+    stopped_decoys: list[int] = []
+    stopped_mimics: list[int] = []
+
+    async def rollback_runtime() -> None:
+        """Best-effort rollback to the exact pre-request live limits."""
+        if mimic_orchestrator is not None:
+            await mimic_orchestrator.reconfigure(old_mimic_limit)
+            for decoy_id in stopped_mimics:
+                await mimic_orchestrator.enable_mimic(decoy_id)
+        if decoy_orchestrator is not None:
+            await decoy_orchestrator.reconfigure(old_decoy_limit)
+            for decoy_id in stopped_decoys:
+                await decoy_orchestrator.enable_decoy(decoy_id)
+        if scout_scheduler is not None:
+            await scout_scheduler.reconfigure(old_scout_interval)
+        if scan_loop is not None:
+            scan_loop.set_scan_interval(old_scan_interval)
+            set_classifier_mode = getattr(scan_loop, "set_classifier_mode", None)
+            if set_classifier_mode is not None:
+                set_classifier_mode(
+                    old_config.get("classifier", {}).get(
+                        "mode", "local_signatures"
+                    ),
+                    old_config,
+                )
+
+    # Reconfigure objects that otherwise retain the startup profile forever.
+    # The persisted config is not touched until every live change succeeds.
+    try:
+        if scan_loop is not None:
+            scan_loop.set_scan_interval(settings.scan_interval)
+            set_classifier_mode = getattr(scan_loop, "set_classifier_mode", None)
+            if set_classifier_mode is not None:
+                set_classifier_mode(settings.llm_mode.value, config)
+        if scout_scheduler is not None:
+            await scout_scheduler.reconfigure(settings.scout_interval_minutes)
+        if decoy_orchestrator is not None:
+            stopped_decoys = await decoy_orchestrator.reconfigure(settings.max_decoys)
+        if mimic_orchestrator is not None:
+            stopped_mimics = await mimic_orchestrator.reconfigure(
+                settings.max_mimic_decoys
+            )
+    except Exception as exc:
+        logger.exception("Failed to apply resource profile %s", profile.value)
+        try:
+            await rollback_runtime()
+        except Exception:
+            logger.exception("Failed to fully roll back resource profile change")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not apply {profile.value} resource profile",
+        ) from exc
+
+    # Keep both canonical nested settings and the legacy flat aliases in sync.
+    config["profile"] = profile.value
+    config["scan_interval_seconds"] = settings.scan_interval
+    config["max_decoys"] = settings.max_decoys
+    config.setdefault("network", {})["scan_interval"] = settings.scan_interval
+    config.setdefault("decoys", {})["max_decoys"] = settings.max_decoys
+    config.setdefault("classifier", {})["mode"] = settings.llm_mode.value
+    scouts = config.setdefault("scouts", {})
+    scouts["interval_minutes"] = settings.scout_interval_minutes
+    scouts["max_mimic_decoys"] = settings.max_mimic_decoys
+    scouts["max_virtual_ips"] = settings.max_virtual_ips
+
+    try:
+        _persist_config(config)
+    except Exception as exc:
+        config.clear()
+        config.update(old_config)
+        try:
+            await rollback_runtime()
+        except Exception:
+            logger.exception(
+                "Failed to fully roll back profile after persistence failure"
+            )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Could not save {profile.value} resource profile; "
+                "the previous profile remains active"
+            ),
+        ) from exc
+
+    return _profile_response(profile, config)
 
 
 @router.get("/learning", response_model=LearningResponse)

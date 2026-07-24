@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 
 import aiosqlite
 import httpx
+from cryptography import x509
+from cryptography.x509.oid import NameOID
 
 logger = logging.getLogger("squirrelops_home_sensor.scouts")
 
@@ -43,6 +45,7 @@ _PROTOCOL_PORTS: dict[int, str] = {
 }
 
 _MAX_BODY_SIZE = 2048  # 2KB body snippet
+_MAX_FAVICON_SIZE = 64 * 1024
 _HTTP_TIMEOUT = 5.0
 _PROTO_TIMEOUT = 5.0
 _TLS_TIMEOUT = 5.0
@@ -64,6 +67,7 @@ class ServiceProfile:
     http_body_snippet: str | None = None
     http_server_header: str | None = None
     favicon_hash: str | None = None
+    favicon_body: bytes | None = None
 
     # TLS probe results
     tls_cn: str | None = None
@@ -108,7 +112,7 @@ class ScoutEngine:
     async def scout_all(
         self, device_ports: dict[tuple[int, str], list[int]],
     ) -> int:
-        """Scout all devices with open ports.
+        """Scout and reconcile one authoritative open-port inventory.
 
         Parameters
         ----------
@@ -119,21 +123,51 @@ class ScoutEngine:
         """
         count = 0
         all_tasks = []
+        inventory_keys: set[tuple[int, int, str]] = set()
         for (device_id, ip), ports in device_ports.items():
             for port in ports:
+                inventory_keys.add((device_id, port, "tcp"))
                 all_tasks.append(self._scout_port(device_id, ip, port))
 
         results = await asyncio.gather(*all_tasks, return_exceptions=True)
-        for r in results:
-            if isinstance(r, ServiceProfile):
-                await self._persist_profile(r, commit=False)
-                count += 1
-            elif isinstance(r, Exception):
-                logger.debug("Scout probe failed: %s", r)
-        # Single commit for the entire batch instead of per-profile
-        if count > 0:
+        try:
+            for r in results:
+                if isinstance(r, ServiceProfile):
+                    await self._persist_profile(r, commit=False)
+                    count += 1
+                elif isinstance(r, Exception):
+                    logger.debug("Scout probe failed: %s", r)
+
+            # The scheduler calls this method only after it has read the current
+            # online/open-port inventory successfully. Remove profiles that no
+            # longer exist in that authoritative snapshot, including every
+            # profile when the successful snapshot is empty.
+            await self._remove_profiles_not_in(inventory_keys)
             await self._db.commit()
+        except Exception:
+            await self._db.rollback()
+            raise
         return count
+
+    async def _remove_profiles_not_in(
+        self,
+        inventory_keys: set[tuple[int, int, str]],
+    ) -> None:
+        """Delete profiles absent from a successful current inventory."""
+        cursor = await self._db.execute(
+            "SELECT id, device_id, port, protocol FROM service_profiles"
+        )
+        stale_ids = [
+            row["id"]
+            for row in await cursor.fetchall()
+            if (row["device_id"], row["port"], row["protocol"])
+            not in inventory_keys
+        ]
+        if stale_ids:
+            await self._db.executemany(
+                "DELETE FROM service_profiles WHERE id = ?",
+                [(profile_id,) for profile_id in stale_ids],
+            )
 
     async def get_profiles_for_device(self, device_id: int) -> list[ServiceProfile]:
         """Load stored profiles from DB."""
@@ -155,6 +189,7 @@ class ScoutEngine:
                 http_body_snippet=row["http_body_snippet"],
                 http_server_header=row["http_server_header"],
                 favicon_hash=row["favicon_hash"],
+                favicon_body=row["favicon_body"],
                 tls_cn=row["tls_cn"],
                 tls_issuer=row["tls_issuer"],
                 tls_not_after=row["tls_not_after"],
@@ -182,6 +217,7 @@ class ScoutEngine:
                 http_body_snippet=row["http_body_snippet"],
                 http_server_header=row["http_server_header"],
                 favicon_hash=row["favicon_hash"],
+                favicon_body=row["favicon_body"],
                 tls_cn=row["tls_cn"],
                 tls_issuer=row["tls_issuer"],
                 tls_not_after=row["tls_not_after"],
@@ -190,27 +226,59 @@ class ScoutEngine:
             ))
         return profiles
 
-    async def get_mimic_candidates(self, count: int = 10) -> list[ServiceProfile]:
-        """Return profiles that are good candidates for mimic decoys.
+    async def get_mimic_candidates(
+        self,
+        count: int = 10,
+        exclude_device_ids: set[int] | None = None,
+    ) -> list[ServiceProfile]:
+        """Return complete profiles for up to ``count`` candidate devices.
 
-        Prioritizes profiles with rich HTTP data from smart_home/IoT devices.
+        ``count`` is a device count, not a profile-row count. The old query
+        applied ``LIMIT`` directly to service rows, so a multi-port device
+        consumed every slot and already-mimicked devices could starve all new
+        candidates. Banner-only services are valid mimic inputs too.
         """
+        if count <= 0:
+            return []
+
+        excluded = sorted(exclude_device_ids or set())
+        exclusion_sql = ""
+        params: list[int] = []
+        if excluded:
+            placeholders = ",".join("?" for _ in excluded)
+            exclusion_sql = f"AND d.id NOT IN ({placeholders})"
+            params.extend(excluded)
+        params.append(count)
+
         cursor = await self._db.execute(
-            """SELECT sp.*, d.device_type
-               FROM service_profiles sp
-               JOIN devices d ON d.id = sp.device_id
-               WHERE sp.http_status IS NOT NULL
-               ORDER BY
-                   CASE d.device_type
-                       WHEN 'smart_home' THEN 0
-                       WHEN 'camera' THEN 1
-                       WHEN 'media' THEN 2
-                       WHEN 'printer' THEN 3
-                       ELSE 4
-                   END,
-                   sp.port
-               LIMIT ?""",
-            (count,),
+            f"""WITH candidate_devices AS (
+                    SELECT
+                        d.id AS device_id,
+                        CASE d.device_type
+                            WHEN 'smart_home' THEN 0
+                            WHEN 'camera' THEN 1
+                            WHEN 'media' THEN 2
+                            WHEN 'printer' THEN 3
+                            ELSE 4
+                        END AS device_priority,
+                        MIN(sp.port) AS first_port
+                    FROM devices d
+                    JOIN service_profiles sp ON sp.device_id = d.id
+                    WHERE d.is_online = 1
+                    AND (
+                        sp.http_status IS NOT NULL
+                        OR sp.protocol_version IS NOT NULL
+                    )
+                    {exclusion_sql}
+                    GROUP BY d.id, d.device_type
+                    ORDER BY device_priority, first_port, d.id
+                    LIMIT ?
+                )
+                SELECT sp.*, cd.device_priority, cd.first_port
+                FROM candidate_devices cd
+                JOIN service_profiles sp ON sp.device_id = cd.device_id
+                ORDER BY cd.device_priority, cd.first_port, cd.device_id, sp.port""",
+            tuple(params),
         )
         rows = await cursor.fetchall()
         profiles = []
@@ -226,6 +294,7 @@ class ScoutEngine:
                 http_body_snippet=row["http_body_snippet"],
                 http_server_header=row["http_server_header"],
                 favicon_hash=row["favicon_hash"],
+                favicon_body=row["favicon_body"],
                 tls_cn=row["tls_cn"],
                 tls_issuer=row["tls_issuer"],
                 tls_not_after=row["tls_not_after"],
@@ -312,12 +381,26 @@ class ScoutEngine:
 
             # GET /favicon.ico
             try:
-                favicon_resp = await client.get(f"{base_url}/favicon.ico")
-                if favicon_resp.status_code == 200 and len(favicon_resp.content) > 0:
-                    profile.favicon_hash = hashlib.md5(
-                        favicon_resp.content,
-                        usedforsecurity=False,
-                    ).hexdigest()
+                async with client.stream(
+                    "GET",
+                    f"{base_url}/favicon.ico",
+                ) as favicon_resp:
+                    if favicon_resp.status_code == 200:
+                        payload = bytearray()
+                        async for chunk in favicon_resp.aiter_bytes(
+                            chunk_size=8192
+                        ):
+                            if len(payload) + len(chunk) > _MAX_FAVICON_SIZE:
+                                payload.clear()
+                                break
+                            payload.extend(chunk)
+                        if payload:
+                            favicon_body = bytes(payload)
+                            profile.favicon_body = favicon_body
+                            profile.favicon_hash = hashlib.md5(
+                                favicon_body,
+                                usedforsecurity=False,
+                            ).hexdigest()
             except Exception:
                 pass  # favicon is optional
 
@@ -337,13 +420,27 @@ class ScoutEngine:
             try:
                 ssl_obj = writer.get_extra_info("ssl_object")
                 if ssl_obj:
-                    cert = ssl_obj.getpeercert(binary_form=False)
-                    if cert:
-                        subject = dict(x[0] for x in cert.get("subject", ()))
-                        issuer = dict(x[0] for x in cert.get("issuer", ()))
-                        profile.tls_cn = subject.get("commonName")
-                        profile.tls_issuer = issuer.get("organizationName")
-                        profile.tls_not_after = cert.get("notAfter")
+                    cert_der = ssl_obj.getpeercert(binary_form=True)
+                    if cert_der:
+                        cert = x509.load_der_x509_certificate(cert_der)
+                        common_names = cert.subject.get_attributes_for_oid(
+                            NameOID.COMMON_NAME
+                        )
+                        organizations = cert.issuer.get_attributes_for_oid(
+                            NameOID.ORGANIZATION_NAME
+                        )
+                        issuer_names = cert.issuer.get_attributes_for_oid(
+                            NameOID.COMMON_NAME
+                        )
+                        if common_names:
+                            profile.tls_cn = common_names[0].value
+                        if organizations:
+                            profile.tls_issuer = organizations[0].value
+                        elif issuer_names:
+                            profile.tls_issuer = issuer_names[0].value
+                        profile.tls_not_after = (
+                            cert.not_valid_after_utc.isoformat()
+                        )
             finally:
                 writer.close()
                 await writer.wait_closed()
@@ -394,27 +491,29 @@ class ScoutEngine:
             """INSERT INTO service_profiles
                (device_id, ip_address, port, protocol, service_name,
                 http_status, http_headers, http_body_snippet, http_server_header,
-                favicon_hash, tls_cn, tls_issuer, tls_not_after,
+                favicon_hash, favicon_body, tls_cn, tls_issuer, tls_not_after,
                 protocol_version, scouted_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(device_id, port, protocol) DO UPDATE SET
                    ip_address = excluded.ip_address,
-                   service_name = COALESCE(excluded.service_name, service_profiles.service_name),
-                   http_status = COALESCE(excluded.http_status, service_profiles.http_status),
-                   http_headers = COALESCE(excluded.http_headers, service_profiles.http_headers),
-                   http_body_snippet = COALESCE(excluded.http_body_snippet, service_profiles.http_body_snippet),
-                   http_server_header = COALESCE(excluded.http_server_header, service_profiles.http_server_header),
-                   favicon_hash = COALESCE(excluded.favicon_hash, service_profiles.favicon_hash),
-                   tls_cn = COALESCE(excluded.tls_cn, service_profiles.tls_cn),
-                   tls_issuer = COALESCE(excluded.tls_issuer, service_profiles.tls_issuer),
-                   tls_not_after = COALESCE(excluded.tls_not_after, service_profiles.tls_not_after),
-                   protocol_version = COALESCE(excluded.protocol_version, service_profiles.protocol_version),
+                   service_name = excluded.service_name,
+                   http_status = excluded.http_status,
+                   http_headers = excluded.http_headers,
+                   http_body_snippet = excluded.http_body_snippet,
+                   http_server_header = excluded.http_server_header,
+                   favicon_hash = excluded.favicon_hash,
+                   favicon_body = excluded.favicon_body,
+                   tls_cn = excluded.tls_cn,
+                   tls_issuer = excluded.tls_issuer,
+                   tls_not_after = excluded.tls_not_after,
+                   protocol_version = excluded.protocol_version,
                    scouted_at = excluded.scouted_at""",
             (
                 profile.device_id, profile.ip_address, profile.port,
                 profile.protocol, profile.service_name,
                 profile.http_status, headers_json, profile.http_body_snippet,
                 profile.http_server_header, profile.favicon_hash,
+                profile.favicon_body,
                 profile.tls_cn, profile.tls_issuer, profile.tls_not_after,
                 profile.protocol_version, profile.scouted_at,
             ),

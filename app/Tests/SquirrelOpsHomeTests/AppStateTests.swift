@@ -52,6 +52,7 @@ struct AppStateTests {
         #expect(state.decoys.isEmpty)
         #expect(state.systemStatus == nil)
         #expect(state.pairedSensor == nil)
+        #expect(state.selectedDashboardSection == .dashboard)
     }
 
     // MARK: - isPaired
@@ -207,8 +208,12 @@ struct AppStateTests {
     @Test("applySyncData populates all fields")
     func applySyncDataPopulates() {
         let state = AppState()
-        let health = HealthResponse(version: "1.0", sensorId: "s1", uptimeSeconds: 60)
-        let status = StatusResponse(profile: "standard", learningMode: false, deviceCount: 1, decoyCount: 1, alertCount: 1)
+        let health = HealthResponse(sensorId: "s1", uptimeSeconds: 60)
+        let status = StatusResponse(
+            profile: "standard", learningMode: false,
+            deviceCount: 1, decoyCount: 1, alertCount: 1,
+            version: "1.1.4"
+        )
         let device = DeviceSummary(
             id: 1, ipAddress: "192.168.1.10", macAddress: "AA:BB:CC:DD:EE:FF",
             hostname: "test", vendor: nil, deviceType: "computer", customName: nil,
@@ -223,7 +228,7 @@ struct AppStateTests {
 
         state.applySyncData(sensorInfo: health, status: status, devices: [device], alerts: [makeAlert(id: 1)], decoys: decoys)
 
-        #expect(state.sensorInfo?.version == "1.0")
+        #expect(state.sensorInfo?.version == "1.1.4")
         #expect(state.systemStatus?.profile == "standard")
         #expect(state.devices.count == 1)
         #expect(state.alerts.count == 1)
@@ -263,6 +268,80 @@ struct AppStateTests {
         )
 
         #expect(state.devices.map(\.ipAddress) == ["192.168.1.117"])
+    }
+
+    @Test("Stopped mimic does not hide a real device at its old address")
+    func stoppedMimicDoesNotHideRealDevice() {
+        let device = DeviceSummary(
+            id: 2, ipAddress: "192.168.1.202", macAddress: "38:42:0B:48:51:07",
+            hostname: "real-device", vendor: nil, deviceType: "unknown",
+            customName: nil, trustStatus: "unknown", isOnline: true,
+            firstSeen: "2026-01-01", lastSeen: "2026-01-01"
+        )
+        let stoppedMimic = DecoySummary(
+            id: 10, name: "old-mimic", decoyType: "mimic",
+            bindAddress: "192.168.1.202", port: 80, status: "stopped",
+            connectionCount: 0, credentialTripCount: 0,
+            createdAt: "2026-01-01", updatedAt: "2026-01-01"
+        )
+
+        let visible = AppState.visibleDevices([device], decoys: [stoppedMimic])
+
+        #expect(visible.map(\.ipAddress) == ["192.168.1.202"])
+    }
+
+    @Test("Active deployment count groups per-port mimic services by fake host")
+    func activeDeploymentCountGroupsMimicServices() {
+        let firstService = DecoySummary(
+            id: 10,
+            name: "laptop.local",
+            decoyType: "mimic",
+            bindAddress: "192.168.1.200",
+            port: 22,
+            status: "active",
+            connectionCount: 0,
+            credentialTripCount: 0,
+            createdAt: "2026-07-24T10:00:00Z",
+            updatedAt: "2026-07-24T10:00:00Z",
+            hostId: 7,
+            hostname: "laptop.local",
+            serviceProtocol: "tcp",
+            serviceName: "SSH"
+        )
+        let secondService = DecoySummary(
+            id: 11,
+            name: "laptop.local",
+            decoyType: "mimic",
+            bindAddress: "192.168.1.200",
+            port: 443,
+            status: "active",
+            connectionCount: 0,
+            credentialTripCount: 0,
+            createdAt: "2026-07-24T10:00:00Z",
+            updatedAt: "2026-07-24T10:00:00Z",
+            hostId: 7,
+            hostname: "laptop.local",
+            serviceProtocol: "tcp",
+            serviceName: "HTTPS"
+        )
+        let classic = DecoySummary(
+            id: 12,
+            name: "Host listener",
+            decoyType: "http",
+            bindAddress: "0.0.0.0",
+            port: 8080,
+            status: "active",
+            connectionCount: 0,
+            credentialTripCount: 0,
+            createdAt: "2026-07-24T10:00:00Z",
+            updatedAt: "2026-07-24T10:00:00Z"
+        )
+
+        #expect(
+            AppState.activeDecoyDeploymentCount(
+                in: [firstService, secondService, classic]
+            ) == 2
+        )
     }
 
     @Test("updateDevice replaces existing or appends new")
@@ -358,6 +437,104 @@ struct AppStateTests {
         #expect(state.alerts[0].readAt == nil)
         state.markAlertRead(1)
         #expect(state.alerts[0].readAt != nil)
+    }
+
+    @Test("applyResourceProfile updates dashboard profile and capacity")
+    func applyResourceProfileUpdatesDashboard() {
+        let state = AppState()
+        state.systemStatus = StatusResponse(
+            profile: "standard",
+            learningMode: false,
+            deviceCount: 10,
+            decoyCount: 6,
+            alertCount: 0,
+            version: "1.1.5"
+        )
+        let profile = ResourceProfileResponse(
+            profile: "full",
+            scanIntervalSeconds: 60,
+            maxDecoys: 16,
+            llmClassification: "local_llm",
+            scoutIntervalMinutes: 30,
+            maxMimicDecoys: 30,
+            maxVirtualIPs: 30,
+            totalDecoyCapacity: 46
+        )
+
+        state.applyResourceProfile(profile)
+
+        #expect(state.resourceProfile == profile)
+        #expect(state.systemStatus?.profile == "full")
+        #expect(state.systemStatus?.deviceCount == 10)
+        #expect(state.systemStatus?.decoyCount == 6)
+    }
+
+    @Test("applyAlertHistoryClear removes alerts and incidents and resets count")
+    func applyAlertHistoryClearResetsState() {
+        let state = AppState()
+        state.alerts = [makeAlert(id: 1)]
+        state.incidents = [
+            IncidentDetail(
+                id: 1,
+                sourceIp: "192.168.1.50",
+                sourceMac: nil,
+                status: "active",
+                severity: "high",
+                alertCount: 1,
+                firstAlertAt: "2026-07-23T00:00:00Z",
+                lastAlertAt: "2026-07-23T00:00:00Z",
+                closedAt: nil,
+                summary: nil,
+                alerts: []
+            ),
+        ]
+        state.systemStatus = StatusResponse(
+            profile: "full",
+            learningMode: false,
+            deviceCount: 10,
+            decoyCount: 6,
+            alertCount: 1,
+            version: "1.1.5"
+        )
+
+        state.applyAlertHistoryClear(
+            AlertHistoryClearResponse(
+                alertsDeleted: 1,
+                incidentsDeleted: 1,
+                replayEventsDeleted: 2,
+                backupFile: "/tmp/alerts.json",
+                clearedAt: "2026-07-23T00:01:00Z"
+            )
+        )
+
+        #expect(state.alerts.isEmpty)
+        #expect(state.incidents.isEmpty)
+        #expect(state.systemStatus?.alertCount == 0)
+    }
+
+    @Test("updateSystemStatus refreshes authenticated sensor version")
+    func updateSystemStatusRefreshesVersion() {
+        let state = AppState()
+        state.sensorInfo = HealthResponse(
+            version: nil,
+            sensorId: "sensor-1",
+            uptimeSeconds: 120
+        )
+
+        state.updateSystemStatus(
+            StatusResponse(
+                profile: "full",
+                learningMode: false,
+                deviceCount: 1,
+                decoyCount: 1,
+                alertCount: 0,
+                version: "1.1.5"
+            )
+        )
+
+        #expect(state.sensorInfo?.version == "1.1.5")
+        #expect(state.sensorInfo?.sensorId == "sensor-1")
+        #expect(state.sensorInfo?.uptimeSeconds == 120)
     }
 
     // MARK: - Learning Status

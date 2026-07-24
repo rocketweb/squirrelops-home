@@ -13,26 +13,43 @@ import asyncio
 import json
 import logging
 import socket
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from squirrelops_home_sensor.netvalidation import is_valid_ipv4
 from squirrelops_home_sensor.privileged.helper import (
     DNSQuery,
     PrivilegedOperations,
     ServiceResult,
 )
+from squirrelops_home_sensor.scanner.port_scanner import PortScanner
 
 logger = logging.getLogger(__name__)
 
+HELPER_PROTOCOL_VERSION = 1
+REQUIRED_HELPER_CAPABILITIES = frozenset(
+    {
+        "arp_scan",
+        "virtual_ip",
+        "port_forward_isolation",
+    }
+)
+SERVICE_SCAN_CONNECT_TIMEOUT = 2.0
+SERVICE_SCAN_BANNER_TIMEOUT = 2.0
+SERVICE_SCAN_MAX_CONCURRENT = 32
+SERVICE_SCAN_MAX_PROBES = 4096
+
 
 class MacOSPrivilegedOps(PrivilegedOperations):
-    """Privileged operations delegated to the macOS helper via JSON-RPC.
+    """macOS operations, delegating only privileged work to the helper.
 
     Parameters
     ----------
     socket_path:
         Path to the Unix domain socket (default: /var/run/squirrelops-helper.sock).
     """
+
+    requires_active_alias_withdrawal_probe = True
 
     def __init__(
         self,
@@ -44,30 +61,45 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         self._rpc_timeout = rpc_timeout
 
     async def is_available(self) -> bool:
-        """Check whether the macOS helper socket exists and is connectable."""
+        """Prove this process can use the expected helper RPC protocol."""
         import os
 
         if not os.path.exists(self._socket_path):
             return False
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(self._socket_path), timeout=2.0,
+            result = await asyncio.wait_for(
+                self._call("ping"),
+                timeout=2.0,
             )
-            writer.close()
-            await writer.wait_closed()
-            return True
+            if not isinstance(result, dict):
+                return False
+            capabilities = result.get("capabilities")
+            return (
+                result.get("status") == "ok"
+                and result.get("protocol_version") == HELPER_PROTOCOL_VERSION
+                and isinstance(capabilities, list)
+                and all(isinstance(item, str) for item in capabilities)
+                and REQUIRED_HELPER_CAPABILITIES.issubset(capabilities)
+            )
         except Exception:
+            logger.debug("Privileged helper capability probe failed", exc_info=True)
             return False
 
-    async def _call(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    async def _call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
         """Send a JSON-RPC request to the helper and return the result.
 
-        Raises asyncio.TimeoutError if the helper does not respond
-        within rpc_timeout seconds.
+        Raises asyncio.TimeoutError if the helper does not respond within the
+        operation timeout.
         """
         return await asyncio.wait_for(
             self._call_inner(method, params),
-            timeout=self._rpc_timeout,
+            timeout=self._rpc_timeout if timeout is None else timeout,
         )
 
     async def _call_inner(self, method: str, params: dict[str, Any] | None = None) -> Any:
@@ -93,9 +125,10 @@ class MacOSPrivilegedOps(PrivilegedOperations):
             If the helper returns a JSON-RPC error.
         """
         self._request_id += 1
+        request_id = self._request_id
         request: dict[str, Any] = {
             "jsonrpc": "2.0",
-            "id": self._request_id,
+            "id": request_id,
             "method": method,
         }
         if params is not None:
@@ -109,12 +142,20 @@ class MacOSPrivilegedOps(PrivilegedOperations):
             response_line = await reader.readline()
             response = json.loads(response_line.decode())
 
+            if (
+                not isinstance(response, dict)
+                or response.get("jsonrpc") != "2.0"
+                or response.get("id") != request_id
+            ):
+                raise RuntimeError("Invalid helper JSON-RPC response")
             if "error" in response:
-                raise RuntimeError(
-                    f"Helper error: {response['error'].get('message', 'unknown')}"
-                )
+                error = response["error"]
+                message = error.get("message", "unknown") if isinstance(error, dict) else "unknown"
+                raise RuntimeError(f"Helper error: {message}")
+            if "result" not in response:
+                raise RuntimeError("Helper response is missing a result")
 
-            return response.get("result")
+            return response["result"]
         finally:
             writer.close()
             await writer.wait_closed()
@@ -124,75 +165,89 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         result = await self._call("runARPScan", {"subnet": subnet})
         return [(entry["ip"], entry["mac"]) for entry in result]
 
-    async def service_scan(
-        self, targets: list[str], ports: list[int]
-    ) -> list[ServiceResult]:
-        """Delegate service scan to the helper."""
-        result = await self._call(
-            "runServiceScan",
-            {"targets": targets, "ports": ports},
+    async def service_scan(self, targets: list[str], ports: list[int]) -> list[ServiceResult]:
+        """Scan services locally with bounded unprivileged TCP connections."""
+        if not targets or not ports:
+            return []
+        for target in targets:
+            if not isinstance(target, str) or not is_valid_ipv4(target):
+                raise ValueError(f"Invalid scan target: {target!r}")
+        for port in ports:
+            if (
+                isinstance(port, bool)
+                or not isinstance(port, int)
+                or not 1 <= port <= 65535
+            ):
+                raise ValueError(f"Invalid scan port: {port!r}")
+        if len(targets) * len(ports) > SERVICE_SCAN_MAX_PROBES:
+            raise ValueError(
+                f"Service scan requested too many probes; "
+                f"maximum is {SERVICE_SCAN_MAX_PROBES}"
+            )
+
+        scanner = PortScanner(
+            timeout_per_port=SERVICE_SCAN_CONNECT_TIMEOUT,
+            max_concurrent=SERVICE_SCAN_MAX_CONCURRENT,
+        )
+        scanned = await scanner.scan_with_banners(
+            targets=targets,
+            ports=ports,
+            banner_timeout=SERVICE_SCAN_BANNER_TIMEOUT,
         )
         return [
-            ServiceResult(
-                ip=entry["ip"],
-                port=entry["port"],
-                banner=entry.get("banner"),
-            )
-            for entry in result
+            ServiceResult(ip=target, port=result.port, banner=result.banner)
+            for target in targets
+            for result in scanned.get(target, [])
         ]
 
-    async def bind_listener(self, address: str, port: int) -> socket.socket:
-        """Request the helper to bind a listening socket.
-
-        The helper binds the socket and returns the file descriptor,
-        which we wrap in a Python socket object.
-        """
-        result = await self._call(
-            "bindListener",
-            {"address": address, "port": port},
-        )
-        fd = result.get("fd")
-        if fd is not None:
-            sock = socket.socket(fileno=fd)
-            return sock
-        # Fallback: create a socket directly (non-privileged port)
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((address, port))
-        sock.listen(128)
-        sock.setblocking(False)
-        return sock
-
     async def start_dns_sniff(self, interface: str) -> None:
-        """Request the helper to start DNS sniffing."""
-        await self._call("startDNSSniff", {"interface": interface})
+        """Reject DNS capture until a real macOS implementation exists."""
+        del interface
+        raise NotImplementedError(
+            "DNS capture is not supported on macOS"
+        )
 
     async def stop_dns_sniff(self) -> None:
-        """Request the helper to stop DNS sniffing."""
-        await self._call("stopDNSSniff")
+        """Allow optional cleanup even though macOS DNS capture is unsupported."""
 
     async def get_dns_queries(self, since: datetime) -> list[DNSQuery]:
-        """Request captured DNS queries from the helper."""
-        result = await self._call(
-            "getDNSQueries",
-            {"since": since.isoformat()},
+        """Reject DNS reads rather than pretending an empty capture is real."""
+        del since
+        raise NotImplementedError(
+            "DNS capture is not supported on macOS"
         )
-        queries = []
-        for entry in result:
-            ts = datetime.fromisoformat(entry["timestamp"])
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=UTC)
-            queries.append(
-                DNSQuery(
-                    query_name=entry["query_name"],
-                    source_ip=entry["source_ip"],
-                    timestamp=ts,
-                )
+
+    async def bind_listener(self, address: str, port: int) -> socket.socket:
+        """Bind an unprivileged listener in the sensor process.
+
+        JSON-RPC cannot transfer an open file descriptor. Privileged ports must
+        therefore use the helper's PF redirect support instead of pretending a
+        helper-side bind can produce a usable sensor-side socket.
+        """
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise ValueError("Listener port must be between 1 and 65535")
+        if port < 1024:
+            raise PermissionError(
+                "The macOS helper cannot transfer listening socket descriptors; "
+                "privileged ports below 1024 must use PF port forwarding"
             )
-        return queries
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((address, port))
+            sock.listen(128)
+            sock.setblocking(False)
+        except Exception:
+            sock.close()
+            raise
+        return sock
 
     async def add_ip_alias(
-        self, ip: str, interface: str = "en0", mask: str = "255.255.255.0",
+        self,
+        ip: str,
+        interface: str = "en0",
+        mask: str = "255.255.255.255",
     ) -> bool:
         """Delegate IP alias creation to the helper."""
         try:
@@ -218,13 +273,20 @@ class MacOSPrivilegedOps(PrivilegedOperations):
             return False
 
     async def setup_port_forwards(
-        self, rules: list[dict], interface: str = "en0",
+        self,
+        rules: list[dict],
+        interface: str = "en0",
+        protected_endpoints: list[dict] | None = None,
     ) -> bool:
-        """Delegate pfctl port forward setup to the helper."""
+        """Delegate pfctl forwarding and virtual-IP isolation to the helper."""
         try:
             result = await self._call(
                 "setupPortForwards",
-                {"rules": rules, "interface": interface},
+                {
+                    "rules": rules,
+                    "protected_endpoints": protected_endpoints or [],
+                    "interface": interface,
+                },
             )
             count = result.get("rules_count", 0)
             logger.info("Port forwarding: %d pfctl rules loaded", count)

@@ -41,6 +41,56 @@ class EventLog:
         assert cursor.lastrowid is not None
         return cursor.lastrowid
 
+    async def entity_exists_for_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        """Return false for an alert/incident event whose row was cleared.
+
+        Alert producers persist their row before publishing. A history clear
+        may validly delete that row in between those awaits; suppressing the
+        now-orphaned event prevents phantom alerts from reaching clients.
+        """
+        if event_type in {"alert.new", "alert.updated"}:
+            table = "home_alerts"
+            entity_id = payload.get("id")
+        elif event_type in {"incident.new", "incident.updated"}:
+            table = "incidents"
+            # Incident producers historically publish ``incident_id`` while
+            # alert producers use ``id``.  Check both so a clear that lands
+            # between the row commit and event publication cannot replay a
+            # now-orphaned incident.
+            entity_id = payload.get("incident_id", payload.get("id"))
+        else:
+            return True
+
+        source_event_seq = payload.get("source_event_seq")
+        if (
+            isinstance(source_event_seq, int)
+            and not isinstance(source_event_seq, bool)
+            and source_event_seq > 0
+        ):
+            cursor = await self._db.execute(
+                """SELECT 1
+                   FROM events
+                   WHERE event_type = 'alerts.history_cleared'
+                     AND seq >= ?
+                   LIMIT 1""",
+                (source_event_seq,),
+            )
+            if await cursor.fetchone() is not None:
+                return False
+
+        if not isinstance(entity_id, int):
+            return True
+
+        cursor = await self._db.execute(
+            f"SELECT 1 FROM {table} WHERE id = ? LIMIT 1",
+            (entity_id,),
+        )
+        return await cursor.fetchone() is not None
+
     async def replay(self, since_seq: int) -> list[dict[str, Any]]:
         """Return all events with seq > since_seq, ordered by seq ascending.
 

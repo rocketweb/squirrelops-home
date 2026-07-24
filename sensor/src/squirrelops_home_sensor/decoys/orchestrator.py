@@ -14,8 +14,13 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import ipaddress
 import json as json_mod
 import logging
+import re
+import socket
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
 
@@ -34,6 +39,11 @@ _HA_MDNS_SERVICE = "_home-assistant._tcp"
 _MAX_FAILURES_BEFORE_DEGRADED = 3
 _FAILURE_WINDOW = timedelta(minutes=5)
 _DEGRADED_RETRY_INTERVAL = timedelta(minutes=30)
+
+
+class _BindAddressUnavailableError(RuntimeError):
+    """Raised when the host has no concrete LAN address for a classic decoy."""
+
 
 _DECOY_NAMES = {
     "file_share": "Network Share",
@@ -105,6 +115,88 @@ def _parse_config(raw: str | None) -> dict:
         return json_mod.loads(raw)
     except (json_mod.JSONDecodeError, TypeError):
         return {}
+
+
+def _route_selected_ip() -> str | None:
+    """Return the address selected by the default route, if available."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return str(ipaddress.IPv4Address(sock.getsockname()[0]))
+    except (OSError, ValueError):
+        return None
+    finally:
+        sock.close()
+
+
+def _interface_ipv4_addresses(interface: str) -> list[str]:
+    """Enumerate IPv4 addresses for one configured interface in OS order."""
+    try:
+        if sys.platform == "darwin":
+            command = ["/sbin/ifconfig", interface]
+        else:
+            command = ["ip", "-4", "-o", "addr", "show", "dev", interface]
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return re.findall(r"inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)", result.stdout)
+
+
+def _resolve_bind_address(
+    *,
+    interface: str,
+    excluded_ips: set[str],
+    virtual_ip_range_start: int,
+    virtual_ip_range_end: int,
+) -> str | None:
+    """Return a concrete local address for classic decoy listeners.
+
+    Binding classic decoys to ``0.0.0.0`` also exposed them on every mimic
+    virtual-IP alias, making those aliases look exactly like the sensor host.
+    The default-route address is authoritative while online. Offline, use the
+    configured interface's primary non-virtual address. Active virtual IPs and
+    the configured allocation range are excluded so a classic listener can
+    never accidentally bind to a mimic alias.
+    """
+    def usable(candidate: str | None, *, exclude_virtual_range: bool) -> bool:
+        if not candidate or candidate in excluded_ips:
+            return False
+        try:
+            address = ipaddress.IPv4Address(candidate)
+        except ValueError:
+            return False
+        if address.is_unspecified or address.is_loopback or address.is_link_local:
+            return False
+        host_octet = int(str(address).rsplit(".", 1)[-1])
+        return not (
+            exclude_virtual_range
+            and virtual_ip_range_start <= host_octet <= virtual_ip_range_end
+        )
+
+    routed = _route_selected_ip()
+    if usable(routed, exclude_virtual_range=False):
+        return routed
+    for candidate in _interface_ipv4_addresses(interface):
+        if usable(candidate, exclude_virtual_range=True):
+            return candidate
+    return None
+
+
+def _deferred_bind_marker(candidate: str) -> str:
+    """Return a non-listening marker instead of preserving an unsafe address."""
+    try:
+        address = ipaddress.IPv4Address(candidate)
+    except ValueError:
+        return "0.0.0.0"
+    if address.is_unspecified or address.is_loopback or address.is_link_local:
+        return "0.0.0.0"
+    return str(address)
 
 
 def _generate_credentials(
@@ -187,6 +279,10 @@ class DecoyOrchestrator:
         canary_enabled: bool = False,
         canary_domain: str = "canary.local",
         credential_filename: str = "passwords.txt",
+        bind_address: str | None = None,
+        interface: str = "en0",
+        virtual_ip_range_start: int = 200,
+        virtual_ip_range_end: int = 250,
     ) -> None:
         self._event_bus = event_bus
         self._db = db
@@ -194,12 +290,128 @@ class DecoyOrchestrator:
         self._canary_enabled = canary_enabled
         self._canary_domain = canary_domain
         self._credential_filename = credential_filename or "passwords.txt"
+        self._bind_address = bind_address
+        self._interface = interface
+        self._virtual_ip_range_start = virtual_ip_range_start
+        self._virtual_ip_range_end = virtual_ip_range_end
         self._records: dict[int, DecoyRecord] = {}
         # The event loop that owns this orchestrator. Captured on deploy (which
         # always runs on the loop) so connection callbacks raised on non-loop
         # threads (HTTP-emulator decoys use ThreadingHTTPServer) can schedule
         # the async handler back onto the loop thread-safely.
         self._loop: asyncio.AbstractEventLoop | None = None
+
+    async def _get_bind_address(self) -> str:
+        """Resolve a concrete non-mimic listener address or fail closed.
+
+        Dynamic results are deliberately not cached. A sensor that starts
+        without networking must retry resolution after the LAN returns, and a
+        sensor moved between networks must not keep binding an obsolete host
+        address.
+        """
+        if self._bind_address is not None:
+            try:
+                configured = ipaddress.IPv4Address(self._bind_address)
+            except ValueError as exc:
+                raise _BindAddressUnavailableError(
+                    "Configured classic-decoy bind address is invalid"
+                ) from exc
+            if (
+                configured.is_unspecified
+                or configured.is_loopback
+                or configured.is_link_local
+            ):
+                raise _BindAddressUnavailableError(
+                    "Configured classic-decoy bind address is not a LAN address"
+                )
+            return str(configured)
+        excluded: set[str] = set()
+        try:
+            cursor = await self._db.execute(
+                "SELECT ip_address FROM virtual_ips WHERE released_at IS NULL"
+            )
+            excluded = {row["ip_address"] for row in await cursor.fetchall()}
+        except Exception:
+            logger.warning(
+                "Could not load virtual-IP exclusions for decoy binding",
+                exc_info=True,
+            )
+        bind_address = _resolve_bind_address(
+            interface=self._interface,
+            excluded_ips=excluded,
+            virtual_ip_range_start=self._virtual_ip_range_start,
+            virtual_ip_range_end=self._virtual_ip_range_end,
+        )
+        if bind_address is None:
+            raise _BindAddressUnavailableError(
+                f"No concrete LAN address is available on {self._interface}"
+            )
+        return bind_address
+
+    async def _defer_bind(self, decoy_id: int, persisted_bind: str) -> None:
+        """Keep active intent retryable without claiming an unreachable listener."""
+        now = datetime.now(UTC).isoformat()
+        await self._db.execute(
+            """UPDATE decoys
+               SET status = 'degraded', bind_address = ?, updated_at = ?
+               WHERE id = ?""",
+            (_deferred_bind_marker(persisted_bind), now, decoy_id),
+        )
+        await self._db.commit()
+
+    @property
+    def max_decoys(self) -> int:
+        """Current classic-decoy capacity."""
+        return self._max_decoys
+
+    def set_max_decoys(self, max_decoys: int) -> None:
+        """Apply a resource-profile capacity to future deployments."""
+        if max_decoys < 0:
+            raise ValueError("Maximum decoy count cannot be negative")
+        self._max_decoys = max_decoys
+
+    async def reconfigure(self, max_decoys: int) -> list[int]:
+        """Apply a live profile limit and return decoys stopped by the change."""
+        old_max = self._max_decoys
+        stopped: list[int] = []
+        self.set_max_decoys(max_decoys)
+        try:
+            cursor = await self._db.execute(
+                """SELECT id
+                   FROM decoys
+                   WHERE status IN ('active', 'degraded')
+                     AND decoy_type != 'mimic'
+                   ORDER BY id"""
+            )
+            rows = await cursor.fetchall()
+            excess_ids = [row["id"] for row in rows[max_decoys:]]
+            if not excess_ids:
+                return stopped
+
+            now = datetime.now(UTC).isoformat()
+            for decoy_id in excess_ids:
+                record = self._records.get(decoy_id)
+                if record is not None:
+                    await record.decoy.stop()
+                    record.health = DecoyHealth.STOPPED
+                await self._db.execute(
+                    "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
+                    (now, decoy_id),
+                )
+                stopped.append(decoy_id)
+            await self._db.commit()
+            return stopped
+        except Exception:
+            self._max_decoys = old_max
+            for decoy_id in stopped:
+                try:
+                    await self.enable_decoy(decoy_id)
+                except Exception:
+                    logger.exception(
+                        "Failed to roll back profile stop for decoy %d",
+                        decoy_id,
+                    )
+            raise
 
     # -----------------------------------------------------------------
     # Selection
@@ -258,28 +470,65 @@ class DecoyOrchestrator:
         was stopped. Returns the number of decoys resumed.
         """
         cursor = await self._db.execute(
-            "SELECT * FROM decoys WHERE status = 'active' AND decoy_type != 'mimic'"
+            """SELECT *
+               FROM decoys
+               WHERE status IN ('active', 'degraded')
+                 AND decoy_type != 'mimic'
+               ORDER BY id"""
         )
         rows = await cursor.fetchall()
         if not rows:
             return 0
 
+        resumable_rows = rows[: self._max_decoys]
+        excess_rows = rows[self._max_decoys :]
+        if excess_rows:
+            now = datetime.now(UTC).isoformat()
+            await self._db.executemany(
+                "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
+                [(now, row["id"]) for row in excess_rows],
+            )
+            await self._db.commit()
+            logger.warning(
+                "Stopped %d persisted classic decoys above the current profile limit of %d",
+                len(excess_rows),
+                self._max_decoys,
+            )
+
         resumed = 0
-        for row in rows:
+        for row in resumable_rows:
             try:
                 creds = await self._load_credentials(row["id"])
                 config = _parse_config(row["config"])
+                bind_address = await self._get_bind_address()
                 decoy = _create_decoy_instance(
                     decoy_type=row["decoy_type"],
                     decoy_id=row["id"],
                     name=row["name"],
                     port=row["port"],
-                    bind_address=row["bind_address"],
+                    bind_address=bind_address,
                     credentials=creds,
                     config=config,
                 )
                 await self.deploy_decoy(decoy)
+                now = datetime.now(UTC).isoformat()
+                await self._db.execute(
+                    """UPDATE decoys
+                       SET status = 'active', bind_address = ?, port = ?,
+                           failure_count = 0, last_failure_at = NULL, updated_at = ?
+                       WHERE id = ?""",
+                    (bind_address, decoy.port, now, row["id"]),
+                )
+                await self._db.commit()
                 resumed += 1
+            except _BindAddressUnavailableError as exc:
+                await self._defer_bind(row["id"], row["bind_address"])
+                logger.warning(
+                    "Deferred classic decoy '%s' (id=%d): %s",
+                    row["name"],
+                    row["id"],
+                    exc,
+                )
             except Exception:
                 logger.exception(
                     "Failed to resume decoy '%s' (id=%d)", row["name"], row["id"],
@@ -306,20 +555,43 @@ class DecoyOrchestrator:
         services, creates instances with planted credentials, persists
         to the database, and starts the decoy servers.
 
-        Returns the number of decoys deployed.
+        Returns the number of decoys activated, including deferred listeners
+        recovered after networking returns.
         """
-        cursor = await self._db.execute("SELECT COUNT(*) FROM decoys")
-        count = (await cursor.fetchone())[0]
-        if count > 0:
-            return 0
+        recovered = 0
+        cursor = await self._db.execute(
+            """SELECT id
+               FROM decoys
+               WHERE status = 'degraded' AND decoy_type != 'mimic'
+               ORDER BY id"""
+        )
+        for row in await cursor.fetchall():
+            if await self.enable_decoy(row["id"]):
+                recovered += 1
+
+        cursor = await self._db.execute(
+            "SELECT decoy_type, status FROM decoys WHERE decoy_type != 'mimic'"
+        )
+        existing_rows = await cursor.fetchall()
+        existing_types = {row["decoy_type"] for row in existing_rows}
+        active_count = sum(1 for row in existing_rows if row["status"] == "active")
+        remaining = self._max_decoys - active_count
+        if remaining <= 0:
+            return recovered
 
         candidates = self.select_decoys(discovered_services, mdns_services or set())
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate["decoy_type"] not in existing_types
+        ][:remaining]
         if not candidates:
-            return 0
+            return recovered
 
         deployed = 0
         for candidate in candidates:
             decoy_type = candidate["decoy_type"]
+            decoy: BaseDecoy | None = None
             try:
                 decoy, now = await self._create_and_persist(decoy_type)
                 await self.deploy_decoy(decoy)
@@ -348,11 +620,25 @@ class DecoyOrchestrator:
                     },
                 )
                 deployed += 1
+            except _BindAddressUnavailableError as exc:
+                logger.warning("Deferred auto-deploy of %s decoy: %s", decoy_type, exc)
             except Exception:
                 logger.exception("Failed to auto-deploy %s decoy", decoy_type)
+                if decoy is not None:
+                    now = datetime.now(UTC).isoformat()
+                    await self._db.execute(
+                        "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
+                        (now, decoy.decoy_id),
+                    )
+                    await self._db.commit()
 
-        logger.info("Auto-deployed %d decoys", deployed)
-        return deployed
+        logger.info(
+            "Activated %d classic decoys (%d recovered, %d newly deployed)",
+            recovered + deployed,
+            recovered,
+            deployed,
+        )
+        return recovered + deployed
 
     async def _create_and_persist(self, decoy_type: str) -> tuple[BaseDecoy, str]:
         """Create a decoy instance, generate credentials, and persist to DB.
@@ -361,6 +647,7 @@ class DecoyOrchestrator:
         """
         name = _DECOY_NAMES.get(decoy_type, decoy_type.replace("_", " ").title())
         now = datetime.now(UTC).isoformat()
+        bind_address = await self._get_bind_address()
         creds = _generate_credentials(
             decoy_type,
             password_filename=self._credential_filename,
@@ -377,8 +664,8 @@ class DecoyOrchestrator:
         cursor = await self._db.execute(
             """INSERT INTO decoys
                (name, decoy_type, bind_address, port, status, config, created_at, updated_at)
-               VALUES (?, ?, '0.0.0.0', 0, 'active', ?, ?, ?)""",
-            (name, decoy_type, json_mod.dumps(config), now, now),
+               VALUES (?, ?, ?, 0, 'active', ?, ?, ?)""",
+            (name, decoy_type, bind_address, json_mod.dumps(config), now, now),
         )
         await self._db.commit()
         decoy_id = cursor.lastrowid
@@ -400,7 +687,7 @@ class DecoyOrchestrator:
             decoy_id=decoy_id,
             name=name,
             port=0,
-            bind_address="0.0.0.0",
+            bind_address=bind_address,
             credentials=creds,
             config=config,
         )
@@ -611,61 +898,119 @@ class DecoyOrchestrator:
     # Manual restart
     # -----------------------------------------------------------------
 
-    async def restart_decoy(self, decoy_id: int) -> None:
-        """Manually restart a decoy, rebuilding from DB to pick up config changes.
-
-        Args:
-            decoy_id: ID of the decoy to restart.
-
-        Raises:
-            KeyError: If decoy_id is not tracked.
-        """
+    async def restart_decoy(self, decoy_id: int) -> bool:
+        """Actually restart a classic decoy listener from persisted config."""
         record = self._records.get(decoy_id)
-        if record is None:
-            raise KeyError(f"Decoy {decoy_id} not found")
+        if record is not None:
+            try:
+                await record.decoy.stop()
+                record.health = DecoyHealth.STOPPED
+            except Exception:
+                logger.exception("Failed to stop decoy %d before restart", decoy_id)
+                return False
+        return await self.enable_decoy(decoy_id)
 
-        # Ensure the loop is captured for threaded connection callbacks.
-        self._loop = asyncio.get_running_loop()
-
-        await record.decoy.stop()
-
-        # Rebuild from DB to pick up any config changes
+    async def enable_decoy(self, decoy_id: int) -> bool:
+        """Start a classic decoy from its persisted row."""
         cursor = await self._db.execute(
-            "SELECT * FROM decoys WHERE id = ?", (decoy_id,),
+            "SELECT * FROM decoys WHERE id = ? AND decoy_type != 'mimic'",
+            (decoy_id,),
         )
         row = await cursor.fetchone()
-        if row is not None:
-            creds = await self._load_credentials(decoy_id)
-            config = _parse_config(row["config"])
-            new_decoy = _create_decoy_instance(
-                decoy_type=row["decoy_type"],
-                decoy_id=decoy_id,
-                name=row["name"],
-                port=record.decoy.port,
-                bind_address=record.decoy.bind_address,
-                credentials=creds,
-                config=config,
+        if row is None:
+            return False
+
+        record = self._records.get(decoy_id)
+        if (
+            record is not None
+            and record.health == DecoyHealth.ACTIVE
+            and record.decoy.is_running
+        ):
+            return True
+
+        cursor = await self._db.execute(
+            """SELECT COUNT(*)
+               FROM decoys
+               WHERE status = 'active' AND decoy_type != 'mimic' AND id != ?""",
+            (decoy_id,),
+        )
+        active_count = (await cursor.fetchone())[0]
+        if active_count >= self._max_decoys:
+            logger.warning(
+                "Cannot enable decoy %d: profile limit %d is reached",
+                decoy_id,
+                self._max_decoys,
             )
-            new_decoy.on_connection = lambda event, _did=decoy_id, _dname=row["name"]: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
-            await new_decoy.start()
-            record.decoy = new_decoy
-        else:
-            await record.decoy.start()
+            return False
 
-        record.health = DecoyHealth.ACTIVE
-        record.failure_count = 0
-        record.failure_window_start = None
+        try:
+            bind_address = await self._get_bind_address()
+        except _BindAddressUnavailableError as exc:
+            if row["status"] in ("active", "degraded"):
+                await self._defer_bind(decoy_id, row["bind_address"])
+            logger.warning("Deferred enable of classic decoy %d: %s", decoy_id, exc)
+            return False
 
-        await self._event_bus.publish(
-            "decoy.health_changed",
-            {
-                "decoy_id": decoy_id,
-                "name": record.decoy.name,
-                "health": DecoyHealth.ACTIVE.value,
-            },
+        creds = await self._load_credentials(decoy_id)
+        config = _parse_config(row["config"])
+        decoy = _create_decoy_instance(
+            decoy_type=row["decoy_type"],
+            decoy_id=decoy_id,
+            name=row["name"],
+            port=row["port"],
+            bind_address=bind_address,
+            credentials=creds,
+            config=config,
         )
 
-        logger.info("Decoy '%s' (id=%d) manually restarted", record.decoy.name, decoy_id)
+        try:
+            await self.deploy_decoy(decoy)
+        except Exception:
+            logger.exception("Failed to enable classic decoy %d", decoy_id)
+            now = datetime.now(UTC).isoformat()
+            await self._db.execute(
+                "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
+                (now, decoy_id),
+            )
+            await self._db.commit()
+            return False
+
+        now = datetime.now(UTC).isoformat()
+        await self._db.execute(
+            """UPDATE decoys
+               SET status = 'active', bind_address = ?, port = ?,
+                   failure_count = 0, last_failure_at = NULL, updated_at = ?
+               WHERE id = ?""",
+            (bind_address, decoy.port, now, decoy_id),
+        )
+        await self._db.commit()
+        return True
+
+    async def disable_decoy(self, decoy_id: int) -> bool:
+        """Stop a classic decoy listener and preserve it for later enable."""
+        cursor = await self._db.execute(
+            "SELECT id FROM decoys WHERE id = ? AND decoy_type != 'mimic'",
+            (decoy_id,),
+        )
+        if await cursor.fetchone() is None:
+            return False
+
+        record = self._records.get(decoy_id)
+        if record is not None:
+            try:
+                await record.decoy.stop()
+            except Exception:
+                logger.exception("Failed to stop classic decoy %d", decoy_id)
+                return False
+            record.health = DecoyHealth.STOPPED
+
+        now = datetime.now(UTC).isoformat()
+        await self._db.execute(
+            "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
+            (now, decoy_id),
+        )
+        await self._db.commit()
+        return True
 
     # -----------------------------------------------------------------
     # Connection handling

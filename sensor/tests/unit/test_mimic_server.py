@@ -2,10 +2,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import ipaddress
+import json
+import ssl
 from unittest.mock import MagicMock
 
 import pytest
+from cryptography import x509
+from cryptography.x509.oid import ExtensionOID
 
+from squirrelops_home_sensor.decoys.tls_identity import (
+    generate_host_tls_identity,
+    server_ssl_context,
+)
 from squirrelops_home_sensor.decoys.types.mimic import (
     _STATUS_TEXTS,
     MimicDecoy,
@@ -13,8 +23,57 @@ from squirrelops_home_sensor.decoys.types.mimic import (
 )
 
 
+def _encode_chunked_body(*chunks: bytes) -> bytes:
+    encoded = bytearray()
+    for chunk in chunks:
+        encoded.extend(f"{len(chunk):X}\r\n".encode("ascii"))
+        encoded.extend(chunk)
+        encoded.extend(b"\r\n")
+    encoded.extend(b"0\r\n\r\n")
+    return bytes(encoded)
+
+
 class TestMimicEndpointHTTP:
     """Verify HTTP request handling on a mimic endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_records_connect_scanner_that_sends_no_http_request(self) -> None:
+        """An accepted TCP connection is a trip even when the scanner closes immediately."""
+        events = []
+
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "ok",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values=set(),
+        )
+        await endpoint.start()
+        port = endpoint._server.sockets[0].getsockname()[1]
+
+        try:
+            _, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.close()
+            await writer.wait_closed()
+
+            for _ in range(20):
+                if events:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].dest_port == 0
+        assert events[0].request_path is None
 
     @pytest.mark.asyncio
     async def test_serves_configured_route(self) -> None:
@@ -165,6 +224,558 @@ class TestMimicEndpointHTTP:
         assert events[0].credential_used == "my-planted-password"
 
     @pytest.mark.asyncio
+    async def test_detects_canonical_password_pair_in_basic_auth(self) -> None:
+        """A real Basic login should resolve to the stored username:password value."""
+        canonical_credential = "operator:QuietRiver42!"
+        encoded_credential = base64.b64encode(
+            canonical_credential.encode("utf-8")
+        ).decode("ascii")
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/login",
+                "method": "POST",
+                "status": 401,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={canonical_credential},
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request = (
+                "POST /login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                f"Authorization: Basic {encoded_credential}\r\n"
+                "Content-Length: 0\r\n"
+                "\r\n"
+            )
+            writer.write(request.encode("ascii"))
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used == canonical_credential
+
+    @pytest.mark.parametrize("separator", ["   ", "\t", " \t "])
+    @pytest.mark.asyncio
+    async def test_basic_auth_accepts_http_whitespace(
+        self,
+        separator: str,
+    ) -> None:
+        """Basic credentials may follow the scheme after one or more SP/HTAB."""
+        canonical_credential = "operator:QuietRiver42!"
+        encoded_credential = base64.b64encode(
+            canonical_credential.encode("utf-8")
+        ).decode("ascii")
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/login",
+                "method": "POST",
+                "status": 401,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={canonical_credential},
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request = (
+                "POST /login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                f"Authorization: Basic{separator}{encoded_credential}\r\n"
+                "Content-Length: 0\r\n"
+                "\r\n"
+            )
+            writer.write(request.encode("ascii"))
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used == canonical_credential
+
+    @pytest.mark.asyncio
+    async def test_detects_canonical_password_pair_in_urlencoded_form(self) -> None:
+        """A normal login form should resolve its fields to the stored pair."""
+        canonical_credential = "admin:Blue&Gold=7!"
+        body = b"username=admin&password=Blue%26Gold%3D7%21"
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/login",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={canonical_credential},
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request_headers = (
+                "POST /login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Content-Type: application/x-www-form-urlencoded; charset=utf-8\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "\r\n"
+            )
+            writer.write(request_headers.encode("ascii") + body)
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used == canonical_credential
+
+    @pytest.mark.asyncio
+    async def test_detects_urlencoded_login_split_across_tcp_reads(self) -> None:
+        """Credential parsing should wait for the complete declared request body."""
+        canonical_credential = "admin:BlueSecret"
+        body_start = b"username=admin&password=Blue"
+        body_end = b"Secret"
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/login",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={canonical_credential},
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request_headers = (
+                "POST /login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                f"Content-Length: {len(body_start) + len(body_end)}\r\n"
+                "\r\n"
+            )
+            writer.write(request_headers.encode("ascii") + body_start)
+            await writer.drain()
+            await asyncio.sleep(0.02)
+            writer.write(body_end)
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used == canonical_credential
+
+    @pytest.mark.asyncio
+    async def test_does_not_parse_truncated_oversized_urlencoded_body(self) -> None:
+        """The bounded prefix of an oversized form must not become a login."""
+        body = (
+            b"username=admin&password=secret&padding="
+            + b"x" * 4096
+        )
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/login",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={"admin:secret"},
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request_headers = (
+                "POST /login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "\r\n"
+            )
+            writer.write(request_headers.encode("ascii") + body)
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used is None
+
+    @pytest.mark.asyncio
+    async def test_detects_canonical_password_pair_in_json_login(self) -> None:
+        """A JSON login should resolve its fields to the stored pair."""
+        canonical_credential = 'deploy:Strong "quoted" password'
+        body = json.dumps(
+            {
+                "username": "deploy",
+                "password": 'Strong "quoted" password',
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/api/login",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={canonical_credential},
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request_headers = (
+                "POST /api/login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Content-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "\r\n"
+            )
+            writer.write(request_headers.encode("ascii") + body)
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used == canonical_credential
+
+    @pytest.mark.parametrize(
+        ("content_type", "canonical_credential", "chunks"),
+        [
+            (
+                "application/x-www-form-urlencoded",
+                "admin:Blue&Gold=7!",
+                (
+                    b"username=admin&password=",
+                    b"Blue%26Gold%3D7%21",
+                ),
+            ),
+            (
+                "application/json",
+                "deploy:StrongPassword",
+                (
+                    b'{"username":"deploy",',
+                    b'"password":"StrongPassword"}',
+                ),
+            ),
+        ],
+        ids=["form", "json"],
+    )
+    @pytest.mark.asyncio
+    async def test_detects_chunked_structured_login(
+        self,
+        content_type: str,
+        canonical_credential: str,
+        chunks: tuple[bytes, ...],
+    ) -> None:
+        """Complete bounded chunked bodies should use the normal login parser."""
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/login",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={canonical_credential},
+        )
+        await endpoint.start()
+        wire_body = _encode_chunked_body(*chunks)
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request_headers = (
+                "POST /login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                f"Content-Type: {content_type}\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "\r\n"
+            )
+            writer.write(request_headers.encode("ascii") + wire_body)
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=5.0)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used == canonical_credential
+
+    @pytest.mark.asyncio
+    async def test_chunked_reader_accepts_bounded_trailer(self) -> None:
+        """A well-formed small trailer should complete chunked framing."""
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=None,
+            credential_values=set(),
+        )
+        reader = asyncio.StreamReader()
+        wire_body = _encode_chunked_body(b"username=admin")
+        reader.feed_data(
+            wire_body[:-2] + b"X-Trace: safe\r\n\r\n"
+        )
+        reader.feed_eof()
+
+        body, complete = await endpoint._read_chunked_body(reader)
+
+        assert complete is True
+        assert body == b"username=admin"
+
+    @pytest.mark.parametrize(
+        "wire_body",
+        [
+            b"not-hex\r\nusername=admin&password=secret\r\n0\r\n\r\n",
+            b"1001\r\n",
+            b"40\r\nusername=admin&password=secret",
+        ],
+        ids=["malformed", "oversized", "truncated"],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_chunked_login_without_hanging(
+        self,
+        wire_body: bytes,
+    ) -> None:
+        """Invalid chunks must not become structured credentials or stall."""
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/login",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={"admin:secret"},
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request_headers = (
+                "POST /login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                "Transfer-Encoding: chunked\r\n"
+                "\r\n"
+            )
+            writer.write(request_headers.encode("ascii") + wire_body)
+            await writer.drain()
+            if writer.can_write_eof():
+                writer.write_eof()
+            await asyncio.wait_for(reader.read(4096), timeout=0.5)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used is None
+
+    @pytest.mark.parametrize(
+        "framing_headers",
+        [
+            "Transfer-Encoding: chunked\r\nContent-Length: 44\r\n",
+            "Transfer-Encoding: gzip\r\n",
+            "Transfer-Encoding: gzip, chunked\r\n",
+        ],
+        ids=["ambiguous", "unsupported", "multiple-codings"],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_ambiguous_or_unsupported_body_framing(
+        self,
+        framing_headers: str,
+    ) -> None:
+        """Only an unambiguous single chunked coding may be parsed."""
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/login",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={"admin:secret"},
+        )
+        await endpoint.start()
+        wire_body = _encode_chunked_body(
+            b"username=admin&password=secret",
+        )
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            request_headers = (
+                "POST /login HTTP/1.1\r\n"
+                "Host: localhost\r\n"
+                "Content-Type: application/x-www-form-urlencoded\r\n"
+                f"{framing_headers}"
+                "\r\n"
+            )
+            writer.write(request_headers.encode("ascii") + wire_body)
+            await writer.drain()
+            await asyncio.wait_for(reader.read(4096), timeout=0.5)
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used is None
+
+    def test_structured_credential_detection_requires_supported_content_type(self) -> None:
+        """Separated fields in arbitrary text must not be treated as a login."""
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=None,
+            credential_values={"admin:secret"},
+        )
+
+        result = endpoint._check_credentials(
+            {"content-type": "text/plain"},
+            "username=admin&password=secret",
+        )
+
+        assert result is None
+
+    def test_structured_credential_detection_rejects_oversized_body(self) -> None:
+        """Structured parsing must remain bounded even for direct callers."""
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=None,
+            credential_values={"admin:secret"},
+        )
+        body = json.dumps({
+            "username": "admin",
+            "password": "secret",
+            "padding": "x" * 4096,
+        })
+
+        result = endpoint._check_credentials(
+            {"content-type": "application/json"},
+            body,
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_no_credential_when_not_matched(self) -> None:
         """Should report None credential when request doesn't contain planted creds."""
         routes = [{"path": "/", "method": "GET", "status": 200, "headers": {}, "body": ""}]
@@ -242,6 +853,128 @@ class TestMimicEndpointBanner:
         assert events[0].credential_used is None
 
 
+class TestMimicEndpointTLS:
+    """Verify TLS endpoints have a fake-host identity and no HTTP downgrade."""
+
+    @pytest.mark.asyncio
+    async def test_tls_serves_exact_fake_host_certificate(self) -> None:
+        cert_pem, key_pem = generate_host_tls_identity(
+            "camera-test.local",
+            "127.0.0.1",
+        )
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=443,
+            bind_port=0,
+            routes=[
+                {
+                    "path": "/",
+                    "method": "GET",
+                    "status": 200,
+                    "headers": {},
+                    "body": "secure",
+                }
+            ],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=None,
+            credential_values=set(),
+            ssl_context=server_ssl_context(cert_pem, key_pem),
+            advertised_hostname="camera-test.local",
+        )
+        await endpoint.start()
+        client_context = ssl.create_default_context()
+        client_context.check_hostname = False
+        client_context.verify_mode = ssl.CERT_NONE
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+                ssl=client_context,
+                server_hostname="camera-test.local",
+            )
+            ssl_object = writer.get_extra_info("ssl_object")
+            cert = x509.load_der_x509_certificate(
+                ssl_object.getpeercert(binary_form=True)
+            )
+            san = cert.extensions.get_extension_for_oid(
+                ExtensionOID.SUBJECT_ALTERNATIVE_NAME
+            ).value
+            assert san.get_values_for_type(x509.DNSName) == [
+                "camera-test.local"
+            ]
+            assert san.get_values_for_type(x509.IPAddress) == [
+                ipaddress.ip_address("127.0.0.1")
+            ]
+
+            writer.write(
+                b"GET / HTTP/1.1\r\nHost: camera-test.local\r\n\r\n"
+            )
+            await writer.drain()
+            response = await asyncio.wait_for(reader.read(), timeout=5.0)
+            assert b"HTTP/1.1 200 OK" in response
+            assert response.endswith(b"secure")
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await endpoint.stop()
+
+    @pytest.mark.asyncio
+    async def test_tls_port_rejects_plaintext_and_records_trip(self) -> None:
+        events = []
+        cert_pem, key_pem = generate_host_tls_identity(
+            "camera-test.local",
+            "127.0.0.1",
+        )
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=443,
+            bind_port=0,
+            routes=[
+                {
+                    "path": "/",
+                    "method": "GET",
+                    "status": 200,
+                    "headers": {},
+                    "body": "must-not-leak",
+                }
+            ],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values=set(),
+            ssl_context=server_ssl_context(cert_pem, key_pem),
+            advertised_hostname="camera-test.local",
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            writer.write(
+                b"GET / HTTP/1.1\r\nHost: camera-test.local\r\n\r\n"
+            )
+            await writer.drain()
+            response = await asyncio.wait_for(reader.read(), timeout=5.0)
+            assert b"HTTP/" not in response
+            assert b"must-not-leak" not in response
+            writer.close()
+            await writer.wait_closed()
+            for _ in range(20):
+                if events:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].dest_port == 443
+        assert events[0].request_path is None
+
+
 class TestMimicDecoy:
     """Verify MimicDecoy lifecycle — multi-port multiplexing."""
 
@@ -279,6 +1012,70 @@ class TestMimicDecoy:
         try:
             assert len(decoy._endpoints) == 2
             assert decoy.is_running
+        finally:
+            await decoy.stop()
+
+    @pytest.mark.asyncio
+    async def test_start_rolls_back_when_any_endpoint_cannot_bind(self) -> None:
+        """A mimic must never remain partially active after a bind failure."""
+        blocker = await asyncio.start_server(
+            lambda _reader, writer: writer.close(), "127.0.0.1", 0,
+        )
+        blocked_port = blocker.sockets[0].getsockname()[1]
+        decoy = MimicDecoy(
+            decoy_id=1,
+            name="Atomic Mimic",
+            bind_address="127.0.0.1",
+            port_configs=[
+                {"port": 0, "protocol_banner": "first"},
+                {"port": blocked_port, "protocol_banner": "blocked"},
+            ],
+        )
+
+        try:
+            with pytest.raises(OSError):
+                await decoy.start()
+        finally:
+            blocker.close()
+            await blocker.wait_closed()
+
+        assert decoy._endpoints == []
+        assert not decoy.is_running
+        assert not await decoy.health_check()
+
+    @pytest.mark.asyncio
+    async def test_empty_endpoint_configuration_cannot_start(self) -> None:
+        """A zero-endpoint mimic cannot be reported as deployed."""
+        decoy = MimicDecoy(
+            decoy_id=1,
+            name="Empty Mimic",
+            bind_address="127.0.0.1",
+            port_configs=[],
+        )
+
+        with pytest.raises(RuntimeError, match="no configured endpoints"):
+            await decoy.start()
+
+        assert not decoy.is_running
+        assert not await decoy.health_check()
+
+    @pytest.mark.asyncio
+    async def test_health_requires_every_endpoint(self) -> None:
+        """One failed advertised service makes the whole mimic unhealthy."""
+        decoy = MimicDecoy(
+            decoy_id=1,
+            name="All-or-nothing Mimic",
+            bind_address="127.0.0.1",
+            port_configs=[
+                {"port": 0, "protocol_banner": "first"},
+                {"port": 0, "protocol_banner": "second"},
+            ],
+        )
+        await decoy.start()
+        try:
+            await decoy._endpoints[0].stop()
+            assert not decoy.is_running
+            assert not await decoy.health_check()
         finally:
             await decoy.stop()
 
@@ -381,11 +1178,103 @@ class TestMimicEndpointPortRemap:
         await decoy.start()
         try:
             assert decoy.is_running
-            # The endpoint should have bound on port 0 (OS-assigned), not 80
+            # The endpoint should have bound on an OS-assigned port, not 80,
+            # and expose that concrete port to the PF lifecycle.
             assert decoy._endpoints[0].port == 80
             assert decoy._endpoints[0].bind_port != 80
+            assert decoy.port_remaps == {
+                80: decoy._endpoints[0].bind_port,
+            }
+            assert decoy.port_remaps[80] > 0
         finally:
             await decoy.stop()
+
+    @pytest.mark.asyncio
+    async def test_dynamic_backend_avoids_wildcard_listener_collision(
+        self,
+    ) -> None:
+        """A host wildcard listener must not prevent a mimic deployment."""
+        blocker = await asyncio.start_server(
+            lambda _reader, writer: writer.close(),
+            "0.0.0.0",
+            0,
+        )
+        advertised_port = blocker.sockets[0].getsockname()[1]
+        decoy = MimicDecoy(
+            decoy_id=1,
+            name="Wildcard-safe Mimic",
+            bind_address="127.0.0.1",
+            port_configs=[
+                {"port": advertised_port, "protocol_banner": "safe"},
+            ],
+            port_remaps={advertised_port: 0},
+        )
+
+        try:
+            await decoy.start()
+            backend_port = decoy.port_remaps[advertised_port]
+            assert backend_port not in {0, advertised_port}
+            assert decoy.is_running
+        finally:
+            await decoy.stop()
+            blocker.close()
+            await blocker.wait_closed()
+
+    @pytest.mark.asyncio
+    async def test_dynamic_backends_are_unique_and_not_advertised(
+        self,
+    ) -> None:
+        advertised = {80, 443, 8443}
+        decoy = MimicDecoy(
+            decoy_id=1,
+            name="All-redirected Mimic",
+            bind_address="127.0.0.1",
+            port_configs=[
+                {"port": port, "protocol_banner": f"service-{port}"}
+                for port in sorted(advertised)
+            ],
+            port_remaps={port: 0 for port in advertised},
+        )
+
+        await decoy.start()
+        try:
+            backends = set(decoy.port_remaps.values())
+            assert len(backends) == len(advertised)
+            assert 0 not in backends
+            assert backends.isdisjoint(advertised)
+        finally:
+            await decoy.stop()
+
+    @pytest.mark.asyncio
+    async def test_partial_dynamic_start_resets_runtime_mapping(
+        self,
+    ) -> None:
+        blocker = await asyncio.start_server(
+            lambda _reader, writer: writer.close(),
+            "127.0.0.1",
+            0,
+        )
+        blocked_port = blocker.sockets[0].getsockname()[1]
+        decoy = MimicDecoy(
+            decoy_id=1,
+            name="Dynamic rollback Mimic",
+            bind_address="127.0.0.1",
+            port_configs=[
+                {"port": 80, "protocol_banner": "first"},
+                {"port": blocked_port, "protocol_banner": "blocked"},
+            ],
+            port_remaps={80: 0, blocked_port: blocked_port},
+        )
+
+        try:
+            with pytest.raises(OSError):
+                await decoy.start()
+        finally:
+            blocker.close()
+            await blocker.wait_closed()
+
+        assert decoy._endpoints == []
+        assert decoy.port_remaps == {80: 0, blocked_port: blocked_port}
 
     def test_port_remaps_property(self) -> None:
         """port_remaps property should return the configured remaps."""

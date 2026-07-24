@@ -28,6 +28,16 @@ from squirrelops_home_sensor.security.port_risks import (
 logger = logging.getLogger(__name__)
 
 
+def _load_persisted_json(raw: object) -> object:
+    """Decode legacy JSON without allowing malformed rows to abort analysis."""
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError, RecursionError):
+        return None
+
+
 class SecurityInsightAnalyzer:
     """Generates security insight alerts grouped by issue type.
 
@@ -84,77 +94,121 @@ class SecurityInsightAnalyzer:
                     "port": finding.port,
                 })
 
-        # Step 2: For each issue_key, create or update the grouped alert.
+        # Step 2: Create/update grouped alerts, prune their device lists, and
+        # bind/resolve all per-device state as one serialized transaction.
         new_count = 0
+        pending_events: list[tuple[str, dict[str, Any], str]] = []
 
-        for issue_key, group in groups.items():
-            finding: PortRisk = group["finding"]
-            affected: list[dict] = group["devices"]
+        # Clear History owns this same lock. Keep the full analyzer mutation
+        # batch inside it so a clear cannot split an alert update from its
+        # state bindings, pruning, or stale-state resolution.
+        async with self._bus.serialized():
+            try:
+                for issue_key, group in groups.items():
+                    finding: PortRisk = group["finding"]
+                    affected: list[dict] = group["devices"]
+                    existing = await self._get_grouped_alert(issue_key)
 
-            existing = await self._get_grouped_alert(issue_key)
+                    if existing is None:
+                        if await self._all_affected_insights_were_cleared(affected):
+                            continue
 
-            if existing is None:
-                # Create new grouped alert
-                alert_id = await self._create_grouped_alert(
-                    issue_key, finding, affected
-                )
-                # Record insight state for each device in the group
-                for dev_info in affected:
-                    insight_key = f"risky_port:{dev_info['port']}"
-                    await self._upsert_insight_state(
-                        dev_info["device_id"], insight_key, alert_id
-                    )
-                new_count += 1
-            else:
-                # Existing grouped alert -- check if devices changed
-                alert_id = existing["id"]
-                old_devices = self._parse_affected_devices(
-                    existing["affected_devices"]
-                )
-                old_device_ids = {d["device_id"] for d in old_devices}
-                new_device_ids = {d["device_id"] for d in affected}
-
-                added_ids = new_device_ids - old_device_ids
-
-                if added_ids:
-                    # Merge new devices into the existing list
-                    merged = list(old_devices)
-                    for dev_info in affected:
-                        if dev_info["device_id"] in added_ids:
-                            merged.append(dev_info)
-
-                    # Dismissed means dismissed. Keep read_at intact even when
-                    # the grouped issue gains more devices; the detail is
-                    # refreshed but the user is not re-alerted for that issue.
-                    await self._update_grouped_alert(
-                        alert_id,
-                        finding,
-                        merged,
-                        clear_read=False,
-                    )
-
-                    # Record insight state for new devices
-                    for dev_info in affected:
-                        if dev_info["device_id"] in added_ids:
+                        alert_id, event_payload = await self._create_grouped_alert(
+                            issue_key, finding, affected
+                        )
+                        # Record insight state for each device in the same
+                        # transaction as the grouped alert.
+                        for dev_info in affected:
                             insight_key = f"risky_port:{dev_info['port']}"
                             await self._upsert_insight_state(
-                                dev_info["device_id"], insight_key, alert_id
+                                dev_info["device_id"],
+                                insight_key,
+                                alert_id,
                             )
-                else:
-                    # Update IPs in case of DHCP reassignment (silent update)
-                    old_ips = {d["ip_address"] for d in old_devices}
-                    new_ips = {d["ip_address"] for d in affected}
-                    if old_ips != new_ips:
-                        await self._update_grouped_alert(
-                            alert_id, finding, affected, clear_read=False,
-                            silent=True,
+                        pending_events.append(
+                            (
+                                "alert.new",
+                                event_payload,
+                                f"issue:{issue_key}",
+                            )
+                        )
+                        new_count += 1
+                        continue
+
+                    # Existing grouped alert -- check if devices changed.
+                    alert_id = existing["id"]
+                    old_devices = self._parse_affected_devices(
+                        existing["affected_devices"]
+                    )
+                    old_device_ids = {d["device_id"] for d in old_devices}
+                    new_device_ids = {d["device_id"] for d in affected}
+
+                    added_ids = new_device_ids - old_device_ids
+
+                    if added_ids:
+                        # Dismissed means dismissed. Keep read_at intact even
+                        # when the grouped issue gains more devices. Persist
+                        # the authoritative current snapshot so simultaneous
+                        # DHCP changes and removals are reflected as well.
+                        event_payload = await self._update_grouped_alert(
+                            alert_id,
+                            finding,
+                            affected,
+                            clear_read=False,
                         )
 
-        # Step 3: Handle device removal from groups.
-        await self._prune_removed_devices(groups)
+                        # Bind every new device in the same transaction as the
+                        # alert update.
+                        for dev_info in affected:
+                            if dev_info["device_id"] in added_ids:
+                                insight_key = f"risky_port:{dev_info['port']}"
+                                await self._upsert_insight_state(
+                                    dev_info["device_id"],
+                                    insight_key,
+                                    alert_id,
+                                )
+                        if event_payload is not None:
+                            pending_events.append(
+                                (
+                                    "alert.updated",
+                                    event_payload,
+                                    f"issue:{issue_key}",
+                                )
+                            )
+                    else:
+                        # Update IPs in case of DHCP reassignment. This is a
+                        # silent database refresh, but still serialized with
+                        # clear and the rest of the analyzer transaction.
+                        old_ips = {d["ip_address"] for d in old_devices}
+                        new_ips = {d["ip_address"] for d in affected}
+                        if old_ips != new_ips:
+                            await self._update_grouped_alert(
+                                alert_id,
+                                finding,
+                                affected,
+                                clear_read=False,
+                                silent=True,
+                            )
 
-        # Step 4: Resolve stale per-device insight states.
-        await self._resolve_stale_insights_batch(all_active_per_device)
+                # Step 3: Handle device removal from groups.
+                await self._prune_removed_devices(groups)
+
+                # Step 4: Resolve stale per-device insight states.
+                await self._resolve_stale_insights_batch(all_active_per_device)
+                await self._db.commit()
+            except Exception:
+                await self._db.rollback()
+                raise
+
+        # Publish only after releasing the ordering lock. A clear already
+        # waiting for the lock may run first; EventBus then suppresses each
+        # orphaned event because its alert row no longer exists.
+        for event_type, payload, source_id in pending_events:
+            await self._bus.publish(
+                event_type,
+                payload,
+                source_id=source_id,
+            )
 
         if new_count > 0:
             logger.info("Security analysis generated %d new grouped alerts", new_count)
@@ -174,24 +228,41 @@ class SecurityInsightAnalyzer:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def _all_affected_insights_were_cleared(
+        self,
+        affected: list[dict[str, Any]],
+    ) -> bool:
+        """Keep an active finding quiet after its alert history was cleared."""
+        for device in affected:
+            insight_key = f"risky_port:{device['port']}"
+            cursor = await self._db.execute(
+                """SELECT 1
+                   FROM security_insight_state
+                   WHERE device_id = ?
+                     AND insight_key = ?
+                     AND alert_id IS NULL
+                     AND resolved_at IS NULL""",
+                (device["device_id"], insight_key),
+            )
+            if await cursor.fetchone() is None:
+                return False
+        return bool(affected)
+
     @staticmethod
     def _parse_affected_devices(raw: str | None) -> list[dict]:
         """Parse the affected_devices JSON column."""
         if not raw:
             return []
-        try:
-            result = json.loads(raw)
-            return result if isinstance(result, list) else []
-        except (json.JSONDecodeError, TypeError):
-            return []
+        result = _load_persisted_json(raw)
+        return result if isinstance(result, list) else []
 
     async def _create_grouped_alert(
         self,
         issue_key: str,
         finding: PortRisk,
         affected: list[dict],
-    ) -> int:
-        """Create a new grouped alert and publish alert.new event."""
+    ) -> tuple[int, dict[str, Any]]:
+        """Insert a grouped alert, returning its id and event payload."""
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         n = len(affected)
         title = f"{finding.service_name} open on {n} device{'s' if n > 1 else ''}"
@@ -226,30 +297,25 @@ class SecurityInsightAnalyzer:
             ),
         )
         alert_id = cursor.lastrowid
-        await self._db.commit()
+        if alert_id is None:
+            raise RuntimeError("Grouped alert insert did not return an id")
 
-        await self._bus.publish(
-            "alert.new",
-            {
-                "id": alert_id,
-                "alert_type": AlertType.SECURITY_PORT_RISK.value,
-                "severity": finding.severity.value,
-                "title": title,
-                "source_ip": None,
-                "created_at": now,
-                "incident_id": None,
-                "read_at": None,
-                "actioned_at": None,
-                "detail": affected_summary,
-                "affected_devices": affected,
-                "alert_count": None,
-                "device_count": n,
-                "issue_key": issue_key,
-            },
-            source_id=f"issue:{issue_key}",
-        )
-
-        return alert_id
+        return alert_id, {
+            "id": alert_id,
+            "alert_type": AlertType.SECURITY_PORT_RISK.value,
+            "severity": finding.severity.value,
+            "title": title,
+            "source_ip": None,
+            "created_at": now,
+            "incident_id": None,
+            "read_at": None,
+            "actioned_at": None,
+            "detail": affected_summary,
+            "affected_devices": affected,
+            "alert_count": None,
+            "device_count": n,
+            "issue_key": issue_key,
+        }
 
     async def _update_grouped_alert(
         self,
@@ -259,8 +325,8 @@ class SecurityInsightAnalyzer:
         *,
         clear_read: bool = False,
         silent: bool = False,
-    ) -> None:
-        """Update an existing grouped alert's device list."""
+    ) -> dict[str, Any] | None:
+        """Update a grouped alert and return its deferred event payload."""
         n = len(affected)
         title = f"{finding.service_name} open on {n} device{'s' if n > 1 else ''}"
         affected_summary = self._format_affected_devices(affected)
@@ -287,34 +353,31 @@ class SecurityInsightAnalyzer:
                 "WHERE id = ?",
                 (json.dumps(detail_obj), json.dumps(affected), n, title, alert_id),
             )
-        await self._db.commit()
+        if silent:
+            return None
 
-        if not silent:
-            cursor = await self._db.execute(
-                "SELECT * FROM home_alerts WHERE id = ?", (alert_id,)
-            )
-            row = await cursor.fetchone()
-            if row:
-                await self._bus.publish(
-                    "alert.updated",
-                    {
-                        "id": alert_id,
-                        "alert_type": row["alert_type"],
-                        "severity": row["severity"],
-                        "title": title,
-                        "source_ip": None,
-                        "created_at": row["created_at"],
-                        "incident_id": None,
-                        "read_at": row["read_at"],
-                        "actioned_at": row["actioned_at"],
-                        "detail": affected_summary,
-                        "affected_devices": affected,
-                        "alert_count": None,
-                        "device_count": n,
-                        "issue_key": row["issue_key"],
-                    },
-                    source_id=f"issue:{row['issue_key']}",
-                )
+        cursor = await self._db.execute(
+            "SELECT * FROM home_alerts WHERE id = ?", (alert_id,)
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": alert_id,
+            "alert_type": row["alert_type"],
+            "severity": row["severity"],
+            "title": title,
+            "source_ip": None,
+            "created_at": row["created_at"],
+            "incident_id": None,
+            "read_at": row["read_at"],
+            "actioned_at": row["actioned_at"],
+            "detail": affected_summary,
+            "affected_devices": affected,
+            "alert_count": None,
+            "device_count": n,
+            "issue_key": row["issue_key"],
+        }
 
     async def _prune_removed_devices(
         self, current_groups: dict[str, dict[str, Any]]
@@ -343,25 +406,19 @@ class SecurityInsightAnalyzer:
 
             if len(pruned) < len(old_devices):
                 n = len(pruned)
-                detail = row["detail"]
-                if isinstance(detail, str):
-                    try:
-                        detail = json.loads(detail)
-                    except (json.JSONDecodeError, TypeError):
-                        detail = {}
-                svc = detail.get("service_name", "Unknown") if isinstance(detail, dict) else "Unknown"
+                detail = _load_persisted_json(row["detail"])
+                if not isinstance(detail, dict):
+                    detail = {}
+                svc = detail.get("service_name", "Unknown")
                 title = (
                     f"{svc} open on {n} device{'s' if n > 1 else ''}"
                     if n > 0
                     else row["title"]
                 )
-                if isinstance(detail, dict):
-                    detail["device_count"] = n
-                    detail["affected_devices"] = pruned
-                    detail["affected_summary"] = self._format_affected_devices(pruned)
-                    detail_json = json.dumps(detail)
-                else:
-                    detail_json = row["detail"]
+                detail["device_count"] = n
+                detail["affected_devices"] = pruned
+                detail["affected_summary"] = self._format_affected_devices(pruned)
+                detail_json = json.dumps(detail)
 
                 await self._db.execute(
                     "UPDATE home_alerts SET "
@@ -369,10 +426,12 @@ class SecurityInsightAnalyzer:
                     "WHERE id = ?",
                     (detail_json, json.dumps(pruned), n, title, row["id"]),
                 )
-                await self._db.commit()
 
     async def _upsert_insight_state(
-        self, device_id: int, insight_key: str, alert_id: int
+        self,
+        device_id: int,
+        insight_key: str,
+        alert_id: int,
     ) -> None:
         """Insert or update insight_state for a device+port."""
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -397,7 +456,6 @@ class SecurityInsightAnalyzer:
                 "WHERE device_id = ? AND insight_key = ?",
                 (alert_id, device_id, insight_key),
             )
-        await self._db.commit()
 
     async def _resolve_stale_insights_batch(
         self, active_per_device: dict[int, set[str]]
@@ -410,7 +468,6 @@ class SecurityInsightAnalyzer:
         )
         rows = await cursor.fetchall()
 
-        resolved = False
         for row in rows:
             active_keys = active_per_device.get(row["device_id"], set())
             if row["insight_key"] not in active_keys:
@@ -418,10 +475,6 @@ class SecurityInsightAnalyzer:
                     "UPDATE security_insight_state SET resolved_at = ? WHERE id = ?",
                     (now, row["id"]),
                 )
-                resolved = True
-
-        if resolved:
-            await self._db.commit()
 
     @staticmethod
     def _format_affected_devices(affected: list[dict]) -> str:

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from squirrelops_home_sensor.api.deps import get_db, verify_client_cert
+from squirrelops_home_sensor.api.routes_scouts import get_mimic_orchestrator
 
 router = APIRouter(prefix="/decoys", tags=["decoys"])
 
@@ -36,6 +37,10 @@ class DecoySummary(BaseModel):
     credential_trip_count: int
     created_at: str
     updated_at: str
+    host_id: int | None = None
+    hostname: str | None = None
+    protocol: str | None = None
+    service_name: str | None = None
 
 
 class DecoyListResponse(BaseModel):
@@ -56,6 +61,22 @@ class DecoyDetail(BaseModel):
     last_failure_at: str | None = None
     created_at: str
     updated_at: str
+    host_id: int | None = None
+    hostname: str | None = None
+    protocol: str | None = None
+    service_name: str | None = None
+
+
+class DecoyHostnameUpdate(BaseModel):
+    hostname: str
+
+
+class DecoyHostnameUpdateResponse(BaseModel):
+    host_id: int
+    hostname: str
+    bind_address: str
+    decoy_ids: list[int]
+    services: list[DecoySummary]
 
 
 class ConnectionEntry(BaseModel):
@@ -101,7 +122,13 @@ def _parse_config(raw: str | None) -> Any:
 
 
 async def _get_decoy_or_404(db: aiosqlite.Connection, decoy_id: int) -> aiosqlite.Row:
-    cursor = await db.execute("SELECT * FROM decoys WHERE id = ?", (decoy_id,))
+    cursor = await db.execute(
+        """SELECT d.*, dh.hostname AS hostname
+           FROM decoys d
+           LEFT JOIN decoy_hosts dh ON dh.id = d.host_id
+           WHERE d.id = ? AND d.retired_at IS NULL""",
+        (decoy_id,),
+    )
     row = await cursor.fetchone()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Decoy not found")
@@ -123,6 +150,33 @@ def _decoy_detail(row: aiosqlite.Row) -> DecoyDetail:
         last_failure_at=row["last_failure_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        host_id=row["host_id"],
+        hostname=row["hostname"],
+        protocol=row["protocol"],
+        service_name=row["service_name"],
+    )
+
+
+def _decoy_summary(
+    row: aiosqlite.Row,
+    *,
+    effective_status: str | None = None,
+) -> DecoySummary:
+    return DecoySummary(
+        id=row["id"],
+        name=row["name"],
+        decoy_type=row["decoy_type"],
+        bind_address=row["bind_address"],
+        port=row["port"],
+        status=effective_status or row["status"],
+        connection_count=row["connection_count"],
+        credential_trip_count=row["credential_trip_count"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        host_id=row["host_id"],
+        hostname=row["hostname"],
+        protocol=row["protocol"],
+        service_name=row["service_name"],
     )
 
 
@@ -132,26 +186,31 @@ def _decoy_detail(row: aiosqlite.Row) -> DecoyDetail:
 @router.get("", response_model=DecoyListResponse)
 async def list_decoys(
     db: aiosqlite.Connection = Depends(get_db),
+    mimic_orchestrator=Depends(get_mimic_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """List all decoys (including mimics) with status and connection counts."""
     cursor = await db.execute(
-        "SELECT * FROM decoys ORDER BY created_at"
+        """SELECT d.*, dh.hostname AS hostname
+           FROM decoys d
+           LEFT JOIN decoy_hosts dh ON dh.id = d.host_id
+           WHERE d.retired_at IS NULL
+           ORDER BY d.created_at, d.id"""
     )
     rows = await cursor.fetchall()
 
     items = [
-        DecoySummary(
-            id=row["id"],
-            name=row["name"],
-            decoy_type=row["decoy_type"],
-            bind_address=row["bind_address"],
-            port=row["port"],
-            status=row["status"],
-            connection_count=row["connection_count"],
-            credential_trip_count=row["credential_trip_count"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
+        _decoy_summary(
+            row,
+            effective_status=(
+                mimic_orchestrator.effective_mimic_status(
+                    row["id"],
+                    row["status"],
+                )
+                if row["decoy_type"] == "mimic"
+                and mimic_orchestrator is not None
+                else row["status"]
+            ),
         )
         for row in rows
     ]
@@ -174,22 +233,34 @@ async def get_decoy(
 async def restart_decoy(
     decoy_id: int,
     db: aiosqlite.Connection = Depends(get_db),
+    orchestrator=Depends(get_decoy_orchestrator),
+    mimic_orchestrator=Depends(get_mimic_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
-    """Restart a decoy service. Resets failure count and sets status to active."""
-    await _get_decoy_or_404(db, decoy_id)
-    now = datetime.now(UTC).isoformat()
+    """Restart the live listener and report failure instead of faking state."""
+    existing = await _get_decoy_or_404(db, decoy_id)
+    if existing["decoy_type"] == "mimic":
+        if mimic_orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Mimic orchestrator is unavailable",
+            )
+        succeeded = await mimic_orchestrator.restart_mimic(decoy_id)
+    else:
+        if orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Decoy orchestrator is unavailable",
+            )
+        succeeded = await orchestrator.restart_decoy(decoy_id)
 
-    await db.execute(
-        """UPDATE decoys SET status = 'active', failure_count = 0,
-           last_failure_at = NULL, updated_at = ?
-           WHERE id = ?""",
-        (now, decoy_id),
-    )
-    await db.commit()
+    if not succeeded:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Decoy could not be restarted; its persisted state was preserved",
+        )
 
-    cursor = await db.execute("SELECT * FROM decoys WHERE id = ?", (decoy_id,))
-    row = await cursor.fetchone()
+    row = await _get_decoy_or_404(db, decoy_id)
     return _decoy_detail(row)
 
 
@@ -197,20 +268,34 @@ async def restart_decoy(
 async def enable_decoy(
     decoy_id: int,
     db: aiosqlite.Connection = Depends(get_db),
+    orchestrator=Depends(get_decoy_orchestrator),
+    mimic_orchestrator=Depends(get_mimic_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
-    """Enable a stopped decoy. No-op if already active."""
-    await _get_decoy_or_404(db, decoy_id)
-    now = datetime.now(UTC).isoformat()
-    await db.execute(
-        """UPDATE decoys SET status = 'active', failure_count = 0,
-           last_failure_at = NULL, updated_at = ?
-           WHERE id = ?""",
-        (now, decoy_id),
-    )
-    await db.commit()
-    cursor = await db.execute("SELECT * FROM decoys WHERE id = ?", (decoy_id,))
-    row = await cursor.fetchone()
+    """Start a stopped decoy and only mark it active after it is reachable."""
+    existing = await _get_decoy_or_404(db, decoy_id)
+    if existing["decoy_type"] == "mimic":
+        if mimic_orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Mimic orchestrator is unavailable",
+            )
+        succeeded = await mimic_orchestrator.enable_mimic(decoy_id)
+    else:
+        if orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Decoy orchestrator is unavailable",
+            )
+        succeeded = await orchestrator.enable_decoy(decoy_id)
+
+    if not succeeded:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Decoy could not be enabled; its persisted state was preserved",
+        )
+
+    row = await _get_decoy_or_404(db, decoy_id)
     return _decoy_detail(row)
 
 
@@ -218,18 +303,34 @@ async def enable_decoy(
 async def disable_decoy(
     decoy_id: int,
     db: aiosqlite.Connection = Depends(get_db),
+    orchestrator=Depends(get_decoy_orchestrator),
+    mimic_orchestrator=Depends(get_mimic_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
-    """Disable an active decoy. No-op if already stopped."""
-    await _get_decoy_or_404(db, decoy_id)
-    now = datetime.now(UTC).isoformat()
-    await db.execute(
-        "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE id = ?",
-        (now, decoy_id),
-    )
-    await db.commit()
-    cursor = await db.execute("SELECT * FROM decoys WHERE id = ?", (decoy_id,))
-    row = await cursor.fetchone()
+    """Stop the live listener before reporting the decoy as stopped."""
+    existing = await _get_decoy_or_404(db, decoy_id)
+    if existing["decoy_type"] == "mimic":
+        if mimic_orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Mimic orchestrator is unavailable",
+            )
+        succeeded = await mimic_orchestrator.disable_mimic(decoy_id)
+    else:
+        if orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Decoy orchestrator is unavailable",
+            )
+        succeeded = await orchestrator.disable_decoy(decoy_id)
+
+    if not succeeded:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Decoy could not be disabled; its persisted state was preserved",
+        )
+
+    row = await _get_decoy_or_404(db, decoy_id)
     return _decoy_detail(row)
 
 
@@ -239,6 +340,7 @@ async def update_decoy_config(
     body: dict,
     db: aiosqlite.Connection = Depends(get_db),
     orchestrator=Depends(get_decoy_orchestrator),
+    mimic_orchestrator=Depends(get_mimic_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """Update decoy-specific configuration. Merges with existing config, restarts decoy."""
@@ -256,15 +358,100 @@ async def update_decoy_config(
     await db.commit()
 
     # Restart the decoy so the new config takes effect
-    if orchestrator is not None:
-        try:
-            await orchestrator.restart_decoy(decoy_id)
-        except KeyError:
-            pass  # Decoy not currently tracked (e.g. stopped)
+    if row["status"] == "active":
+        if row["decoy_type"] == "mimic":
+            if mimic_orchestrator is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Mimic orchestrator is unavailable",
+                )
+            restarted = await mimic_orchestrator.restart_mimic(decoy_id)
+        else:
+            if orchestrator is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Decoy orchestrator is unavailable",
+                )
+            restarted = await orchestrator.restart_decoy(decoy_id)
+        if not restarted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Configuration was saved, but the decoy could not be restarted",
+            )
 
-    cursor = await db.execute("SELECT * FROM decoys WHERE id = ?", (decoy_id,))
-    row = await cursor.fetchone()
+    row = await _get_decoy_or_404(db, decoy_id)
     return _decoy_detail(row)
+
+
+@router.put(
+    "/{decoy_id}/hostname",
+    response_model=DecoyHostnameUpdateResponse,
+)
+async def update_decoy_hostname(
+    decoy_id: int,
+    body: DecoyHostnameUpdate,
+    db: aiosqlite.Connection = Depends(get_db),
+    mimic_orchestrator=Depends(get_mimic_orchestrator),
+    _auth: dict = Depends(verify_client_cert),
+):
+    """Rename one virtual host and every service sharing its identity."""
+    existing = await _get_decoy_or_404(db, decoy_id)
+    if existing["decoy_type"] != "mimic" or existing["host_id"] is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only virtual mimic hostnames can be changed",
+        )
+    if mimic_orchestrator is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Mimic orchestrator is unavailable",
+        )
+
+    try:
+        result = await mimic_orchestrator.update_mimic_hostname(
+            decoy_id,
+            body.hostname,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    cursor = await db.execute(
+        """SELECT d.*, dh.hostname AS hostname
+           FROM decoys d
+           JOIN decoy_hosts dh ON dh.id = d.host_id
+           WHERE d.host_id = ?
+             AND d.retired_at IS NULL
+           ORDER BY d.port, d.id""",
+        (result["host_id"],),
+    )
+    rows = list(await cursor.fetchall())
+    services = [
+        _decoy_summary(
+            row,
+            effective_status=(
+                mimic_orchestrator.effective_mimic_status(
+                    row["id"],
+                    row["status"],
+                )
+            ),
+        )
+        for row in rows
+    ]
+    return DecoyHostnameUpdateResponse(
+        host_id=result["host_id"],
+        hostname=result["hostname"],
+        bind_address=result["bind_address"],
+        decoy_ids=[item.id for item in services],
+        services=services,
+    )
 
 
 @router.get("/{decoy_id}/credentials", response_model=list[CredentialEntry])

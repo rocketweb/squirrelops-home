@@ -148,8 +148,14 @@ struct DeviceDetailView: View {
                     infoRow(label: "Area", value: area)
                 }
 
-                infoRow(label: "First Seen", value: device.firstSeen)
-                infoRow(label: "Last Seen", value: device.lastSeen)
+                infoRow(
+                    label: "First Seen",
+                    value: TimestampPresentation.local(device.firstSeen)
+                )
+                infoRow(
+                    label: "Last Seen",
+                    value: TimestampPresentation.local(device.lastSeen)
+                )
             }
             .padding(Spacing.md)
             .background(Theme.backgroundSecondary(colorScheme))

@@ -325,6 +325,7 @@ struct ModelsTests {
     func decodeStatusResponse() throws {
         let json = """
         {
+            "version": "1.1.4",
             "profile": "standard",
             "learning_mode": true,
             "device_count": 12,
@@ -336,6 +337,7 @@ struct ModelsTests {
         let decoder = JSONDecoder()
         let status = try decoder.decode(StatusResponse.self, from: json)
 
+        #expect(status.version == "1.1.4")
         #expect(status.profile == "standard")
         #expect(status.learningMode == true)
         #expect(status.deviceCount == 12)
@@ -572,6 +574,10 @@ struct ModelsTests {
             "status": "active",
             "connection_count": 15,
             "credential_trip_count": 2,
+            "host_id": 9,
+            "hostname": "fake-nas.local",
+            "protocol": "http",
+            "service_name": "Admin UI",
             "created_at": "2026-02-20T00:00:00Z",
             "updated_at": "2026-02-22T08:00:00Z"
         }
@@ -586,6 +592,350 @@ struct ModelsTests {
         #expect(decoy.port == 8080)
         #expect(decoy.connectionCount == 15)
         #expect(decoy.credentialTripCount == 2)
+        #expect(decoy.hostId == 9)
+        #expect(decoy.hostname == "fake-nas.local")
+        #expect(decoy.serviceProtocol == "http")
+        #expect(decoy.serviceLabel == "Admin UI")
+    }
+
+    @Test("Virtual services group by host and remain separate port entries")
+    func decoyServicesGroupByHost() {
+        let services = [
+            DecoySummary(
+                id: 12,
+                name: "printer",
+                decoyType: "mimic",
+                bindAddress: "192.168.1.203",
+                port: 443,
+                status: "active",
+                connectionCount: 2,
+                credentialTripCount: 1,
+                createdAt: "2026-07-24T00:00:00Z",
+                updatedAt: "2026-07-24T00:00:00Z",
+                hostId: nil,
+                hostname: "printer.local",
+                serviceProtocol: "https",
+                serviceName: "Secure web"
+            ),
+            DecoySummary(
+                id: 11,
+                name: "printer",
+                decoyType: "mimic",
+                bindAddress: "192.168.1.203",
+                port: 80,
+                status: "active",
+                connectionCount: 3,
+                credentialTripCount: 0,
+                createdAt: "2026-07-24T00:00:00Z",
+                updatedAt: "2026-07-24T00:00:00Z",
+                hostId: 4,
+                hostname: "printer.local",
+                serviceProtocol: "http",
+                serviceName: "Web"
+            ),
+            DecoySummary(
+                id: 13,
+                name: "camera",
+                decoyType: "mimic",
+                bindAddress: "192.168.1.204",
+                port: 554,
+                status: "active",
+                connectionCount: 0,
+                credentialTripCount: 0,
+                createdAt: "2026-07-24T00:00:00Z",
+                updatedAt: "2026-07-24T00:00:00Z",
+                hostId: 5,
+                hostname: "camera.local",
+                serviceProtocol: "rtsp",
+                serviceName: "Camera stream"
+            ),
+        ]
+
+        let groups = DecoyHostGroup.grouping(services)
+
+        #expect(groups.count == 2)
+        #expect(groups[0].services.map(\.id) == [11, 12])
+        #expect(groups[0].services.map(\.port) == [80, 443])
+        #expect(groups[0].connectionCount == 5)
+        #expect(groups[0].credentialTripCount == 1)
+    }
+
+    @Test("Mimic summaries decode host identity and group per service")
+    func mimicServicesDecodeAndGroup() throws {
+        let json = """
+        [
+          {
+            "id": 21,
+            "name": "printer",
+            "bind_address": "192.168.1.205",
+            "port": 9100,
+            "status": "active",
+            "source_device_id": 7,
+            "device_category": "printer",
+            "connection_count": 4,
+            "created_at": "2026-07-24T00:00:00Z",
+            "mdns_hostname": "old-printer",
+            "host_id": 8,
+            "hostname": "printer-232.local",
+            "protocol": "raw",
+            "service_name": "JetDirect"
+          },
+          {
+            "id": 20,
+            "name": "printer",
+            "bind_address": "192.168.1.205",
+            "port": 80,
+            "status": "active",
+            "source_device_id": 7,
+            "device_category": "printer",
+            "connection_count": 1,
+            "created_at": "2026-07-24T00:00:00Z",
+            "mdns_hostname": "old-printer",
+            "host_id": 8,
+            "hostname": "printer-232.local",
+            "protocol": "http",
+            "service_name": "Web"
+          }
+        ]
+        """.data(using: .utf8)!
+
+        let mimics = try JSONDecoder().decode([MimicDecoySummary].self, from: json)
+        let groups = MimicHostGroup.grouping(mimics)
+
+        #expect(groups.count == 1)
+        #expect(groups[0].hostname == "printer-232.local")
+        #expect(groups[0].services.map(\.port) == [80, 9100])
+        #expect(groups[0].services.map(\.serviceLabel) == ["Web", "JetDirect"])
+        #expect(groups[0].connectionCount == 5)
+    }
+
+    @Test("Mimic hostname presentation canonicalizes mDNS suffixes")
+    func mimicHostnamePresentationCanonicalizesLocalSuffix() {
+        let mimic = MimicDecoySummary(
+            id: 30,
+            name: "Camera",
+            bindAddress: "192.168.1.206",
+            port: 554,
+            status: "active",
+            connectionCount: 0,
+            createdAt: "2026-07-24T00:00:00Z",
+            mdnsHostname: "Living-Room.local."
+        )
+
+        #expect(mimic.displayHostname == "Living-Room.local")
+    }
+
+    @Test("Hostname update response identifies every changed service")
+    func hostnameUpdateResponseDecodes() throws {
+        let json = """
+        {
+          "host_id": 8,
+          "hostname": "printer-232.local",
+          "bind_address": "192.168.1.205",
+          "decoy_ids": [20, 21],
+          "services": [
+            {
+              "id": 20,
+              "name": "printer",
+              "decoy_type": "mimic",
+              "bind_address": "192.168.1.205",
+              "port": 80,
+              "status": "active",
+              "connection_count": 1,
+              "credential_trip_count": 0,
+              "created_at": "2026-07-24T00:00:00Z",
+              "updated_at": "2026-07-24T01:00:00Z",
+              "host_id": 8,
+              "hostname": "printer-232.local",
+              "protocol": "http",
+              "service_name": "Web"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(
+            DecoyHostnameUpdateResponse.self,
+            from: json
+        )
+
+        #expect(response.hostId == 8)
+        #expect(response.decoyIds == [20, 21])
+        #expect(response.services[0].hostname == "printer-232.local")
+    }
+
+    @Test("Wildcard decoy address is presented as a host listener")
+    func wildcardDecoyPresentation() {
+        let decoy = DecoySummary(
+            id: 4,
+            name: "Dev Server",
+            decoyType: "dev_server",
+            bindAddress: "0.0.0.0",
+            port: 63217,
+            status: "active",
+            connectionCount: 0,
+            credentialTripCount: 0,
+            createdAt: "2026-07-23T00:00:00Z",
+            updatedAt: "2026-07-23T00:00:00Z"
+        )
+
+        #expect(decoy.isWildcardBind)
+        #expect(decoy.isActiveDeployment)
+        #expect(decoy.isHostListener)
+        #expect(!decoy.isVirtualMimic)
+        #expect(decoy.endpointLabel == "All sensor interfaces · port 63217")
+        #expect(decoy.deploymentScopeLabel == "Host listener")
+    }
+
+    @Test("Mimic decoy address is presented as a virtual IP")
+    func mimicDecoyPresentation() {
+        let decoy = DecoySummary(
+            id: 5,
+            name: "docs.local",
+            decoyType: "mimic",
+            bindAddress: "192.168.1.202",
+            port: 80,
+            status: "active",
+            connectionCount: 0,
+            credentialTripCount: 0,
+            createdAt: "2026-07-23T00:00:00Z",
+            updatedAt: "2026-07-23T00:00:00Z"
+        )
+
+        #expect(!decoy.isWildcardBind)
+        #expect(decoy.isActiveDeployment)
+        #expect(decoy.isVirtualMimic)
+        #expect(!decoy.isHostListener)
+        #expect(decoy.endpointLabel == "192.168.1.202:80")
+        #expect(decoy.deploymentScopeLabel == "Virtual IP")
+    }
+
+    @Test("Stopped mimic is not an active deployment")
+    func stoppedMimicIsInactive() {
+        let decoy = DecoySummary(
+            id: 7,
+            name: "old.local",
+            decoyType: "mimic",
+            bindAddress: "192.168.1.203",
+            port: 80,
+            status: "stopped",
+            connectionCount: 0,
+            credentialTripCount: 0,
+            createdAt: "2026-07-23T00:00:00Z",
+            updatedAt: "2026-07-23T00:00:00Z"
+        )
+
+        #expect(!decoy.isActiveDeployment)
+        #expect(decoy.isVirtualMimic)
+    }
+
+    @Test("Concrete classic address is still presented as a host listener")
+    func concreteClassicDecoyPresentation() {
+        let decoy = DecoySummary(
+            id: 6,
+            name: "Dev Server",
+            decoyType: "dev_server",
+            bindAddress: "192.168.1.18",
+            port: 63217,
+            status: "active",
+            connectionCount: 0,
+            credentialTripCount: 0,
+            createdAt: "2026-07-23T00:00:00Z",
+            updatedAt: "2026-07-23T00:00:00Z"
+        )
+
+        #expect(decoy.endpointLabel == "192.168.1.18:63217")
+        #expect(decoy.deploymentScopeLabel == "Host listener")
+    }
+
+    @Test("Decode full resource profile and describe all decoy capacity")
+    func resourceProfileResponseDecodes() throws {
+        let json = """
+        {
+            "profile": "full",
+            "scan_interval_seconds": 60,
+            "max_decoys": 3,
+            "llm_classification": "local_llm",
+            "scout_interval_minutes": 30,
+            "max_mimic_decoys": 30,
+            "max_virtual_ips": 30,
+            "total_decoy_capacity": 33
+        }
+        """.data(using: .utf8)!
+
+        let profile = try JSONDecoder().decode(ResourceProfileResponse.self, from: json)
+
+        #expect(profile.profile == "full")
+        #expect(profile.maxDecoys == 3)
+        #expect(profile.maxMimicDecoys == 30)
+        #expect(profile.totalDecoyCapacity == 33)
+        #expect(
+            profile.userSummary.contains(
+                "3 classic decoys + 30 fake hosts (33 deployed identities)"
+            )
+        )
+        #expect(profile.userSummary.contains("per-port service decoys"))
+        #expect(profile.userSummary.contains("Scouts every 30 min"))
+    }
+
+    @Test("Scout result decodes automatic mimic deployment feedback")
+    func scoutRunResponseDecodes() throws {
+        let json = """
+        {
+            "profiles_created": 123,
+            "mimics_deployed": 4,
+            "mimic_deployment_error": null
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(ScoutRunResponse.self, from: json)
+
+        #expect(response.profilesCreated == 123)
+        #expect(response.mimicsDeployed == 4)
+        #expect(response.userSummary.contains("deployed 4 mimics"))
+    }
+
+    @Test("Scout status separates fake hosts from per-port service decoys")
+    func scoutStatusResponseDecodesDeploymentCounts() throws {
+        let json = """
+        {
+            "enabled": true,
+            "is_running": false,
+            "last_scout_at": "2026-07-24T10:38:53.374407Z",
+            "last_scout_duration_ms": 1250,
+            "total_profiles": 8,
+            "interval_minutes": 30,
+            "active_mimics": 3,
+            "max_mimics": 30,
+            "fake_host_count": 3,
+            "service_decoy_count": 11
+        }
+        """.data(using: .utf8)!
+
+        let status = try JSONDecoder().decode(ScoutStatusResponse.self, from: json)
+
+        #expect(status.fakeHostCount == 3)
+        #expect(status.serviceDecoyCount == 11)
+    }
+
+    @Test("Alert history clear response decodes backup result")
+    func alertHistoryClearResponseDecodes() throws {
+        let json = """
+        {
+            "alerts_deleted": 12,
+            "incidents_deleted": 3,
+            "replay_events_deleted": 15,
+            "backup_file": "/var/lib/squirrelops/backups/alerts-20260723.json",
+            "cleared_at": "2026-07-23T16:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(AlertHistoryClearResponse.self, from: json)
+
+        #expect(response.alertsDeleted == 12)
+        #expect(response.incidentsDeleted == 3)
+        #expect(response.replayEventsDeleted == 15)
+        #expect(response.userSummary == "Cleared 12 alerts. A recovery backup was created.")
     }
 
     // MARK: - LearningStatusResponse decoding

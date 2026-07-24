@@ -1,9 +1,8 @@
-"""DNS canary manager — tracks canary hostnames and records observations.
+"""Dormant DNS-canary matching primitives retained for data compatibility.
 
-Canary hostnames are embedded in planted credentials. When an attacker
-uses a stolen credential that triggers a DNS lookup (AWS keys, GitHub
-PATs, HA tokens), the DNS query for the canary hostname is detected
-by the DNSMonitor and matched here.
+The current product does not plant or monitor DNS canary hostnames. These
+helpers remain available for reading legacy database records, but no runtime
+subsystem feeds them DNS traffic.
 """
 
 from __future__ import annotations
@@ -15,11 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 class CanaryManager:
-    """Manages canary hostnames and matches DNS queries against them.
+    """Match explicitly supplied hostnames and build observation records.
 
-    Canary hostnames are loaded at startup and can be dynamically added/removed.
-    Each hostname maps to a credential_id for tracing back to the planted
-    credential that was compromised.
+    Each hostname can map to a credential ID for tracing legacy records. The
+    current sensor runtime does not instantiate this manager.
 
     Args:
         hostnames: Initial set of known canary hostnames.

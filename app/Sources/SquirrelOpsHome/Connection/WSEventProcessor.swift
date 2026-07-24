@@ -12,17 +12,40 @@ public enum WSEventProcessor {
 
     // MARK: - Pending Batches
 
+    private struct SequencedAlert {
+        let seq: Int
+        let alert: AlertSummary
+    }
+
+    private enum DecoyMutation {
+        case upsert(DecoySummary)
+        case remove(id: Int)
+        case updateConnectionCounts(
+            id: Int,
+            connectionCount: Int,
+            credentialTripCount: Int?,
+            updatedAt: String?
+        )
+        case updateHostname(
+            hostId: Int?,
+            bindAddress: String?,
+            decoyIds: Set<Int>,
+            hostname: String,
+            updatedAt: String?
+        )
+    }
+
     private static var pendingDeviceUpdates: [DeviceSummary] = []
     private static var pendingOnlineChanges: [(id: Int, online: Bool)] = []
-    private static var pendingAlerts: [AlertSummary] = []
-    private static var pendingAlertUpdates: [AlertSummary] = []
-    private static var pendingDecoys: [DecoySummary] = []
+    private static var pendingAlerts: [SequencedAlert] = []
+    private static var pendingAlertUpdates: [SequencedAlert] = []
+    private static var pendingDecoys: [DecoyMutation] = []
     private static var pendingSystemStatus: StatusResponse?
     private static var flushTask: Task<Void, Never>?
 
     /// Process a single WebSocket frame, queuing changes for batched flush.
     public static func process(_ frame: WSFrame, into state: AppState) {
-        guard case .event(_, let eventType, let payload) = frame else { return }
+        guard case .event(let seq, let eventType, let payload) = frame else { return }
 
         switch eventType {
         case "device.new", "device.updated":
@@ -45,19 +68,58 @@ public enum WSEventProcessor {
 
         case "alert.new":
             if let alert = decodeAlert(from: payload) {
-                pendingAlerts.append(alert)
+                pendingAlerts.append(SequencedAlert(seq: seq, alert: alert))
                 scheduleFlush(into: state)
             }
 
         case "alert.updated":
             if let alert = decodeAlert(from: payload) {
-                pendingAlertUpdates.append(alert)
+                pendingAlertUpdates.append(SequencedAlert(seq: seq, alert: alert))
                 scheduleFlush(into: state)
             }
 
+        case "alerts.history_cleared":
+            state.applyAlertHistoryClearedEvent(throughSequence: seq)
+
         case "decoy.status_changed":
-            if let decoy = decodeDecoy(from: payload) {
-                pendingDecoys.append(decoy)
+            if case .string("removed") = payload["status"],
+               let decoyId = extractInt(payload, key: "id") {
+                pendingDecoys.append(.remove(id: decoyId))
+                scheduleFlush(into: state)
+            } else if let decoy = decodeDecoy(from: payload) {
+                pendingDecoys.append(.upsert(decoy))
+                scheduleFlush(into: state)
+            }
+
+        case "decoy.connection_count_changed":
+            if let decoyId = extractInt(payload, key: "decoy_id")
+                ?? extractInt(payload, key: "id"),
+               let connectionCount = extractInt(payload, key: "connection_count") {
+                pendingDecoys.append(
+                    .updateConnectionCounts(
+                        id: decoyId,
+                        connectionCount: connectionCount,
+                        credentialTripCount: extractInt(
+                            payload,
+                            key: "credential_trip_count"
+                        ),
+                        updatedAt: extractString(payload, key: "updated_at")
+                    )
+                )
+                scheduleFlush(into: state)
+            }
+
+        case "decoy.hostname_changed":
+            if let hostname = extractString(payload, key: "hostname") {
+                pendingDecoys.append(
+                    .updateHostname(
+                        hostId: extractInt(payload, key: "host_id"),
+                        bindAddress: extractString(payload, key: "bind_address"),
+                        decoyIds: extractInts(payload, key: "decoy_ids"),
+                        hostname: hostname,
+                        updatedAt: extractString(payload, key: "updated_at")
+                    )
+                )
                 scheduleFlush(into: state)
             }
 
@@ -88,14 +150,29 @@ public enum WSEventProcessor {
         flushAll(into: state)
     }
 
+    /// Drop alert events covered by an authoritative history-clear marker.
+    ///
+    /// A nil sequence is used for a local REST clear, where all queued alert
+    /// mutations are stale. A WebSocket marker clears only events at or before
+    /// its sequence so an interleaved newer live event remains queued.
+    public static func discardPendingAlertUpdates(throughSequence: Int? = nil) {
+        guard let throughSequence else {
+            pendingAlerts.removeAll()
+            pendingAlertUpdates.removeAll()
+            return
+        }
+        pendingAlerts.removeAll { $0.seq <= throughSequence }
+        pendingAlertUpdates.removeAll { $0.seq <= throughSequence }
+    }
+
     /// Apply ALL pending updates as a single synchronous batch.
     /// Because this runs in one synchronous MainActor block, SwiftUI
     /// coalesces the @Observable notifications into a single layout pass.
     private static func flushAll(into state: AppState) {
         let deviceUpdates = pendingDeviceUpdates
         let onlineChanges = pendingOnlineChanges
-        let alerts = pendingAlerts
-        let alertUpdates = pendingAlertUpdates
+        let alerts = pendingAlerts.map(\.alert)
+        let alertUpdates = pendingAlertUpdates.map(\.alert)
         let decoys = pendingDecoys
         let systemStatus = pendingSystemStatus
 
@@ -115,14 +192,52 @@ public enum WSEventProcessor {
         // -- Decoys --
         if !decoys.isEmpty {
             var current = state.decoys
-            for decoy in decoys {
-                if decoy.status == "removed" {
-                    // Decoy was deleted — remove from state
-                    current.removeAll(where: { $0.id == decoy.id })
-                } else if let index = current.firstIndex(where: { $0.id == decoy.id }) {
-                    current[index] = decoy
-                } else {
-                    current.append(decoy)
+            for mutation in decoys {
+                switch mutation {
+                case .remove(let id):
+                    current.removeAll(where: { $0.id == id })
+                case .upsert(let decoy):
+                    if let index = current.firstIndex(where: { $0.id == decoy.id }) {
+                        current[index] = decoy
+                    } else {
+                        current.append(decoy)
+                    }
+                case .updateConnectionCounts(
+                    let id,
+                    let connectionCount,
+                    let credentialTripCount,
+                    let updatedAt
+                ):
+                    guard let index = current.firstIndex(where: { $0.id == id }) else {
+                        continue
+                    }
+                    current[index] = current[index].replacingConnectionCounts(
+                        connectionCount: connectionCount,
+                        credentialTripCount: credentialTripCount
+                            ?? current[index].credentialTripCount,
+                        updatedAt: updatedAt
+                    )
+                case .updateHostname(
+                    let hostId,
+                    let bindAddress,
+                    let decoyIds,
+                    let hostname,
+                    let updatedAt
+                ):
+                    for index in current.indices where
+                        decoyIds.contains(current[index].id)
+                        || (hostId != nil && current[index].hostId == hostId)
+                        || (
+                            hostId == nil
+                            && decoyIds.isEmpty
+                            && bindAddress != nil
+                            && current[index].bindAddress == bindAddress
+                        ) {
+                        current[index] = current[index].replacingHostname(
+                            hostname,
+                            updatedAt: updatedAt
+                        )
+                    }
                 }
             }
             state.decoys = current
@@ -219,5 +334,24 @@ public enum WSEventProcessor {
     private static func extractInt(_ payload: [String: AnyCodableValue], key: String) -> Int? {
         if case .int(let value) = payload[key] { return value }
         return nil
+    }
+
+    private static func extractString(
+        _ payload: [String: AnyCodableValue],
+        key: String
+    ) -> String? {
+        if case .string(let value) = payload[key] { return value }
+        return nil
+    }
+
+    private static func extractInts(
+        _ payload: [String: AnyCodableValue],
+        key: String
+    ) -> Set<Int> {
+        guard case .array(let values) = payload[key] else { return [] }
+        return Set(values.compactMap {
+            if case .int(let value) = $0 { return value }
+            return nil
+        })
     }
 }

@@ -14,6 +14,8 @@ Built-in method factories:
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from time import monotonic
 from typing import Any, Protocol
 
 from squirrelops_home_sensor.alerts.types import Severity, severity_emoji
@@ -47,6 +49,16 @@ class MethodConfig:
         return severity >= self.min_severity
 
 
+@dataclass
+class _DeliveryFailureState:
+    consecutive_failures: int = 0
+    retry_after: float = 0.0
+
+
+class AlertDeliveryError(RuntimeError):
+    """A credential-safe notification delivery failure."""
+
+
 # -- Alert Dispatcher ------------------------------------------------
 
 class AlertDispatcher:
@@ -61,8 +73,18 @@ class AlertDispatcher:
         - ``min_severity``: minimum severity string (default "low")
     """
 
-    def __init__(self, methods: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        methods: list[dict[str, Any]],
+        *,
+        failure_backoff_base: float = 30.0,
+        failure_backoff_max: float = 900.0,
+    ) -> None:
         self._methods = [MethodConfig(m) for m in methods]
+        self._failure_states: dict[str, _DeliveryFailureState] = {}
+        self._failure_backoff_base = failure_backoff_base
+        self._failure_backoff_max = failure_backoff_max
+        self._clock: Callable[[], float] = monotonic
 
     def subscribe_to(self, event_bus: EventBusProtocol) -> None:
         """Subscribe to ``alert.new`` events on the given event bus."""
@@ -102,14 +124,36 @@ class AlertDispatcher:
             if not method.accepts(severity):
                 continue
 
+            state = self._failure_states.setdefault(
+                method.name, _DeliveryFailureState()
+            )
+            now = self._clock()
+            if now < state.retry_after:
+                continue
+
             try:
                 await method.handler(alert_payload)
-            except Exception:
-                logger.exception(
-                    "Alert dispatch failed for method %s (alert_id=%s)",
+            except Exception as exc:
+                state.consecutive_failures += 1
+                delay = min(
+                    self._failure_backoff_base
+                    * (2 ** (state.consecutive_failures - 1)),
+                    self._failure_backoff_max,
+                )
+                state.retry_after = now + delay
+                # Do not interpolate exception text or retain a traceback here.
+                # HTTP client exceptions commonly embed credential-bearing URLs.
+                logger.error(
+                    "Alert dispatch failed for method %s (alert_id=%s, error=%s); "
+                    "retrying after %.0fs",
                     method.name,
                     alert_payload.get("alert_id"),
+                    type(exc).__name__,
+                    delay,
                 )
+            else:
+                state.consecutive_failures = 0
+                state.retry_after = 0.0
 
 
 def build_methods_from_config(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -297,9 +341,31 @@ def create_slack_handler(
 
             session = aiohttp.ClientSession()
 
-        async with session:
-            resp = await session.post(webhook_url, json=slack_msg)
-            resp.raise_for_status()
+        try:
+            async with session:
+                if session_factory is None:
+                    import aiohttp
+
+                    resp = await session.post(
+                        webhook_url,
+                        json=slack_msg,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    )
+                else:
+                    resp = await session.post(webhook_url, json=slack_msg)
+                status = int(getattr(resp, "status", 0))
+                if not 200 <= status < 300:
+                    raise AlertDeliveryError(
+                        f"Slack webhook returned HTTP {status}"
+                    )
+        except AlertDeliveryError:
+            raise
+        except Exception as exc:
+            # aiohttp exceptions include the full request URL in their string
+            # representation. Replace them before the dispatcher logs anything.
+            raise AlertDeliveryError(
+                f"Slack webhook request failed ({type(exc).__name__})"
+            ) from None
 
     return _handler
 

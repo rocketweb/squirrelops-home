@@ -8,19 +8,45 @@
 # Environment variables:
 #   BUILD_CONFIG  - "debug" (default) or "release"
 #   BUILD_ARCH    - "arm64", "x86_64", or "universal" (default: current arch)
-#   SQUIRRELOPS_VERSION - override version (default: read from ../VERSION)
+#   SQUIRRELOPS_VERSION - optional assertion; must match ../VERSION
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION="${SQUIRRELOPS_VERSION:-$(cat "$SCRIPT_DIR/../VERSION")}"
+VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../VERSION")"
+if [ -n "${SQUIRRELOPS_VERSION:-}" ] \
+    && [ "$SQUIRRELOPS_VERSION" != "$VERSION" ]; then
+    echo "[x] App version override does not match authoritative VERSION ($VERSION)." >&2
+    exit 1
+fi
 
 APP_NAME="SquirrelOpsHome"
 HELPER_NAME="SquirrelOpsHelper"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+
+fail() {
+    echo "[x] $*" >&2
+    exit 1
+}
+
+strip_release_binary() {
+    local binary="$1"
+
+    /usr/bin/strip -S "$binary" \
+        || fail "Could not strip release debug metadata from $binary"
+}
+
+validate_no_build_host_paths() {
+    local binary="$1"
+
+    if LC_ALL=C /usr/bin/grep -aFq "$REPO_ROOT" "$binary"; then
+        fail "Release binary still embeds the build-host repository path: $binary"
+    fi
+}
 
 # --- Construct swift build flags ---
 
@@ -68,7 +94,8 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
 # Copy executable
-cp "$BUILD_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+cp "$BUILD_DIR/$APP_NAME" "$APP_EXECUTABLE"
 
 # Copy bundled resources (fonts etc.) using glob to handle naming variations
 for bundle in "$BUILD_DIR"/*_"${APP_NAME}".bundle; do
@@ -77,14 +104,26 @@ for bundle in "$BUILD_DIR"/*_"${APP_NAME}".bundle; do
     fi
 done
 
-# Copy helper binary into LaunchServices location if it exists
+# The privileged helper is required for ARP scans, decoys, and alerting. An app
+# without it is not a functional SquirrelOps Home build.
 HELPER_BUNDLE_ID="com.squirrelops.helper"
-if [ -f "$BUILD_DIR/$HELPER_NAME" ]; then
-    echo "[+] Bundling helper: $HELPER_NAME -> $HELPER_BUNDLE_ID"
-    mkdir -p "$APP_BUNDLE/Contents/Library/LaunchServices"
-    cp "$BUILD_DIR/$HELPER_NAME" "$APP_BUNDLE/Contents/Library/LaunchServices/$HELPER_BUNDLE_ID"
-else
-    echo "[!] Helper binary not found at $BUILD_DIR/$HELPER_NAME — skipping"
+if [ ! -x "$BUILD_DIR/$HELPER_NAME" ]; then
+    echo "[x] Required helper binary is missing or not executable: $BUILD_DIR/$HELPER_NAME" >&2
+    exit 1
+fi
+echo "[+] Bundling helper: $HELPER_NAME -> $HELPER_BUNDLE_ID"
+mkdir -p "$APP_BUNDLE/Contents/Library/LaunchServices"
+HELPER_PATH="$APP_BUNDLE/Contents/Library/LaunchServices/$HELPER_BUNDLE_ID"
+cp "$BUILD_DIR/$HELPER_NAME" "$HELPER_PATH"
+chmod 755 "$HELPER_PATH"
+
+if [ "$BUILD_CONFIG" = "release" ]; then
+    echo "[+] Removing build-host metadata from release binaries..."
+    strip_release_binary "$APP_EXECUTABLE"
+    strip_release_binary "$HELPER_PATH"
+
+    validate_no_build_host_paths "$APP_EXECUTABLE"
+    validate_no_build_host_paths "$HELPER_PATH"
 fi
 
 # Copy app icon

@@ -130,6 +130,11 @@ async def _create_alert_via_grouper(
     """Insert an alert row, then call the grouper to process it.
     Returns the alert id."""
     ts = created_at or _iso_now()
+    event_cursor = await db.execute(
+        "INSERT INTO events (event_type, payload) VALUES ('alert.source', '{}')"
+    )
+    source_event_seq = event_cursor.lastrowid
+    assert source_event_seq is not None
     cursor = await db.execute(
         """INSERT INTO home_alerts (alert_type, severity, title, detail,
            source_ip, source_mac, created_at)
@@ -137,8 +142,12 @@ async def _create_alert_via_grouper(
         (alert_type, severity, title, detail, source_ip, source_mac, ts),
     )
     alert_id = cursor.lastrowid
+    assert alert_id is not None
     await db.commit()
-    await grouper.process_alert(alert_id)
+    await grouper.process_alert(
+        alert_id,
+        source_event_seq=source_event_seq,
+    )
     return alert_id
 
 

@@ -494,7 +494,11 @@ class TestPairingFullFlow:
         aesgcm = AESGCM(shared_key)
         ca_cert_pem = aesgcm.decrypt(encrypted_ca[:12], encrypted_ca[12:], None)
         ca_cert = x509.load_pem_x509_certificate(ca_cert_pem)
-        assert "SquirrelOps" in ca_cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+        common_name = ca_cert.subject.get_attributes_for_oid(
+            NameOID.COMMON_NAME
+        )[0].value
+        assert isinstance(common_name, str)
+        assert "SquirrelOps" in common_name
 
         # Step 3: Complete
         client_key = ec.generate_private_key(ec.SECP256R1())

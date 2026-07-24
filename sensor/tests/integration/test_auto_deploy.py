@@ -34,9 +34,9 @@ def orchestrator(event_bus, db):
     return DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
 
 
-class TestAutoDeploySkipsWhenDecoysExist:
-    async def test_skips_when_active_decoys_exist(self, orchestrator, db):
-        """Auto-deploy is a no-op when decoys already exist in the DB."""
+class TestAutoDeployReconcilesExistingTypes:
+    async def test_fills_missing_type_when_an_active_type_exists(self, orchestrator, db):
+        """An existing listener must not prevent a different useful type."""
         await db.execute(
             """INSERT INTO decoys (name, decoy_type, bind_address, port, status, config, created_at, updated_at)
                VALUES ('test', 'file_share', '0.0.0.0', 8080, 'active', '{}', '2026-01-01', '2026-01-01')"""
@@ -44,10 +44,17 @@ class TestAutoDeploySkipsWhenDecoysExist:
         await db.commit()
 
         result = await orchestrator.auto_deploy([{"ip": "10.0.0.1", "port": 8080, "protocol": "tcp"}])
-        assert result == 0
+        assert result == 1
+        cursor = await db.execute("SELECT decoy_type FROM decoys ORDER BY id")
+        assert [row["decoy_type"] for row in await cursor.fetchall()] == [
+            "file_share",
+            "dev_server",
+        ]
 
-    async def test_skips_when_stopped_decoys_exist(self, orchestrator, db):
-        """Auto-deploy is a no-op even with stopped decoys (from a previous run)."""
+    async def test_fills_missing_type_without_replacing_stopped_type(
+        self, orchestrator, db,
+    ):
+        """A disabled type stays disabled while other useful types can be added."""
         await db.execute(
             """INSERT INTO decoys (name, decoy_type, bind_address, port, status, config, created_at, updated_at)
                VALUES ('old', 'file_share', '0.0.0.0', 8080, 'stopped', '{}', '2026-01-01', '2026-01-01')"""
@@ -55,10 +62,68 @@ class TestAutoDeploySkipsWhenDecoysExist:
         await db.commit()
 
         result = await orchestrator.auto_deploy([{"ip": "10.0.0.1", "port": 3000, "protocol": "tcp"}])
+        assert result == 1
+        cursor = await db.execute(
+            "SELECT decoy_type, status FROM decoys ORDER BY id"
+        )
+        rows = await cursor.fetchall()
+        assert [(row["decoy_type"], row["status"]) for row in rows] == [
+            ("file_share", "stopped"),
+            ("dev_server", "active"),
+        ]
+
+    async def test_does_not_duplicate_a_stopped_type(self, orchestrator, db):
+        """A scan must not silently replace a listener the user disabled."""
+        await db.execute(
+            """INSERT INTO decoys
+               (name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at)
+               VALUES ('old', 'file_share', '0.0.0.0', 8080, 'stopped', '{}',
+                       '2026-01-01', '2026-01-01')"""
+        )
+        await db.commit()
+
+        result = await orchestrator.auto_deploy(
+            [{"ip": "10.0.0.1", "port": 22, "protocol": "tcp"}]
+        )
+
         assert result == 0
+        cursor = await db.execute("SELECT COUNT(*) FROM decoys")
+        assert (await cursor.fetchone())[0] == 1
 
 
 class TestAutoDeployCreatesDecoys:
+    async def test_defers_without_lan_then_deploys_after_network_returns(
+        self, db, event_bus, monkeypatch,
+    ):
+        """No-LAN scans create no unreachable rows and re-resolve on the next scan."""
+        route_address: dict[str, str | None] = {"value": None}
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._route_selected_ip",
+            lambda: route_address["value"],
+        )
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.decoys.orchestrator._interface_ipv4_addresses",
+            lambda _: [],
+        )
+        orchestrator = DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
+
+        services = [{"ip": "10.0.0.1", "port": 22, "protocol": "tcp"}]
+        assert await orchestrator.auto_deploy(services) == 0
+        assert (await (await db.execute("SELECT COUNT(*) FROM decoys")).fetchone())[0] == 0
+        assert (
+            await (
+                await db.execute("SELECT COUNT(*) FROM planted_credentials")
+            ).fetchone()
+        )[0] == 0
+
+        route_address["value"] = "192.168.1.79"
+        assert await orchestrator.auto_deploy(services) == 1
+        row = await (
+            await db.execute("SELECT status, bind_address FROM decoys")
+        ).fetchone()
+        assert (row["status"], row["bind_address"]) == ("active", "192.168.1.79")
+
     async def test_deploys_file_share_fallback(self, orchestrator, db, event_bus):
         """Deploys a file share decoy when no recognizable ports detected."""
         services = [{"ip": "10.0.0.1", "port": 22, "protocol": "tcp"}]
@@ -166,6 +231,37 @@ class TestResumeActive:
         """Resume returns 0 when no decoys in database."""
         resumed = await orchestrator.resume_active()
         assert resumed == 0
+
+    async def test_resume_stops_rows_above_current_profile_limit(
+        self, event_bus, db,
+    ):
+        """Startup cannot reactivate more classic listeners than the profile allows."""
+        orchestrator = DecoyOrchestrator(
+            event_bus=event_bus,
+            db=db,
+            max_decoys=1,
+        )
+        await db.executemany(
+            """INSERT INTO decoys
+               (name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at)
+               VALUES (?, ?, '0.0.0.0', 0, 'active', '{}',
+                       '2026-01-01', '2026-01-01')""",
+            [
+                ("Share", "file_share"),
+                ("Dev Server", "dev_server"),
+            ],
+        )
+        await db.commit()
+
+        resumed = await orchestrator.resume_active()
+
+        assert resumed == 1
+        cursor = await db.execute("SELECT status FROM decoys ORDER BY id")
+        assert [row["status"] for row in await cursor.fetchall()] == [
+            "active",
+            "stopped",
+        ]
 
     async def test_resume_loads_credentials(self, orchestrator, db):
         """Resume loads planted credentials for the decoy."""

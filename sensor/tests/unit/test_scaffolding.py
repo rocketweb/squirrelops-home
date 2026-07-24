@@ -31,8 +31,17 @@ class TestProjectStructure:
         data = tomllib.loads(pyproject.read_text())
         deps = [d.split(">")[0].split("<")[0].split("=")[0].split("[")[0].strip()
                 for d in data["project"]["dependencies"]]
-        required = ["fastapi", "uvicorn", "websockets", "scapy", "cryptography",
-                     "zeroconf", "pydantic", "aiosqlite"]
+        required = [
+            "fastapi",
+            "uvicorn",
+            "websockets",
+            "scapy",
+            "cryptography",
+            "zeroconf",
+            "pydantic",
+            "aiosqlite",
+            "psutil",
+        ]
         for req in required:
             assert req in deps, f"Missing runtime dependency: {req}"
 

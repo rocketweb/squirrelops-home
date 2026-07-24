@@ -79,6 +79,127 @@ struct WSEventProcessorTests {
         #expect(state.decoys.count == 1)
     }
 
+    @Test("Minimal removed decoy event removes the existing decoy")
+    func minimalRemovedDecoyEventRemovesExistingDecoy() {
+        let state = AppState()
+        state.decoys = [
+            DecoySummary(
+                id: 10,
+                name: "files.local",
+                decoyType: "mimic",
+                bindAddress: "192.168.1.118",
+                port: 80,
+                status: "active",
+                connectionCount: 0,
+                credentialTripCount: 0,
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:00Z"
+            ),
+        ]
+        let payload: [String: AnyCodableValue] = [
+            "id": .int(10),
+            "status": .string("removed"),
+        ]
+
+        WSEventProcessor.process(
+            .event(seq: 5, eventType: "decoy.status_changed", payload: payload),
+            into: state
+        )
+        WSEventProcessor.flushPendingUpdates(into: state)
+
+        #expect(state.decoys.isEmpty)
+    }
+
+    @Test("Connection count event replaces service counters with absolute values")
+    func connectionCountEventUsesAbsoluteValues() {
+        let state = AppState()
+        state.decoys = [
+            makeMimicDecoy(
+                id: 10,
+                hostId: 4,
+                address: "192.168.1.203",
+                port: 80,
+                connectionCount: 8
+            ),
+            makeMimicDecoy(
+                id: 11,
+                hostId: 4,
+                address: "192.168.1.203",
+                port: 443,
+                connectionCount: 3
+            ),
+        ]
+
+        WSEventProcessor.process(
+            .event(
+                seq: 6,
+                eventType: "decoy.connection_count_changed",
+                payload: [
+                    "id": .int(10),
+                    "decoy_id": .int(10),
+                    "host_id": .int(4),
+                    "bind_address": .string("192.168.1.203"),
+                    "port": .int(80),
+                    "connection_count": .int(9),
+                    "credential_trip_count": .int(2),
+                    "updated_at": .string("2026-07-24T12:00:00Z"),
+                ]
+            ),
+            into: state
+        )
+        WSEventProcessor.flushPendingUpdates(into: state)
+
+        #expect(state.decoys[0].connectionCount == 9)
+        #expect(state.decoys[0].credentialTripCount == 2)
+        #expect(state.decoys[0].updatedAt == "2026-07-24T12:00:00Z")
+        #expect(state.decoys[1].connectionCount == 3)
+    }
+
+    @Test("Hostname event updates every service in the virtual host")
+    func hostnameEventUpdatesHostGroup() {
+        let state = AppState()
+        state.decoys = [
+            makeMimicDecoy(
+                id: 10,
+                hostId: 4,
+                address: "192.168.1.203",
+                port: 80
+            ),
+            makeMimicDecoy(
+                id: 11,
+                hostId: 4,
+                address: "192.168.1.203",
+                port: 443
+            ),
+            makeMimicDecoy(
+                id: 12,
+                hostId: 5,
+                address: "192.168.1.204",
+                port: 80
+            ),
+        ]
+
+        WSEventProcessor.process(
+            .event(
+                seq: 7,
+                eventType: "decoy.hostname_changed",
+                payload: [
+                    "host_id": .int(4),
+                    "hostname": .string("printer-232.local"),
+                    "bind_address": .string("192.168.1.203"),
+                    "decoy_ids": .array([.int(10), .int(11)]),
+                    "updated_at": .string("2026-07-24T12:01:00Z"),
+                ]
+            ),
+            into: state
+        )
+        WSEventProcessor.flushPendingUpdates(into: state)
+
+        #expect(state.decoys[0].hostname == "printer-232.local")
+        #expect(state.decoys[1].hostname == "printer-232.local")
+        #expect(state.decoys[2].hostname == "old.local")
+    }
+
     @Test("device.offline event updates device status")
     func deviceOfflineUpdates() {
         let state = AppState()
@@ -112,6 +233,63 @@ struct WSEventProcessorTests {
 
         #expect(state.alerts.count == 1)
         #expect(state.alerts[0].title == "New device detected")
+    }
+
+    @Test("History clear drops queued alerts before they can flush")
+    func historyClearDropsQueuedAlerts() {
+        let state = AppState()
+        let payload: [String: AnyCodableValue] = [
+            "id": .int(1),
+            "alert_type": .string("device.new"),
+            "severity": .string("medium"),
+            "title": .string("Queued old alert"),
+            "created_at": .string("2026-01-01T00:00:00Z"),
+        ]
+        WSEventProcessor.process(
+            .event(seq: 4, eventType: "alert.new", payload: payload),
+            into: state
+        )
+        WSEventProcessor.process(
+            .event(
+                seq: 5,
+                eventType: "alerts.history_cleared",
+                payload: ["alerts_deleted": .int(1)]
+            ),
+            into: state
+        )
+        WSEventProcessor.flushPendingUpdates(into: state)
+
+        #expect(state.alerts.isEmpty)
+    }
+
+    @Test("Replay clear preserves a queued newer live alert")
+    func replayClearPreservesQueuedNewerLiveAlert() {
+        let state = AppState()
+        let payload: [String: AnyCodableValue] = [
+            "id": .int(2),
+            "alert_type": .string("decoy.trip"),
+            "severity": .string("high"),
+            "title": .string("Post-clear live alert"),
+            "created_at": .string("2026-01-01T00:00:01Z"),
+        ]
+
+        // A live event can arrive while the server is still replaying older
+        // frames. The later-delivered marker is older than this alert.
+        WSEventProcessor.process(
+            .event(seq: 6, eventType: "alert.new", payload: payload),
+            into: state
+        )
+        WSEventProcessor.process(
+            .event(
+                seq: 5,
+                eventType: "alerts.history_cleared",
+                payload: ["alerts_deleted": .int(1)]
+            ),
+            into: state
+        )
+        WSEventProcessor.flushPendingUpdates(into: state)
+
+        #expect(state.alerts.map(\.id) == [2])
     }
 
     @Test("system.status_changed event updates system status")
@@ -149,5 +327,30 @@ struct WSEventProcessorTests {
         WSEventProcessor.process(.ping, into: state)
         WSEventProcessor.process(.replayComplete(lastSeq: 10), into: state)
         #expect(state.devices.isEmpty)
+    }
+
+    private func makeMimicDecoy(
+        id: Int,
+        hostId: Int,
+        address: String,
+        port: Int,
+        connectionCount: Int = 0
+    ) -> DecoySummary {
+        DecoySummary(
+            id: id,
+            name: "Mimic \(id)",
+            decoyType: "mimic",
+            bindAddress: address,
+            port: port,
+            status: "active",
+            connectionCount: connectionCount,
+            credentialTripCount: 0,
+            createdAt: "2026-07-24T00:00:00Z",
+            updatedAt: "2026-07-24T00:00:00Z",
+            hostId: hostId,
+            hostname: "old.local",
+            serviceProtocol: port == 443 ? "https" : "http",
+            serviceName: "Web"
+        )
     }
 }

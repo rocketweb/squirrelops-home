@@ -7,6 +7,7 @@ affected devices, rather than one alert per device+port.
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -80,6 +81,12 @@ def mock_event_bus() -> AsyncMock:
     """AsyncMock event bus with a publish method that returns a sequence number."""
     bus = AsyncMock()
     bus.publish = AsyncMock(return_value=1)
+
+    @asynccontextmanager
+    async def serialized():
+        yield
+
+    bus.serialized = serialized
     return bus
 
 
@@ -203,6 +210,216 @@ async def test_new_device_updates_existing_group(db, mock_event_bus):
     assert payload["device_count"] == 3
 
 
+@pytest.mark.asyncio
+async def test_added_device_update_uses_current_ip_snapshot(
+    db,
+    mock_event_bus,
+):
+    """A simultaneous addition and DHCP change publish the committed snapshot."""
+    for i in range(1, 3):
+        await _insert_test_device(
+            db,
+            device_id=i,
+            ip_address=f"192.168.1.{100 + i}",
+            mac_address=f"AA:BB:CC:DD:EE:{i:02X}",
+            device_type="smart_speaker",
+        )
+
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+    await analyzer.analyze_all_devices([
+        _make_device_dict(
+            1,
+            "192.168.1.101",
+            "AA:BB:CC:DD:EE:01",
+            "smart_speaker",
+            frozenset({23}),
+            "Speaker 1",
+        )
+    ])
+    mock_event_bus.publish.reset_mock()
+
+    current_devices = [
+        _make_device_dict(
+            1,
+            "192.168.1.150",
+            "AA:BB:CC:DD:EE:01",
+            "smart_speaker",
+            frozenset({23}),
+            "Speaker 1",
+        ),
+        _make_device_dict(
+            2,
+            "192.168.1.102",
+            "AA:BB:CC:DD:EE:02",
+            "smart_speaker",
+            frozenset({23}),
+            "Speaker 2",
+        ),
+    ]
+    await analyzer.analyze_all_devices(current_devices)
+
+    cursor = await db.execute(
+        """SELECT affected_devices
+           FROM home_alerts
+           WHERE issue_key = 'port_risk:telnet:23'"""
+    )
+    persisted = json.loads((await cursor.fetchone())["affected_devices"])
+    assert {
+        item["device_id"]: item["ip_address"] for item in persisted
+    } == {
+        1: "192.168.1.150",
+        2: "192.168.1.102",
+    }
+    payload = mock_event_bus.publish.call_args[0][1]
+    assert {
+        item["device_id"]: item["ip_address"]
+        for item in payload["affected_devices"]
+    } == {
+        1: "192.168.1.150",
+        2: "192.168.1.102",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corrupted_column", ["affected_devices", "detail"])
+async def test_legacy_pathological_group_json_does_not_abort_analysis(
+    db,
+    mock_event_bus,
+    corrupted_column,
+):
+    """Oversized legacy JSON is repaired instead of aborting the scan."""
+    await _insert_test_device(
+        db,
+        device_id=1,
+        ip_address="192.168.1.101",
+        mac_address="AA:BB:CC:DD:EE:01",
+        device_type="smart_speaker",
+    )
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+    active_device = _make_device_dict(
+        1,
+        "192.168.1.101",
+        "AA:BB:CC:DD:EE:01",
+        "smart_speaker",
+        frozenset({23}),
+        "Speaker 1",
+    )
+    await analyzer.analyze_all_devices([active_device])
+    oversized_json_integer = "9" * 5000
+    await db.execute(
+        f"UPDATE home_alerts SET {corrupted_column} = ? "
+        "WHERE issue_key = 'port_risk:telnet:23'",
+        (oversized_json_integer,),
+    )
+    await db.commit()
+
+    next_devices = (
+        [active_device]
+        if corrupted_column == "affected_devices"
+        else [{**active_device, "open_ports": frozenset()}]
+    )
+    await analyzer.analyze_all_devices(next_devices)
+
+    cursor = await db.execute(
+        """SELECT detail, affected_devices, device_count
+           FROM home_alerts
+           WHERE issue_key = 'port_risk:telnet:23'"""
+    )
+    alert = await cursor.fetchone()
+    assert isinstance(json.loads(alert["detail"]), dict)
+    assert isinstance(json.loads(alert["affected_devices"]), list)
+    expected_count = (
+        1 if corrupted_column == "affected_devices" else 0
+    )
+    assert alert["device_count"] == expected_count
+
+
+@pytest.mark.asyncio
+async def test_existing_group_update_rolls_back_if_state_binding_fails(
+    db,
+    mock_event_bus,
+):
+    """The grouped alert cannot commit without every new device state row."""
+    for i in range(1, 4):
+        await _insert_test_device(
+            db,
+            device_id=i,
+            ip_address=f"192.168.1.{100 + i}",
+            mac_address=f"AA:BB:CC:DD:EE:{i:02X}",
+            device_type="smart_speaker",
+        )
+
+    initial_devices = [
+        _make_device_dict(
+            1,
+            "192.168.1.101",
+            "AA:BB:CC:DD:EE:01",
+            "smart_speaker",
+            frozenset({23}),
+            "Speaker 1",
+        )
+    ]
+    await SecurityInsightAnalyzer(
+        db=db,
+        event_bus=mock_event_bus,
+    ).analyze_all_devices(initial_devices)
+    mock_event_bus.publish.reset_mock()
+
+    class FailingStateAnalyzer(SecurityInsightAnalyzer):
+        async def _upsert_insight_state(
+            self,
+            device_id,
+            insight_key,
+            alert_id,
+            **kwargs,
+        ):
+            if device_id == 3:
+                raise RuntimeError("state binding failed")
+            return await super()._upsert_insight_state(
+                device_id,
+                insight_key,
+                alert_id,
+                **kwargs,
+            )
+
+    next_devices = [
+        _make_device_dict(
+            i,
+            f"192.168.1.{100 + i}",
+            f"AA:BB:CC:DD:EE:{i:02X}",
+            "smart_speaker",
+            frozenset({23}),
+            f"Speaker {i}",
+        )
+        for i in range(1, 4)
+    ]
+
+    with pytest.raises(RuntimeError, match="state binding failed"):
+        await FailingStateAnalyzer(
+            db=db,
+            event_bus=mock_event_bus,
+        ).analyze_all_devices(next_devices)
+
+    cursor = await db.execute(
+        """SELECT device_count, affected_devices
+           FROM home_alerts
+           WHERE issue_key = 'port_risk:telnet:23'"""
+    )
+    alert = await cursor.fetchone()
+    assert alert["device_count"] == 1
+    assert [
+        item["device_id"] for item in json.loads(alert["affected_devices"])
+    ] == [1]
+    cursor = await db.execute(
+        """SELECT device_id
+           FROM security_insight_state
+           WHERE insight_key = 'risky_port:23'
+           ORDER BY device_id"""
+    )
+    assert [row[0] for row in await cursor.fetchall()] == [1]
+    mock_event_bus.publish.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Test 3: Device removed from group when port closes
 # ---------------------------------------------------------------------------
@@ -259,6 +476,76 @@ async def test_device_removed_from_group(db, mock_event_bus):
     row = await cursor.fetchone()
     assert row is not None
     assert row["resolved_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_prune_rolls_back_if_state_resolution_fails(
+    db,
+    mock_event_bus,
+):
+    """The alert prune and stale-state resolution form one transaction."""
+    for i in range(1, 3):
+        await _insert_test_device(
+            db,
+            device_id=i,
+            ip_address=f"192.168.1.{100 + i}",
+            mac_address=f"AA:BB:CC:DD:EE:{i:02X}",
+            device_type="smart_speaker",
+        )
+
+    active_devices = [
+        _make_device_dict(
+            i,
+            f"192.168.1.{100 + i}",
+            f"AA:BB:CC:DD:EE:{i:02X}",
+            "smart_speaker",
+            frozenset({21}),
+            f"Speaker {i}",
+        )
+        for i in range(1, 3)
+    ]
+    await SecurityInsightAnalyzer(
+        db=db,
+        event_bus=mock_event_bus,
+    ).analyze_all_devices(active_devices)
+    mock_event_bus.publish.reset_mock()
+
+    class FailingResolutionAnalyzer(SecurityInsightAnalyzer):
+        async def _resolve_stale_insights_batch(self, active_per_device):
+            await super()._resolve_stale_insights_batch(active_per_device)
+            raise RuntimeError("state resolution failed")
+
+    next_devices = [
+        active_devices[0],
+        {**active_devices[1], "open_ports": frozenset()},
+    ]
+    with pytest.raises(RuntimeError, match="state resolution failed"):
+        await FailingResolutionAnalyzer(
+            db=db,
+            event_bus=mock_event_bus,
+        ).analyze_all_devices(next_devices)
+
+    cursor = await db.execute(
+        """SELECT device_count, affected_devices
+           FROM home_alerts
+           WHERE issue_key = 'port_risk:ftp:21'"""
+    )
+    alert = await cursor.fetchone()
+    assert alert["device_count"] == 2
+    assert {
+        item["device_id"] for item in json.loads(alert["affected_devices"])
+    } == {1, 2}
+    cursor = await db.execute(
+        """SELECT device_id, resolved_at
+           FROM security_insight_state
+           WHERE insight_key = 'risky_port:21'
+           ORDER BY device_id"""
+    )
+    assert [tuple(row) for row in await cursor.fetchall()] == [
+        (1, None),
+        (2, None),
+    ]
+    mock_event_bus.publish.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -600,6 +887,46 @@ async def test_insight_state_resolved_when_port_closes(db, mock_event_bus):
 # ---------------------------------------------------------------------------
 # Test 11: DHCP reassignment (IP change) updates silently
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleared_active_insight_stays_cleared_until_condition_reoccurs(
+    db,
+    mock_event_bus,
+):
+    await _insert_test_device(
+        db,
+        device_id=1,
+        ip_address="192.168.1.101",
+        mac_address="AA:BB:CC:DD:EE:01",
+        device_type="smart_speaker",
+    )
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+    risky_device = _make_device_dict(
+        1,
+        "192.168.1.101",
+        "AA:BB:CC:DD:EE:01",
+        "smart_speaker",
+        frozenset({22}),
+        "Speaker 1",
+    )
+
+    assert await analyzer.analyze_all_devices([risky_device]) == 1
+    await db.execute("UPDATE security_insight_state SET alert_id = NULL")
+    await db.execute("DELETE FROM home_alerts")
+    await db.commit()
+    mock_event_bus.publish.reset_mock()
+
+    assert await analyzer.analyze_all_devices([risky_device]) == 0
+    assert (await (await db.execute(
+        "SELECT COUNT(*) FROM home_alerts"
+    )).fetchone())[0] == 0
+    mock_event_bus.publish.assert_not_called()
+
+    await analyzer.analyze_all_devices([])
+    mock_event_bus.publish.reset_mock()
+    assert await analyzer.analyze_all_devices([risky_device]) == 1
+    mock_event_bus.publish.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -14,8 +14,7 @@ let socketPath = "/var/run/squirrelops-helper.sock"
 
 // Set up router
 let router = RPCRouter()
-let dnsSniffer = DNSSniffer()
-registerMethods(router: router, dnsSniffer: dnsSniffer)
+registerMethods(router: router)
 
 // Remove stale socket file
 unlink(socketPath)
@@ -82,6 +81,13 @@ while true {
     let clientFd = accept(serverFd, nil, nil)
     guard clientFd >= 0 else {
         logger.warning("accept() failed: \(String(cString: strerror(errno)))")
+        continue
+    }
+    guard configureNoSigPipe(fd: clientFd) else {
+        logger.warning(
+            "Failed to protect client fd \(clientFd) from SIGPIPE: \(String(cString: strerror(errno)))"
+        )
+        close(clientFd)
         continue
     }
 
@@ -163,6 +169,19 @@ func readLineFromSocket(fd: Int32) -> Data? {
         buffer.append(byte)
         if buffer.count > maxLineLength { return nil }
     }
+}
+
+/// Prevent a client that disconnects before a long RPC finishes from killing
+/// the helper process when the response is written.
+func configureNoSigPipe(fd: Int32) -> Bool {
+    var enabled: Int32 = 1
+    return setsockopt(
+        fd,
+        SOL_SOCKET,
+        SO_NOSIGPIPE,
+        &enabled,
+        socklen_t(MemoryLayout<Int32>.size)
+    ) == 0
 }
 
 /// Write all bytes of ``data`` to a socket fd, handling partial sends.

@@ -1,15 +1,6 @@
 import SwiftUI
 
-enum SidebarItem: String, CaseIterable, Identifiable {
-    case dashboard = "Dashboard"
-    case devices = "Devices"
-    case alerts = "Alerts"
-    case decoys = "Decoys"
-    case scouts = "Scouts"
-    case settings = "Settings"
-
-    var id: String { rawValue }
-
+extension DashboardSection {
     var icon: String {
         switch self {
         case .dashboard: return "square.grid.2x2"
@@ -24,9 +15,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
 
 struct DashboardView: View {
     @Environment(\.colorScheme) private var colorScheme
-    let appState: AppState
-
-    @State private var selectedItem: SidebarItem? = .dashboard
+    @Bindable var appState: AppState
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,7 +51,11 @@ struct DashboardView: View {
     }
 
     private var sidebar: some View {
-        List(SidebarItem.allCases, id: \.self, selection: $selectedItem) { item in
+        List(
+            DashboardSection.allCases,
+            id: \.self,
+            selection: $appState.selectedDashboardSection
+        ) { item in
             Label {
                 Text(item.rawValue)
                     .font(Typography.body)
@@ -77,7 +70,7 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var detailView: some View {
-        switch selectedItem {
+        switch appState.selectedDashboardSection {
         case .dashboard:
             DashboardHome(appState: appState)
         case .devices:
@@ -95,7 +88,7 @@ struct DashboardView: View {
         }
     }
 
-    private func badgeCount(for item: SidebarItem) -> Int {
+    private func badgeCount(for item: DashboardSection) -> Int {
         switch item {
         case .alerts:
             return appState.alerts.filter { $0.readAt == nil }.count

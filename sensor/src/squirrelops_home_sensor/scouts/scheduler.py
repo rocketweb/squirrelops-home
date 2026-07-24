@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -20,6 +21,7 @@ from squirrelops_home_sensor.events.types import EventType
 from squirrelops_home_sensor.scouts.engine import ScoutEngine
 
 logger = logging.getLogger("squirrelops_home_sensor.scouts")
+SCHEDULER_STOP_TIMEOUT_SECONDS = 10.0
 
 
 class ScoutScheduler:
@@ -46,6 +48,7 @@ class ScoutScheduler:
         event_bus: EventBus,
         interval_minutes: int = 30,
         initial_delay_seconds: float = 30.0,
+        post_scout_hook: Callable[[], Awaitable[int]] | None = None,
     ) -> None:
         self._engine = engine
         self._db = db
@@ -60,6 +63,11 @@ class ScoutScheduler:
         self._last_scout_at: datetime | None = None
         self._last_scout_duration_ms: int | None = None
         self._total_profiles: int = 0
+        self._cycle_lock = asyncio.Lock()
+        self._is_scouting = False
+        self._post_scout_hook = post_scout_hook
+        self._last_mimics_deployed = 0
+        self._last_deployment_error: str | None = None
 
     @property
     def last_scout_at(self) -> datetime | None:
@@ -86,8 +94,35 @@ class ScoutScheduler:
         """Whether the scheduler is currently running."""
         return self._task is not None and not self._task.done()
 
+    @property
+    def is_scouting(self) -> bool:
+        """Whether a scout cycle is actively probing or deploying."""
+        return self._is_scouting
+
+    @property
+    def handles_mimic_deployment(self) -> bool:
+        """Whether scout cycles also reconcile/deploy mimics."""
+        return self._post_scout_hook is not None
+
+    @property
+    def last_mimics_deployed(self) -> int:
+        return self._last_mimics_deployed
+
+    @property
+    def last_deployment_error(self) -> str | None:
+        return self._last_deployment_error
+
+    def set_post_scout_hook(
+        self,
+        hook: Callable[[], Awaitable[int]] | None,
+    ) -> None:
+        """Set the post-scout conflict reconciliation/deployment callback."""
+        self._post_scout_hook = hook
+
     async def start(self) -> None:
         """Start the scout scheduler as a background asyncio task."""
+        if self.is_running:
+            return
         if self._interval_minutes <= 0:
             logger.info("Scout scheduler disabled (interval=0)")
             return
@@ -104,18 +139,52 @@ class ScoutScheduler:
             self._initial_delay,
         )
 
+    async def reconfigure(self, interval_minutes: int) -> None:
+        """Apply a new profile interval to the live scheduler.
+
+        The background loop snapshots its timeout on each iteration, so merely
+        mutating ``_interval_minutes`` can leave the old profile active for up
+        to an hour. Restarting the loop makes the new interval (including
+        ``0`` for Lite) effective immediately.
+        """
+        if interval_minutes < 0:
+            raise ValueError("Scout interval cannot be negative")
+        if interval_minutes == self._interval_minutes:
+            return
+
+        was_running = self.is_running
+        if was_running:
+            await self.stop()
+
+        self._interval_minutes = interval_minutes
+        if interval_minutes > 0:
+            await self.start()
+
     async def stop(self) -> None:
         """Stop the scheduler."""
         self._shutdown.set()
         if self._subscription is not None:
             self._event_bus.unsubscribe(self._subscription)
             self._subscription = None
-        if self._task is not None:
+        task = self._task
+        self._task = None
+        if task is not None:
             try:
-                await asyncio.wait_for(self._task, timeout=10)
-            except (TimeoutError, asyncio.CancelledError):
-                pass
-            self._task = None
+                await asyncio.wait_for(
+                    asyncio.shield(task),
+                    timeout=SCHEDULER_STOP_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Scout scheduler did not stop in %.0fs; cancelling it",
+                    SCHEDULER_STOP_TIMEOUT_SECONDS,
+                )
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            except asyncio.CancelledError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise
         logger.info("Scout scheduler stopped")
 
     async def run_now(self) -> int:
@@ -186,6 +255,15 @@ class ScoutScheduler:
 
     async def _run_scout_cycle(self) -> int:
         """Execute a single scout cycle across all devices with open ports."""
+        async with self._cycle_lock:
+            self._is_scouting = True
+            try:
+                return await self._execute_scout_cycle()
+            finally:
+                self._is_scouting = False
+
+    async def _execute_scout_cycle(self) -> int:
+        """Run one serialized scout cycle."""
         start = time.monotonic()
         logger.info("Starting scout cycle")
 
@@ -193,21 +271,25 @@ class ScoutScheduler:
         device_ports = await self._get_device_ports()
         if not device_ports:
             logger.info("No devices with open ports to scout")
-            return 0
+        else:
+            total_ports = sum(len(ports) for ports in device_ports.values())
+            logger.info(
+                "Scouting %d devices with %d total ports",
+                len(device_ports),
+                total_ports,
+            )
 
-        total_ports = sum(len(ports) for ports in device_ports.values())
-        logger.info(
-            "Scouting %d devices with %d total ports",
-            len(device_ports),
-            total_ports,
-        )
-
+        # Even an empty result is authoritative when the inventory query
+        # succeeded: it must remove historical profiles for closed ports and
+        # offline devices. If the inventory query raises, this call is skipped
+        # and the last known-good scout state remains untouched.
         count = await self._engine.scout_all(device_ports)
 
         elapsed_ms = int((time.monotonic() - start) * 1000)
         self._last_scout_at = datetime.now(UTC)
         self._last_scout_duration_ms = elapsed_ms
         self._total_profiles = count
+        await self._run_post_scout_hook()
 
         logger.info(
             "Scout cycle complete: %d profiles in %dms",
@@ -215,6 +297,18 @@ class ScoutScheduler:
             elapsed_ms,
         )
         return count
+
+    async def _run_post_scout_hook(self) -> None:
+        """Run mimic reconciliation after both automatic and manual scouts."""
+        self._last_mimics_deployed = 0
+        self._last_deployment_error = None
+        if self._post_scout_hook is None:
+            return
+        try:
+            self._last_mimics_deployed = await self._post_scout_hook()
+        except Exception as exc:
+            self._last_deployment_error = str(exc)
+            logger.exception("Post-scout mimic reconciliation failed")
 
     async def _get_device_ports(self) -> dict[tuple[int, str], list[int]]:
         """Query database for all devices with open ports.

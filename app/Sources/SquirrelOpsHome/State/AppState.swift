@@ -9,6 +9,19 @@ public enum MenuBarStatus: Sendable, Equatable {
     case disconnected
 }
 
+// MARK: - DashboardSection
+
+public enum DashboardSection: String, CaseIterable, Identifiable, Sendable {
+    case dashboard = "Dashboard"
+    case devices = "Devices"
+    case alerts = "Alerts"
+    case decoys = "Decoys"
+    case scouts = "Scouts"
+    case settings = "Settings"
+
+    public var id: Self { self }
+}
+
 // MARK: - AppState
 
 @MainActor
@@ -18,17 +31,49 @@ public final class AppState {
     public var connectionState: ConnectionState = .disconnected
     public var sensorInfo: HealthResponse?
     public var devices: [DeviceSummary] = []
-    public var alerts: [AlertSummary] = []
+    public var alerts: [AlertSummary] = [] {
+        didSet {
+            reconcileReviewedCriticalAlertRevisions()
+        }
+    }
     public var incidents: [IncidentDetail] = []
     public var decoys: [DecoySummary] = []
     public var systemStatus: StatusResponse?
+    public var resourceProfile: ResourceProfileResponse?
     public var learningStatus: LearningStatusResponse?
     public var pairedSensor: PairingManager.PairedSensor?
+    public var selectedDashboardSection: DashboardSection? = .dashboard
 
     /// The active sensor client, set after connection. Views use this for actions.
     public var sensorClient: (any SensorClientProtocol)?
 
     public var silenceUntil: Date?
+
+    private struct CriticalAlertRevision: Hashable {
+        let id: Int
+        let createdAt: String
+        let severity: String
+        let title: String
+        let sourceIp: String?
+        let issueKey: String?
+        let alertCount: Int?
+        let deviceCount: Int?
+
+        init(_ alert: AlertSummary) {
+            id = alert.id
+            createdAt = alert.createdAt
+            severity = alert.severity
+            title = alert.title
+            sourceIp = alert.sourceIp
+            issueKey = alert.issueKey
+            alertCount = alert.alertCount
+            deviceCount = alert.deviceCount
+        }
+    }
+
+    /// Revisions the user chose to review without dismissing. A grouped alert
+    /// that later changes count receives a new revision and can surface again.
+    private var reviewedCriticalAlertRevisions: Set<CriticalAlertRevision> = []
 
     public var isSilenced: Bool {
         guard let until = silenceUntil else { return false }
@@ -69,21 +114,50 @@ public final class AppState {
         alerts.contains { $0.readAt == nil && ($0.severity == "critical" || $0.severity == "high") }
     }
 
+    public var presentedCriticalAlerts: [AlertSummary] {
+        guard !isSilenced else { return [] }
+        return alerts.filter { alert in
+            alert.readAt == nil
+                && (alert.severity == "critical" || alert.severity == "high")
+                && !reviewedCriticalAlertRevisions.contains(
+                    CriticalAlertRevision(alert)
+                )
+        }
+    }
+
+    public var shouldPresentCriticalAlertModal: Bool {
+        !presentedCriticalAlerts.isEmpty
+    }
+
     public var firstCriticalAlert: AlertSummary? {
-        guard !isSilenced else { return nil }
-        return alerts.first { $0.readAt == nil && ($0.severity == "critical" || $0.severity == "high") }
+        presentedCriticalAlerts.first
     }
 
     public init() {}
 
     public static func decoyDeviceIPs(in decoys: [DecoySummary]) -> Set<String> {
         Set(decoys.compactMap { decoy in
-            guard decoy.decoyType == "mimic" else { return nil }
+            guard decoy.decoyType == "mimic", decoy.status == "active" else {
+                return nil
+            }
             guard !["", "0.0.0.0", "127.0.0.1", "::"].contains(decoy.bindAddress) else {
                 return nil
             }
             return decoy.bindAddress
         })
+    }
+
+    /// Count deployed network identities, not the per-port rows used to model
+    /// each virtual host's services.
+    public static func activeDecoyDeploymentCount(
+        in decoys: [DecoySummary]
+    ) -> Int {
+        let active = decoys.filter(\.isActiveDeployment)
+        let classicListeners = active.filter(\.isHostListener).count
+        let fakeHosts = DecoyHostGroup.grouping(
+            active.filter(\.isVirtualMimic)
+        ).count
+        return classicListeners + fakeHosts
     }
 
     public static func visibleDevices(
@@ -104,7 +178,11 @@ public final class AppState {
         alerts: [AlertSummary],
         decoys: DecoyListResponse
     ) {
-        self.sensorInfo = sensorInfo
+        self.sensorInfo = HealthResponse(
+            version: status.version ?? sensorInfo.version,
+            sensorId: sensorInfo.sensorId,
+            uptimeSeconds: sensorInfo.uptimeSeconds
+        )
         self.systemStatus = status
         self.decoys = decoys.items
         self.devices = Self.visibleDevices(devices, decoys: decoys.items)
@@ -159,6 +237,30 @@ public final class AppState {
         }
     }
 
+    /// Keep the current modal batch unread and take the user to its full list.
+    ///
+    /// Suppression is revision-based rather than ID-only so a later grouped
+    /// update to the same alert can open the modal again.
+    @discardableResult
+    public func reviewPresentedCriticalAlerts() -> [Int] {
+        let presented = presentedCriticalAlerts
+        reviewedCriticalAlertRevisions.formUnion(
+            presented.map(CriticalAlertRevision.init)
+        )
+        selectedDashboardSection = .alerts
+        return presented.map(\.id)
+    }
+
+    /// Mark only the alerts represented by the current modal batch as read.
+    @discardableResult
+    public func clearPresentedCriticalAlerts() -> [Int] {
+        let alertIds = presentedCriticalAlerts.map(\.id)
+        for alertId in alertIds {
+            markAlertRead(alertId)
+        }
+        return alertIds
+    }
+
     /// Replace an existing alert in-place (used for grouped alert updates via WebSocket).
     public func updateAlert(_ alert: AlertSummary) {
         if let index = alerts.firstIndex(where: { $0.id == alert.id }) {
@@ -186,13 +288,96 @@ public final class AppState {
         do {
             let response: DecoyListResponse = try await client.request(.decoys)
             self.decoys = response.items
+            self.devices = Self.visibleDevices(devices, decoys: response.items)
         } catch {
             // Silently fail — stale data is better than no data
         }
     }
 
+    public func refreshSystemStatus() async throws {
+        guard let client = sensorClient else {
+            throw SensorClientError.connectionFailed("Sensor is not connected")
+        }
+        let status: StatusResponse = try await client.request(.status)
+        updateSystemStatus(status)
+    }
+
+    public func refreshAlerts() async throws {
+        guard let client = sensorClient else {
+            throw SensorClientError.connectionFailed("Sensor is not connected")
+        }
+
+        var refreshed: [AlertSummary] = []
+        var offset = 0
+        while true {
+            let page: PaginatedAlerts = try await client.request(.alerts(limit: 50, offset: offset))
+            refreshed.append(contentsOf: page.items)
+            if offset + page.items.count >= page.total || page.items.isEmpty {
+                break
+            }
+            offset += page.items.count
+        }
+        alerts = refreshed
+    }
+
+    public func clearAlertHistory() async throws -> AlertHistoryClearResponse {
+        guard let client = sensorClient else {
+            throw SensorClientError.connectionFailed("Sensor is not connected")
+        }
+
+        let response: AlertHistoryClearResponse = try await client.request(.clearAlertHistory)
+        applyAlertHistoryClear(response)
+
+        // Confirm the post-delete state without turning a successful clear into
+        // a reported failure if a follow-up refresh is temporarily unavailable.
+        try? await refreshAlerts()
+        try? await refreshSystemStatus()
+        return response
+    }
+
+    public func applyAlertHistoryClear(_ response: AlertHistoryClearResponse) {
+        applyAlertHistoryClearedEvent()
+    }
+
+    public func applyAlertHistoryClearedEvent(throughSequence: Int? = nil) {
+        WSEventProcessor.discardPendingAlertUpdates(throughSequence: throughSequence)
+        alerts.removeAll()
+        incidents.removeAll()
+        reviewedCriticalAlertRevisions.removeAll()
+        if let status = systemStatus {
+            systemStatus = StatusResponse(
+                profile: status.profile,
+                learningMode: status.learningMode,
+                deviceCount: status.deviceCount,
+                decoyCount: status.decoyCount,
+                alertCount: 0,
+                version: status.version
+            )
+        }
+    }
+
+    public func applyResourceProfile(_ profile: ResourceProfileResponse) {
+        resourceProfile = profile
+        if let status = systemStatus {
+            systemStatus = StatusResponse(
+                profile: profile.profile,
+                learningMode: status.learningMode,
+                deviceCount: status.deviceCount,
+                decoyCount: status.decoyCount,
+                alertCount: status.alertCount,
+                version: status.version
+            )
+        }
+    }
+
     public func updateSystemStatus(_ status: StatusResponse) {
         self.systemStatus = status
+        guard let version = status.version, let info = sensorInfo else { return }
+        sensorInfo = HealthResponse(
+            version: version,
+            sensorId: info.sensorId,
+            uptimeSeconds: info.uptimeSeconds
+        )
     }
 
     public func updateLearningStatus(_ status: LearningStatusResponse) {
@@ -205,5 +390,10 @@ public final class AppState {
         } else {
             incidents.append(incident)
         }
+    }
+
+    private func reconcileReviewedCriticalAlertRevisions() {
+        let current = Set(alerts.map(CriticalAlertRevision.init))
+        reviewedCriticalAlertRevisions.formIntersection(current)
     }
 }

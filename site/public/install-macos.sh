@@ -18,6 +18,7 @@ INSTALL_DIR="$HOME/.squirrelops/sensor"
 DATA_DIR="$INSTALL_DIR/data"
 CONFIG_DIR="$INSTALL_DIR/config"
 LOG_DIR="$INSTALL_DIR/logs"
+RUN_DIR="$INSTALL_DIR/run"
 VENV_DIR="$INSTALL_DIR/venv"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 PLIST_NAME="com.squirrelops.sensor"
@@ -73,7 +74,9 @@ info "Creating directory tree at $INSTALL_DIR"
 mkdir -p "$DATA_DIR"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$LOG_DIR"
+mkdir -p "$RUN_DIR"
 mkdir -p "$HOME/Library/LaunchAgents"
+chmod 700 "$DATA_DIR" "$CONFIG_DIR" "$LOG_DIR"
 
 # ---------------------------------------------------------------------------
 # Step 3: Create Python venv
@@ -114,25 +117,32 @@ if [ -f "$CONFIG_FILE" ]; then
     info "Config already exists at $CONFIG_FILE"
 else
     info "Generating default config.yaml..."
-    cat > "$CONFIG_FILE" << 'YAML'
+    cat > "$CONFIG_FILE" << YAML
 # SquirrelOps Home Sensor — Configuration
 # See documentation for all available options.
 
 profile: standard
 
+sensor:
+  name: SquirrelOps Home Sensor
+  data_dir: "$DATA_DIR"
+  port: 8443
+
 network:
   interface: auto
   scan_interval: 300
 
-api:
-  port: 8443
-  host: 0.0.0.0
-
-data:
+alerts:
   retention_days: 90
+
+pairing:
+  socket_path: "$RUN_DIR/pairing.sock"
 YAML
     info "Default config written to $CONFIG_FILE"
 fi
+chmod 700 "$DATA_DIR" "$CONFIG_DIR"
+chmod 755 "$RUN_DIR"
+chmod 600 "$CONFIG_FILE"
 
 # ---------------------------------------------------------------------------
 # Step 6: Generate launchd plist from template
@@ -167,15 +177,17 @@ else
     <dict>
         <key>SQUIRRELOPS_DATA_DIR</key>
         <string>__DATA_DIR__</string>
+        <key>SQUIRRELOPS_LOG_PATH</key>
+        <string>__LOG_DIR__/squirrelops-sensor.log</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>__LOG_DIR__/squirrelops-sensor.log</string>
+    <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
     <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/squirrelops-sensor.log</string>
+    <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
     <key>ThrottleInterval</key>
     <integer>10</integer>
 </dict>

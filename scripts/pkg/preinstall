@@ -2,33 +2,166 @@
 #
 # SquirrelOps Home — .pkg Preinstall Script
 #
-# Runs before payload extraction. Stops any existing sensor service
-# and backs up the current config if present.
+# Runs before payload extraction. Stops any existing sensor service, creates a
+# verified rollback snapshot of durable sensor data, and backs up the current
+# config if present.
 #
 # This script runs as root during .pkg installation.
 #
 set -euo pipefail
 
 PLIST_NAME="com.squirrelops.sensor"
-PLIST_PATH="/Library/LaunchDaemons/${PLIST_NAME}.plist"
 INSTALL_DIR="/Library/SquirrelOps/sensor"
+DATA_DIR="$INSTALL_DIR/data"
+SENSOR_DB="$DATA_DIR/squirrelops.db"
 CONFIG_FILE="$INSTALL_DIR/config.yaml"
+LOG_DIR="$INSTALL_DIR/logs"
+BACKUP_ROOT="/Library/SquirrelOps/backups"
+
+service_is_loaded() {
+    local label="$1"
+    launchctl print "system/${label}" >/dev/null 2>&1
+}
+
+stop_service_and_verify() {
+    local label="$1"
+    local description="$2"
+    local attempts=0
+
+    if ! service_is_loaded "$label"; then
+        return 0
+    fi
+
+    echo "[preinstall] Stopping existing ${description}..."
+    if ! launchctl bootout "system/${label}" 2>/dev/null; then
+        if service_is_loaded "$label"; then
+            echo "[preinstall] Cannot stop the existing ${description}; aborting upgrade." >&2
+            return 1
+        fi
+    fi
+
+    while service_is_loaded "$label"; do
+        if [ "$attempts" -ge 10 ]; then
+            echo "[preinstall] ${description} shutdown could not be verified; aborting upgrade." >&2
+            return 1
+        fi
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+}
+
+create_upgrade_snapshot() {
+    local backup_dir
+    local database_check
+    local backup_database_check
+
+    if [ ! -d "$DATA_DIR" ] && [ ! -f "$CONFIG_FILE" ]; then
+        return 0
+    fi
+
+    umask 077
+    mkdir -p "$BACKUP_ROOT"
+    chmod 700 "$BACKUP_ROOT"
+    if ! backup_dir=$(
+        /usr/bin/mktemp -d "$BACKUP_ROOT/preinstall.XXXXXXXX"
+    ); then
+        echo "[preinstall] Cannot create the upgrade backup directory." >&2
+        return 1
+    fi
+
+    echo "[preinstall] Creating durable upgrade snapshot at ${backup_dir}..."
+    if [ -d "$DATA_DIR" ]; then
+        if ! /usr/bin/ditto "$DATA_DIR" "$backup_dir/data"; then
+            echo "[preinstall] Cannot copy durable sensor data; aborting upgrade." >&2
+            return 1
+        fi
+    fi
+
+    # Build a standalone SQLite backup after the daemon has stopped. This
+    # avoids depending on a copied WAL/SHM pair during recovery.
+    if [ -f "$SENSOR_DB" ]; then
+        if [ ! -x /usr/bin/sqlite3 ]; then
+            echo "[preinstall] sqlite3 is unavailable; aborting upgrade." >&2
+            return 1
+        fi
+        if ! database_check=$(
+            /usr/bin/sqlite3 "$SENSOR_DB" "PRAGMA quick_check;"
+        ) || [ "$database_check" != "ok" ]; then
+            echo "[preinstall] Sensor database integrity check failed; aborting upgrade." >&2
+            return 1
+        fi
+
+        rm -f \
+            "$backup_dir/data/squirrelops.db" \
+            "$backup_dir/data/squirrelops.db-wal" \
+            "$backup_dir/data/squirrelops.db-shm"
+        if ! /usr/bin/sqlite3 "$SENSOR_DB" \
+            ".backup '$backup_dir/data/squirrelops.db'"; then
+            echo "[preinstall] Cannot create the SQLite rollback backup; aborting upgrade." >&2
+            return 1
+        fi
+        if ! backup_database_check=$(
+            /usr/bin/sqlite3 "$backup_dir/data/squirrelops.db" \
+                "PRAGMA quick_check;"
+        ) || [ "$backup_database_check" != "ok" ]; then
+            echo "[preinstall] Rollback database verification failed; aborting upgrade." >&2
+            return 1
+        fi
+        chmod 600 "$backup_dir/data/squirrelops.db"
+    fi
+
+    if [ -f "$CONFIG_FILE" ]; then
+        cp -p "$CONFIG_FILE" "$backup_dir/config.yaml"
+    fi
+    if [ -f "$INSTALL_DIR/VERSION" ]; then
+        cp -p "$INSTALL_DIR/VERSION" "$backup_dir/VERSION"
+    fi
+
+    {
+        printf 'created_at=%s\n' "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'source=%s\n' "$INSTALL_DIR"
+    } > "$backup_dir/COMPLETE"
+    chmod -R go-rwx "$backup_dir"
+    echo "[preinstall] Verified upgrade snapshot: ${backup_dir}"
+}
 
 # ---------------------------------------------------------------------------
-# Step 1: Stop existing sensor service (ignore errors — may not be running)
+# Step 1: Stop and verify the existing sensor service
 # ---------------------------------------------------------------------------
-if [ -f "$PLIST_PATH" ]; then
-    echo "[preinstall] Stopping existing sensor service..."
-    launchctl bootout system "$PLIST_PATH" 2>/dev/null || true
-    sleep 1
+if ! stop_service_and_verify "$PLIST_NAME" "sensor service"; then
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: Back up config if it exists
+# Step 2: Create a verified rollback snapshot
+# ---------------------------------------------------------------------------
+if ! create_upgrade_snapshot; then
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 3: Back up config if it exists
 # ---------------------------------------------------------------------------
 if [ -f "$CONFIG_FILE" ]; then
     echo "[preinstall] Backing up config.yaml -> config.yaml.bak"
     cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+fi
+
+# Payload extraction overlays files but does not remove files left by older
+# runtime layouts. Retire every replaceable runtime directory and marker only
+# after shutdown and config backup have both succeeded.
+rm -rf "$INSTALL_DIR/python" "$INSTALL_DIR/venv"
+rm -rf "$INSTALL_DIR/run" "$INSTALL_DIR/signatures"
+rm -f "$INSTALL_DIR/.python-mode" "$INSTALL_DIR/VERSION"
+
+# Older builds wrote pairing keys and full credential-bearing webhook URLs to
+# this unbounded log. It is not a recovery artifact, and retaining it after a
+# security upgrade would preserve both secrets and the false-positive flood.
+if [ -d "$LOG_DIR" ]; then
+    echo "[preinstall] Removing legacy sensor logs containing alert noise and secrets..."
+    find "$LOG_DIR" -maxdepth 1 -type f \
+        \( -name "squirrelops-sensor.log" -o -name "squirrelops-sensor.log.*" \) \
+        -delete
 fi
 
 echo "[preinstall] Done."

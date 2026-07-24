@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 
 import aiosqlite
 import pytest
@@ -17,7 +18,7 @@ from squirrelops_home_sensor.events.types import EventType
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-async def db() -> aiosqlite.Connection:
+async def db() -> AsyncGenerator[aiosqlite.Connection, None]:
     """Create an in-memory database with schema applied."""
     conn = await aiosqlite.connect(":memory:")
     await conn.execute("PRAGMA foreign_keys = ON")
@@ -141,6 +142,15 @@ class TestEventLog:
         await event_log.append("b", {})
         seq = await event_log.get_latest_seq()
         assert seq == 2
+
+    @pytest.mark.asyncio
+    async def test_missing_incident_is_rejected_for_legacy_payload_key(
+        self, event_log: EventLog
+    ) -> None:
+        assert await event_log.entity_exists_for_event(
+            "incident.updated",
+            {"incident_id": 404, "alert_count": 2},
+        ) is False
 
 
 # ---------------------------------------------------------------------------

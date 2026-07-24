@@ -3,8 +3,8 @@
 # SquirrelOps Home — App Package Postinstall Script
 #
 # Runs after app payload extraction. Installs the privileged helper daemon
-# that provides root-level network operations (ARP scanning, port binding,
-# DNS sniffing) to the unprivileged sensor process.
+# that provides root-level ARP scanning, virtual-IP management, and packet
+# filter isolation to the unprivileged sensor process.
 #
 # This script runs as root during .pkg installation.
 #
@@ -19,11 +19,9 @@ PLIST_DEST="/Library/LaunchDaemons/${HELPER_BUNDLE_ID}.plist"
 # ---------------------------------------------------------------------------
 # Step 1: Install helper binary
 # ---------------------------------------------------------------------------
-if [ ! -f "$HELPER_SRC" ]; then
-    echo "[app-postinstall] WARNING: Helper binary not found in app bundle."
-    echo "[app-postinstall] ARP scanning will not be available."
-    echo "[app-postinstall] Done."
-    exit 0
+if [ ! -x "$HELPER_SRC" ]; then
+    echo "[app-postinstall] Required helper binary is missing or not executable." >&2
+    exit 1
 fi
 
 echo "[app-postinstall] Installing privileged helper daemon..."
@@ -31,6 +29,10 @@ mkdir -p /Library/PrivilegedHelperTools
 cp "$HELPER_SRC" "$HELPER_DEST"
 chown root:wheel "$HELPER_DEST"
 chmod 755 "$HELPER_DEST"
+if [ ! -x "$HELPER_DEST" ]; then
+    echo "[app-postinstall] Installed helper is not executable." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Step 2: Install launchd plist
@@ -64,32 +66,76 @@ chmod 644 "$PLIST_DEST"
 # Step 3: Load the helper daemon
 # ---------------------------------------------------------------------------
 echo "[app-postinstall] Starting helper daemon..."
-launchctl bootstrap system "$PLIST_DEST" 2>/dev/null || {
-    echo "[app-postinstall] WARNING: Failed to bootstrap helper daemon."
-    echo "[app-postinstall] You may need to load it manually:"
-    echo "[app-postinstall]   sudo launchctl bootstrap system $PLIST_DEST"
-}
-
-# ---------------------------------------------------------------------------
-# Step 4: Verify helper socket appears
-# ---------------------------------------------------------------------------
-SOCKET_PATH="/var/run/squirrelops-helper.sock"
-TIMEOUT=5
-ELAPSED=0
-
-while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
-    if [ -S "$SOCKET_PATH" ]; then
-        echo "[app-postinstall] Helper daemon is running (socket: $SOCKET_PATH)."
-        break
-    fi
-    sleep 1
-    ELAPSED=$((ELAPSED + 1))
-done
-
-if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-    echo "[app-postinstall] WARNING: Helper socket not found after ${TIMEOUT}s."
-    echo "[app-postinstall] Check logs at: /var/log/com.squirrelops.helper.log"
+if ! launchctl bootstrap system "$PLIST_DEST" 2>/dev/null; then
+    echo "[app-postinstall] Failed to bootstrap helper daemon." >&2
+    exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Step 4: Verify the helper's versioned RPC contract
+# ---------------------------------------------------------------------------
+SOCKET_PATH="/var/run/squirrelops-helper.sock"
+verify_helper_rpc() {
+    local response
+    local jsonrpc
+    local response_id
+    local status
+    local protocol_version
+    local capabilities
+    local capability
+
+    [ -S "$SOCKET_PATH" ] || return 1
+    if ! response=$(
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"ping"}' \
+            | /usr/bin/nc -U -w 2 "$SOCKET_PATH" 2>/dev/null
+    ); then
+        return 1
+    fi
+
+    jsonrpc=$(printf '%s\n' "$response" \
+        | /usr/bin/plutil -extract jsonrpc raw -o - - 2>/dev/null) \
+        || return 1
+    response_id=$(printf '%s\n' "$response" \
+        | /usr/bin/plutil -extract id raw -o - - 2>/dev/null) \
+        || return 1
+    status=$(printf '%s\n' "$response" \
+        | /usr/bin/plutil -extract result.status raw -o - - 2>/dev/null) \
+        || return 1
+    protocol_version=$(printf '%s\n' "$response" \
+        | /usr/bin/plutil -extract result.protocol_version raw -o - - 2>/dev/null) \
+        || return 1
+    capabilities=$(printf '%s\n' "$response" \
+        | /usr/bin/plutil -extract result.capabilities json -o - - 2>/dev/null) \
+        || return 1
+
+    [ "$jsonrpc" = "2.0" ] \
+        && [ "$response_id" = "1" ] \
+        && [ "$status" = "ok" ] \
+        && [ "$protocol_version" = "1" ] \
+        || return 1
+
+    for capability in \
+        arp_scan \
+        virtual_ip \
+        port_forward_isolation
+    do
+        case "$capabilities" in
+            *"\"${capability}\""*) ;;
+            *) return 1 ;;
+        esac
+    done
+}
+
+ATTEMPTS=0
+until verify_helper_rpc; do
+    if [ "$ATTEMPTS" -ge 10 ]; then
+        echo "[app-postinstall] Helper RPC did not become ready after ${ATTEMPTS} attempts." >&2
+        exit 1
+    fi
+    sleep 1
+    ATTEMPTS=$((ATTEMPTS + 1))
+done
+
+echo "[app-postinstall] Helper RPC is ready (socket: $SOCKET_PATH)."
 echo "[app-postinstall] Done."
 exit 0

@@ -748,6 +748,41 @@ public struct ExportResponse: Codable, Sendable {
     }
 }
 
+public struct AlertHistoryClearResponse: Codable, Sendable, Equatable {
+    public let alertsDeleted: Int
+    public let incidentsDeleted: Int
+    public let replayEventsDeleted: Int
+    public let backupFile: String
+    public let clearedAt: String
+
+    public init(
+        alertsDeleted: Int,
+        incidentsDeleted: Int,
+        replayEventsDeleted: Int,
+        backupFile: String,
+        clearedAt: String
+    ) {
+        self.alertsDeleted = alertsDeleted
+        self.incidentsDeleted = incidentsDeleted
+        self.replayEventsDeleted = replayEventsDeleted
+        self.backupFile = backupFile
+        self.clearedAt = clearedAt
+    }
+
+    public var userSummary: String {
+        let noun = alertsDeleted == 1 ? "alert" : "alerts"
+        return "Cleared \(alertsDeleted) \(noun). A recovery backup was created."
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case alertsDeleted = "alerts_deleted"
+        case incidentsDeleted = "incidents_deleted"
+        case replayEventsDeleted = "replay_events_deleted"
+        case backupFile = "backup_file"
+        case clearedAt = "cleared_at"
+    }
+}
+
 public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable {
     public let id: Int
     public let name: String
@@ -759,6 +794,10 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
     public let credentialTripCount: Int
     public let createdAt: String
     public let updatedAt: String
+    public let hostId: Int?
+    public let hostname: String?
+    public let serviceProtocol: String?
+    public let serviceName: String?
 
     public init(
         id: Int,
@@ -770,7 +809,11 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
         connectionCount: Int,
         credentialTripCount: Int,
         createdAt: String,
-        updatedAt: String
+        updatedAt: String,
+        hostId: Int? = nil,
+        hostname: String? = nil,
+        serviceProtocol: String? = nil,
+        serviceName: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -782,6 +825,92 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
         self.credentialTripCount = credentialTripCount
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.hostId = hostId
+        self.hostname = hostname
+        self.serviceProtocol = serviceProtocol
+        self.serviceName = serviceName
+    }
+
+    public var isWildcardBind: Bool {
+        ["", "0.0.0.0", "::", "[::]", "*"].contains(bindAddress)
+    }
+
+    public var isActiveDeployment: Bool {
+        status == "active"
+    }
+
+    public var isVirtualMimic: Bool {
+        decoyType == "mimic"
+    }
+
+    public var isHostListener: Bool {
+        !isVirtualMimic
+    }
+
+    public var endpointLabel: String {
+        if isWildcardBind {
+            return "All sensor interfaces · port \(port)"
+        }
+        return "\(bindAddress):\(port)"
+    }
+
+    public var deploymentScopeLabel: String {
+        if isVirtualMimic {
+            return "Virtual IP"
+        }
+        return "Host listener"
+    }
+
+    public var serviceLabel: String {
+        if let serviceName, !serviceName.isEmpty {
+            return serviceName
+        }
+        return name
+    }
+
+    public func replacingConnectionCounts(
+        connectionCount: Int,
+        credentialTripCount: Int,
+        updatedAt: String? = nil
+    ) -> DecoySummary {
+        DecoySummary(
+            id: id,
+            name: name,
+            decoyType: decoyType,
+            bindAddress: bindAddress,
+            port: port,
+            status: status,
+            connectionCount: connectionCount,
+            credentialTripCount: credentialTripCount,
+            createdAt: createdAt,
+            updatedAt: updatedAt ?? self.updatedAt,
+            hostId: hostId,
+            hostname: hostname,
+            serviceProtocol: serviceProtocol,
+            serviceName: serviceName
+        )
+    }
+
+    public func replacingHostname(
+        _ hostname: String,
+        updatedAt: String? = nil
+    ) -> DecoySummary {
+        DecoySummary(
+            id: id,
+            name: name,
+            decoyType: decoyType,
+            bindAddress: bindAddress,
+            port: port,
+            status: status,
+            connectionCount: connectionCount,
+            credentialTripCount: credentialTripCount,
+            createdAt: createdAt,
+            updatedAt: updatedAt ?? self.updatedAt,
+            hostId: hostId,
+            hostname: hostname,
+            serviceProtocol: serviceProtocol,
+            serviceName: serviceName
+        )
     }
 
     enum CodingKeys: String, CodingKey {
@@ -795,6 +924,71 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
         case credentialTripCount = "credential_trip_count"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case hostId = "host_id"
+        case hostname
+        case serviceProtocol = "protocol"
+        case serviceName = "service_name"
+    }
+}
+
+public struct DecoyHostGroup: Sendable, Identifiable, Equatable, Hashable {
+    public let id: String
+    public let hostId: Int?
+    public let bindAddress: String
+    public let hostname: String?
+    public let services: [DecoySummary]
+
+    public var connectionCount: Int {
+        services.reduce(into: 0) { $0 += $1.connectionCount }
+    }
+
+    public var credentialTripCount: Int {
+        services.reduce(into: 0) { $0 += $1.credentialTripCount }
+    }
+
+    public static func grouping(_ decoys: [DecoySummary]) -> [DecoyHostGroup] {
+        let buckets = Dictionary(grouping: decoys, by: groupingKey)
+        return buckets.map { addressKey, unsortedServices in
+            let services = unsortedServices.sorted(by: serviceSort)
+            let first = services[0]
+            return DecoyHostGroup(
+                id: first.hostId.map { "host:\($0)" } ?? addressKey,
+                hostId: first.hostId,
+                bindAddress: first.bindAddress,
+                hostname: services.compactMap(\.hostname).first(where: { !$0.isEmpty }),
+                services: services
+            )
+        }
+        .sorted {
+            let addressOrder = $0.bindAddress.localizedStandardCompare($1.bindAddress)
+            return addressOrder == .orderedSame
+                ? $0.id < $1.id
+                : addressOrder == .orderedAscending
+        }
+    }
+
+    private static func groupingKey(_ decoy: DecoySummary) -> String {
+        return "address:\(decoy.bindAddress.lowercased())"
+    }
+
+    private static func serviceSort(_ lhs: DecoySummary, _ rhs: DecoySummary) -> Bool {
+        lhs.port == rhs.port ? lhs.id < rhs.id : lhs.port < rhs.port
+    }
+}
+
+public struct DecoyHostnameUpdateResponse: Codable, Sendable, Equatable {
+    public let hostId: Int
+    public let hostname: String
+    public let bindAddress: String
+    public let decoyIds: [Int]
+    public let services: [DecoySummary]
+
+    enum CodingKeys: String, CodingKey {
+        case hostId = "host_id"
+        case hostname
+        case bindAddress = "bind_address"
+        case decoyIds = "decoy_ids"
+        case services
     }
 }
 
@@ -988,26 +1182,114 @@ public struct HealthResponse: Codable, Sendable {
 }
 
 public struct StatusResponse: Codable, Sendable {
+    public let version: String?
     public let profile: String
     public let learningMode: Bool
     public let deviceCount: Int
     public let decoyCount: Int
     public let alertCount: Int
+    public let eventSeq: Int?
 
-    public init(profile: String, learningMode: Bool, deviceCount: Int, decoyCount: Int, alertCount: Int) {
+    public init(
+        profile: String,
+        learningMode: Bool,
+        deviceCount: Int,
+        decoyCount: Int,
+        alertCount: Int,
+        version: String? = nil,
+        eventSeq: Int? = nil
+    ) {
+        self.version = version
         self.profile = profile
         self.learningMode = learningMode
         self.deviceCount = deviceCount
         self.decoyCount = decoyCount
         self.alertCount = alertCount
+        self.eventSeq = eventSeq
     }
 
     enum CodingKeys: String, CodingKey {
+        case version
         case profile
         case learningMode = "learning_mode"
         case deviceCount = "device_count"
         case decoyCount = "decoy_count"
         case alertCount = "alert_count"
+        case eventSeq = "event_seq"
+    }
+}
+
+public struct ResourceProfileResponse: Codable, Sendable, Equatable {
+    public let profile: String
+    public let scanIntervalSeconds: Int
+    public let maxDecoys: Int
+    public let llmClassification: String
+    public let scoutIntervalMinutes: Int
+    public let maxMimicDecoys: Int
+    public let maxVirtualIPs: Int
+    public let totalDecoyCapacity: Int
+
+    public init(
+        profile: String,
+        scanIntervalSeconds: Int,
+        maxDecoys: Int,
+        llmClassification: String,
+        scoutIntervalMinutes: Int,
+        maxMimicDecoys: Int,
+        maxVirtualIPs: Int,
+        totalDecoyCapacity: Int
+    ) {
+        self.profile = profile
+        self.scanIntervalSeconds = scanIntervalSeconds
+        self.maxDecoys = maxDecoys
+        self.llmClassification = llmClassification
+        self.scoutIntervalMinutes = scoutIntervalMinutes
+        self.maxMimicDecoys = maxMimicDecoys
+        self.maxVirtualIPs = maxVirtualIPs
+        self.totalDecoyCapacity = totalDecoyCapacity
+    }
+
+    public var userSummary: String {
+        let scan = Self.durationLabel(seconds: scanIntervalSeconds)
+        let classification: String
+        switch llmClassification {
+        case "cloud_llm":
+            classification = "Cloud LLM"
+        case "local_llm":
+            classification = "Local LLM"
+        case "local_signatures", "none":
+            classification = "Local signature"
+        default:
+            classification = llmClassification
+                .replacingOccurrences(of: "_", with: " ")
+                .capitalized
+        }
+
+        if maxMimicDecoys == 0 || scoutIntervalMinutes == 0 {
+            return "Network scan every \(scan). Up to \(maxDecoys) classic decoys. Scouts and virtual mimics disabled. \(classification) classification."
+        }
+
+        let scout = Self.durationLabel(seconds: scoutIntervalMinutes * 60)
+        return "Network scan every \(scan). Up to \(maxDecoys) classic decoys + \(maxMimicDecoys) fake hosts (\(totalDecoyCapacity) deployed identities). Each fake host can expose multiple per-port service decoys. Scouts every \(scout). \(classification) classification."
+    }
+
+    private static func durationLabel(seconds: Int) -> String {
+        if seconds.isMultiple(of: 60) {
+            let minutes = seconds / 60
+            return minutes == 1 ? "1 min" : "\(minutes) min"
+        }
+        return seconds == 1 ? "1 sec" : "\(seconds) sec"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case profile
+        case scanIntervalSeconds = "scan_interval_seconds"
+        case maxDecoys = "max_decoys"
+        case llmClassification = "llm_classification"
+        case scoutIntervalMinutes = "scout_interval_minutes"
+        case maxMimicDecoys = "max_mimic_decoys"
+        case maxVirtualIPs = "max_virtual_ips"
+        case totalDecoyCapacity = "total_decoy_capacity"
     }
 }
 
@@ -1179,6 +1461,8 @@ public struct ScoutStatusResponse: Codable, Sendable {
     public let intervalMinutes: Int
     public let activeMimics: Int
     public let maxMimics: Int
+    public let fakeHostCount: Int?
+    public let serviceDecoyCount: Int?
 
     enum CodingKeys: String, CodingKey {
         case enabled
@@ -1189,6 +1473,8 @@ public struct ScoutStatusResponse: Codable, Sendable {
         case intervalMinutes = "interval_minutes"
         case activeMimics = "active_mimics"
         case maxMimics = "max_mimics"
+        case fakeHostCount = "fake_host_count"
+        case serviceDecoyCount = "service_decoy_count"
     }
 }
 
@@ -1231,6 +1517,100 @@ public struct MimicDecoySummary: Codable, Sendable, Identifiable, Equatable, Has
     public let connectionCount: Int
     public let createdAt: String
     public let mdnsHostname: String?
+    public let hostId: Int?
+    public let hostname: String?
+    public let serviceProtocol: String?
+    public let serviceName: String?
+
+    public init(
+        id: Int,
+        name: String,
+        bindAddress: String,
+        port: Int,
+        status: String,
+        sourceDeviceId: Int? = nil,
+        deviceCategory: String? = nil,
+        connectionCount: Int,
+        createdAt: String,
+        mdnsHostname: String? = nil,
+        hostId: Int? = nil,
+        hostname: String? = nil,
+        serviceProtocol: String? = nil,
+        serviceName: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.bindAddress = bindAddress
+        self.port = port
+        self.status = status
+        self.sourceDeviceId = sourceDeviceId
+        self.deviceCategory = deviceCategory
+        self.connectionCount = connectionCount
+        self.createdAt = createdAt
+        self.mdnsHostname = mdnsHostname
+        self.hostId = hostId
+        self.hostname = hostname
+        self.serviceProtocol = serviceProtocol
+        self.serviceName = serviceName
+    }
+
+    public var displayHostname: String? {
+        guard let raw = [hostname, mdnsHostname]
+            .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) else {
+            return nil
+        }
+        let withoutTrailingDot = raw.hasSuffix(".") ? String(raw.dropLast()) : raw
+        if withoutTrailingDot.lowercased().hasSuffix(".local") {
+            return withoutTrailingDot
+        }
+        return withoutTrailingDot + ".local"
+    }
+
+    public var serviceLabel: String {
+        if let serviceName, !serviceName.isEmpty {
+            return serviceName
+        }
+        return name
+    }
+
+    public func replacingConnectionCount(_ connectionCount: Int) -> MimicDecoySummary {
+        MimicDecoySummary(
+            id: id,
+            name: name,
+            bindAddress: bindAddress,
+            port: port,
+            status: status,
+            sourceDeviceId: sourceDeviceId,
+            deviceCategory: deviceCategory,
+            connectionCount: connectionCount,
+            createdAt: createdAt,
+            mdnsHostname: mdnsHostname,
+            hostId: hostId,
+            hostname: hostname,
+            serviceProtocol: serviceProtocol,
+            serviceName: serviceName
+        )
+    }
+
+    public func replacingHostname(_ hostname: String) -> MimicDecoySummary {
+        MimicDecoySummary(
+            id: id,
+            name: name,
+            bindAddress: bindAddress,
+            port: port,
+            status: status,
+            sourceDeviceId: sourceDeviceId,
+            deviceCategory: deviceCategory,
+            connectionCount: connectionCount,
+            createdAt: createdAt,
+            mdnsHostname: mdnsHostname,
+            hostId: hostId,
+            hostname: hostname,
+            serviceProtocol: serviceProtocol,
+            serviceName: serviceName
+        )
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -1243,17 +1623,105 @@ public struct MimicDecoySummary: Codable, Sendable, Identifiable, Equatable, Has
         case connectionCount = "connection_count"
         case createdAt = "created_at"
         case mdnsHostname = "mdns_hostname"
+        case hostId = "host_id"
+        case hostname
+        case serviceProtocol = "protocol"
+        case serviceName = "service_name"
+    }
+}
+
+public struct MimicHostGroup: Sendable, Identifiable, Equatable, Hashable {
+    public let id: String
+    public let hostId: Int?
+    public let bindAddress: String
+    public let hostname: String?
+    public let deviceCategory: String?
+    public let services: [MimicDecoySummary]
+
+    public var connectionCount: Int {
+        services.reduce(into: 0) { $0 += $1.connectionCount }
+    }
+
+    public static func grouping(_ mimics: [MimicDecoySummary]) -> [MimicHostGroup] {
+        let buckets = Dictionary(grouping: mimics, by: groupingKey)
+        return buckets.map { addressKey, unsortedServices in
+            let services = unsortedServices.sorted(by: serviceSort)
+            let first = services[0]
+            return MimicHostGroup(
+                id: first.hostId.map { "host:\($0)" } ?? addressKey,
+                hostId: first.hostId,
+                bindAddress: first.bindAddress,
+                hostname: services.compactMap(\.displayHostname).first,
+                deviceCategory: services.compactMap(\.deviceCategory).first,
+                services: services
+            )
+        }
+        .sorted {
+            let addressOrder = $0.bindAddress.localizedStandardCompare($1.bindAddress)
+            return addressOrder == .orderedSame
+                ? $0.id < $1.id
+                : addressOrder == .orderedAscending
+        }
+    }
+
+    private static func groupingKey(_ mimic: MimicDecoySummary) -> String {
+        return "address:\(mimic.bindAddress.lowercased())"
+    }
+
+    private static func serviceSort(
+        _ lhs: MimicDecoySummary,
+        _ rhs: MimicDecoySummary
+    ) -> Bool {
+        lhs.port == rhs.port ? lhs.id < rhs.id : lhs.port < rhs.port
     }
 }
 
 public struct ScoutRunResponse: Codable, Sendable {
     public let profilesCreated: Int
+    public let mimicsDeployed: Int
+    public let mimicDeploymentError: String?
+
+    public init(
+        profilesCreated: Int,
+        mimicsDeployed: Int,
+        mimicDeploymentError: String? = nil
+    ) {
+        self.profilesCreated = profilesCreated
+        self.mimicsDeployed = mimicsDeployed
+        self.mimicDeploymentError = mimicDeploymentError
+    }
+
+    public var userSummary: String {
+        let profileNoun = profilesCreated == 1 ? "service profile" : "service profiles"
+        let mimicNoun = mimicsDeployed == 1 ? "mimic" : "mimics"
+        if let mimicDeploymentError, !mimicDeploymentError.isEmpty {
+            return "Refreshed \(profilesCreated) \(profileNoun). Mimic deployment needs attention: \(mimicDeploymentError)"
+        }
+        if mimicsDeployed > 0 {
+            return "Refreshed \(profilesCreated) \(profileNoun) and deployed \(mimicsDeployed) \(mimicNoun)."
+        }
+        return "Refreshed \(profilesCreated) \(profileNoun). No additional mimics were eligible or needed."
+    }
 
     enum CodingKeys: String, CodingKey {
         case profilesCreated = "profiles_created"
+        case mimicsDeployed = "mimics_deployed"
+        case mimicDeploymentError = "mimic_deployment_error"
     }
 }
 
 public struct MimicDeployResponse: Codable, Sendable {
     public let deployed: Int
+
+    public init(deployed: Int) {
+        self.deployed = deployed
+    }
+
+    public var userSummary: String {
+        if deployed == 0 {
+            return "No additional mimics were eligible or capacity is already full."
+        }
+        let noun = deployed == 1 ? "mimic" : "mimics"
+        return "Deployed \(deployed) \(noun)."
+    }
 }

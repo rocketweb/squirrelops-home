@@ -1,6 +1,7 @@
 """Tests for the IP allocator and virtual IP manager."""
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import aiosqlite
@@ -16,6 +17,12 @@ CREATE TABLE IF NOT EXISTS virtual_ips (
     decoy_id INTEGER,
     created_at TEXT NOT NULL,
     released_at TEXT
+);
+CREATE TABLE IF NOT EXISTS devices (
+    id INTEGER PRIMARY KEY,
+    ip_address TEXT NOT NULL,
+    mac_address TEXT,
+    is_online INTEGER NOT NULL DEFAULT 1
 );
 """
 
@@ -181,6 +188,7 @@ class TestVirtualIPManager:
         ok = await mgr.add_alias("192.168.1.200")
         assert ok is True
         assert "192.168.1.200" in mgr.active_ips
+        assert mgr.verified_ips == {"192.168.1.200"}
         ops.add_ip_alias.assert_awaited_once_with("192.168.1.200", interface="en0")
 
         # Check DB
@@ -190,16 +198,131 @@ class TestVirtualIPManager:
         assert rows[0]["ip_address"] == "192.168.1.200"
 
     @pytest.mark.asyncio
-    async def test_add_alias_fails(self, db) -> None:
-        """add_alias should return False if privileged ops fail."""
+    async def test_failed_add_tracks_possibly_live_alias_for_cleanup(self, db) -> None:
+        """A helper error cannot prove that its OS-side rollback completed."""
         ops = AsyncMock()
         ops.add_ip_alias = AsyncMock(return_value=False)
+        ops.remove_ip_alias = AsyncMock(return_value=True)
         alloc = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.50")
         mgr = VirtualIPManager(ops, alloc, db)
 
         ok = await mgr.add_alias("192.168.1.200")
         assert ok is False
+        assert "192.168.1.200" in mgr.active_ips
+        assert mgr.verified_ips == set()
+
+        # Shutdown cleanup must retry the possibly-live address rather than
+        # clearing PF around an alias the helper may have left behind.
+        assert await mgr.remove_all() == 1
+        ops.remove_ip_alias.assert_awaited_once_with(
+            "192.168.1.200", interface="en0"
+        )
         assert "192.168.1.200" not in mgr.active_ips
+
+    @pytest.mark.asyncio
+    async def test_cancelled_add_remains_tracked_until_verified_removal(
+        self,
+        db,
+    ) -> None:
+        """Cancellation after dispatch must not make a mutated alias invisible."""
+        helper_started = asyncio.Event()
+        never_finishes = asyncio.Event()
+
+        async def blocked_add(*_args, **_kwargs):
+            helper_started.set()
+            await never_finishes.wait()
+            return True
+
+        ops = AsyncMock()
+        ops.add_ip_alias = AsyncMock(side_effect=blocked_add)
+        ops.remove_ip_alias = AsyncMock(return_value=True)
+        alloc = IPAllocator(
+            "192.168.1.0/24",
+            "192.168.1.1",
+            "192.168.1.50",
+            range_start=200,
+            range_end=200,
+        )
+        mgr = VirtualIPManager(ops, alloc, db)
+
+        add_task = asyncio.create_task(mgr.add_alias("192.168.1.200"))
+        await helper_started.wait()
+        add_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await add_task
+
+        assert mgr.active_ips == {"192.168.1.200"}
+        assert alloc.allocate(1) == []
+        assert await mgr.remove_all() == 1
+        ops.remove_ip_alias.assert_awaited_once_with(
+            "192.168.1.200", interface="en0"
+        )
+        assert mgr.active_ips == set()
+        assert alloc.allocate(1) == ["192.168.1.200"]
+
+    @pytest.mark.asyncio
+    async def test_add_alias_rolls_back_os_when_persistence_fails(self) -> None:
+        ops = AsyncMock()
+        ops.add_ip_alias = AsyncMock(return_value=True)
+        ops.remove_ip_alias = AsyncMock(return_value=True)
+        broken_db = AsyncMock()
+        broken_db.execute = AsyncMock(side_effect=RuntimeError("disk full"))
+        broken_db.rollback = AsyncMock()
+        alloc = IPAllocator(
+            "192.168.1.0/24",
+            "192.168.1.1",
+            "192.168.1.50",
+            range_start=200,
+            range_end=200,
+        )
+        assert alloc.allocate(1) == ["192.168.1.200"]
+        mgr = VirtualIPManager(ops, alloc, broken_db)
+
+        assert await mgr.add_alias("192.168.1.200") is False
+        ops.remove_ip_alias.assert_awaited_once_with(
+            "192.168.1.200", interface="en0"
+        )
+        broken_db.rollback.assert_awaited_once()
+        assert mgr.active_ips == set()
+        assert alloc.allocate(1) == ["192.168.1.200"]
+
+    @pytest.mark.asyncio
+    async def test_failed_add_rollback_tracks_possible_live_alias(self) -> None:
+        ops = AsyncMock()
+        ops.add_ip_alias = AsyncMock(return_value=True)
+        ops.remove_ip_alias = AsyncMock(return_value=False)
+        broken_db = AsyncMock()
+        broken_db.execute = AsyncMock(side_effect=RuntimeError("disk full"))
+        broken_db.rollback = AsyncMock()
+        alloc = IPAllocator(
+            "192.168.1.0/24",
+            "192.168.1.1",
+            "192.168.1.50",
+            range_start=200,
+            range_end=200,
+        )
+        mgr = VirtualIPManager(ops, alloc, broken_db)
+
+        assert await mgr.add_alias("192.168.1.200") is False
+        assert mgr.active_ips == {"192.168.1.200"}
+        assert mgr.verified_ips == set()
+        assert alloc.allocate(1) == []
+
+    @pytest.mark.asyncio
+    async def test_add_alias_marks_direct_address_as_allocated(self, db) -> None:
+        ops = AsyncMock()
+        ops.add_ip_alias = AsyncMock(return_value=True)
+        alloc = IPAllocator(
+            "192.168.1.0/24",
+            "192.168.1.1",
+            "192.168.1.50",
+            range_start=200,
+            range_end=200,
+        )
+        mgr = VirtualIPManager(ops, alloc, db)
+
+        assert await mgr.add_alias("192.168.1.200") is True
+        assert alloc.allocate(1) == []
 
     @pytest.mark.asyncio
     async def test_remove_alias(self, db) -> None:
@@ -214,10 +337,33 @@ class TestVirtualIPManager:
         await mgr.remove_alias("192.168.1.200")
 
         assert "192.168.1.200" not in mgr.active_ips
+        assert mgr.verified_ips == set()
 
         cursor = await db.execute("SELECT released_at FROM virtual_ips WHERE ip_address = '192.168.1.200'")
         row = await cursor.fetchone()
         assert row["released_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_remove_alias_releases_os_before_persisting(self) -> None:
+        calls: list[str] = []
+        ops = AsyncMock()
+
+        async def remove_ip_alias(*_args, **_kwargs):
+            calls.append("os")
+            return True
+
+        async def execute(*_args, **_kwargs):
+            calls.append("db")
+
+        ops.remove_ip_alias.side_effect = remove_ip_alias
+        fake_db = AsyncMock()
+        fake_db.execute.side_effect = execute
+        alloc = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.50")
+        mgr = VirtualIPManager(ops, alloc, fake_db)
+        mgr._active.add("192.168.1.200")
+
+        assert await mgr.remove_alias("192.168.1.200") is True
+        assert calls == ["os", "db"]
 
     @pytest.mark.asyncio
     async def test_failed_remove_remains_active_and_unreleased(self, db) -> None:
@@ -230,11 +376,81 @@ class TestVirtualIPManager:
 
         assert await mgr.remove_alias("192.168.1.200") is False
         assert "192.168.1.200" in mgr.active_ips
+        assert mgr.verified_ips == set()
         cursor = await db.execute(
             "SELECT released_at FROM virtual_ips WHERE ip_address = '192.168.1.200'"
         )
         row = await cursor.fetchone()
         assert row["released_at"] is None
+
+    @pytest.mark.asyncio
+    async def test_failed_remove_marks_loaded_reservation_as_possibly_live(
+        self, db,
+    ) -> None:
+        await db.execute(
+            "INSERT INTO virtual_ips (ip_address, interface, created_at) "
+            "VALUES ('192.168.1.200', 'en0', '2026-01-01T00:00:00Z')"
+        )
+        await db.commit()
+        ops = AsyncMock()
+        ops.remove_ip_alias = AsyncMock(return_value=False)
+        alloc = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.50")
+        mgr = VirtualIPManager(ops, alloc, db)
+        await mgr.load_from_db(restore_aliases=False)
+
+        assert await mgr.remove_alias("192.168.1.200") is False
+        assert mgr.active_ips == {"192.168.1.200"}
+
+    @pytest.mark.asyncio
+    async def test_load_from_db_does_not_reclaim_real_host(self, db) -> None:
+        await db.execute(
+            "INSERT INTO virtual_ips (ip_address, interface, created_at) "
+            "VALUES ('192.168.1.202', 'en0', '2026-01-01T00:00:00Z')"
+        )
+        await db.commit()
+
+        ops = AsyncMock()
+        ops.arp_scan.return_value = [
+            ("192.168.1.1", "00:11:22:33:44:55"),
+            ("192.168.1.202", "38:42:0b:48:51:07"),
+        ]
+        alloc = IPAllocator(
+            "192.168.1.0/24",
+            "192.168.1.1",
+            "192.168.1.50",
+            range_start=202,
+            range_end=202,
+        )
+        mgr = VirtualIPManager(ops, alloc, db)
+        mgr._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+
+        assert await mgr.load_from_db() == 0
+        assert mgr.active_ips == set()
+        assert alloc.allocate(1) == []
+        ops.add_ip_alias.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_remove_restores_protected_alias_when_persistence_fails(
+        self,
+    ) -> None:
+        ops = AsyncMock()
+        ops.remove_ip_alias = AsyncMock(return_value=True)
+        ops.add_ip_alias = AsyncMock(return_value=True)
+        broken_db = AsyncMock()
+        broken_db.execute = AsyncMock(side_effect=RuntimeError("read only"))
+        broken_db.rollback = AsyncMock()
+        alloc = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.50")
+        mgr = VirtualIPManager(ops, alloc, broken_db)
+        mgr._active.add("192.168.1.200")
+
+        assert await mgr.remove_alias("192.168.1.200") is False
+        ops.remove_ip_alias.assert_awaited_once_with(
+            "192.168.1.200", interface="en0"
+        )
+        ops.add_ip_alias.assert_awaited_once_with(
+            "192.168.1.200", interface="en0"
+        )
+        assert "192.168.1.200" in mgr.active_ips
 
     @pytest.mark.asyncio
     async def test_remove_all(self, db) -> None:
@@ -268,6 +484,9 @@ class TestVirtualIPManager:
         await db.commit()
 
         ops = AsyncMock()
+        ops.arp_scan.return_value = [
+            ("192.168.1.1", "00:11:22:33:44:55"),
+        ]
         ops.add_ip_alias = AsyncMock(return_value=True)
         alloc = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.50")
         mgr = VirtualIPManager(ops, alloc, db)
@@ -276,6 +495,28 @@ class TestVirtualIPManager:
         assert restored == 1
         assert "192.168.1.220" in mgr.active_ips
         assert "192.168.1.221" not in mgr.active_ips
+
+    @pytest.mark.asyncio
+    async def test_load_from_db_can_reserve_without_publishing_aliases(self, db) -> None:
+        await db.execute(
+            "INSERT INTO virtual_ips (ip_address, interface, created_at) "
+            "VALUES ('192.168.1.220', 'en0', '2026-01-01T00:00:00Z')"
+        )
+        await db.commit()
+        ops = AsyncMock()
+        alloc = IPAllocator(
+            "192.168.1.0/24",
+            "192.168.1.1",
+            "192.168.1.50",
+            range_start=220,
+            range_end=220,
+        )
+        mgr = VirtualIPManager(ops, alloc, db)
+
+        assert await mgr.load_from_db(restore_aliases=False) == 0
+        ops.add_ip_alias.assert_not_awaited()
+        assert mgr.active_ips == set()
+        assert alloc.allocate(1) == []
 
     @pytest.mark.asyncio
     async def test_load_from_db_retains_failed_alias_for_retry(self, db) -> None:
@@ -287,6 +528,9 @@ class TestVirtualIPManager:
         await db.commit()
 
         ops = AsyncMock()
+        ops.arp_scan.return_value = [
+            ("192.168.1.1", "00:11:22:33:44:55"),
+        ]
         ops.add_ip_alias = AsyncMock(return_value=False)
         alloc = IPAllocator(
             "192.168.1.0/24",
@@ -299,7 +543,7 @@ class TestVirtualIPManager:
 
         restored = await mgr.load_from_db()
         assert restored == 0
-        assert "192.168.1.230" not in mgr.active_ips
+        assert "192.168.1.230" in mgr.active_ips
         assert alloc.allocate(1) == []
 
         cursor = await db.execute("SELECT released_at FROM virtual_ips WHERE ip_address = '192.168.1.230'")

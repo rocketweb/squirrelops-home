@@ -17,7 +17,7 @@ import pytest
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from update_oui_db import (
+from update_oui_db import (  # pyright: ignore[reportMissingImports]
     MANUFACTURER_TYPES,
     clean_manufacturer_name,
     generate_oui_module,
