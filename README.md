@@ -100,7 +100,7 @@ The ceiling counts fake hosts, not service rows. Squirrel Scouts deploys at most
 
 ### Sensor — Linux/NAS (Docker)
 
-Linux publication is currently on hold. The 2.0.0 tree separates the
+Linux publication is currently on hold. The 2.0 tree separates the
 unprivileged sensor from a constrained `network-helper` companion. The sensor
 uses a private bridge, a fixed non-root identity, a read-only root filesystem,
 and no Linux capabilities. Only the helper receives host networking,

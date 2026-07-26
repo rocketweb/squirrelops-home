@@ -1264,6 +1264,8 @@ def test_remote_release_control_checker_is_complete_and_fail_closed(
     assert "Only the pinned tag-bypass User may dispatch a release" in checker_text
     assert "fresh run lacks exact approval" in checker_text
     assert "verification.verified == true" in checker_text
+    assert checker_text.count('.current_user_can_bypass == "never"') == 2
+    assert ".current_user_can_bypass //" not in checker_text
     for required_rule in ("creation", "update", "deletion"):
         assert f'index("{required_rule}")' in checker_text
     main_ruleset_check = checker_text.split(
@@ -1332,7 +1334,7 @@ esac
                 "target": "tag",
                 "enforcement": "active",
                 "updated_at": reviewed_at,
-                "current_user_can_bypass": False,
+                "current_user_can_bypass": "never",
                 "conditions": {
                     "ref_name": {
                         "include": [
@@ -1362,7 +1364,7 @@ esac
                 "target": "branch",
                 "enforcement": "active",
                 "updated_at": reviewed_at,
-                "current_user_can_bypass": False,
+                "current_user_can_bypass": "never",
                 "conditions": {
                     "ref_name": {
                         "include": ["refs/heads/main"],
@@ -1500,24 +1502,60 @@ volumes:
         "FAKE_APPROVALS_JSON": str(approvals_path),
     }
 
+    checker_command = [
+        "bash",
+        str(checker),
+        "rocketweb/squirrelops-home",
+        "home-v1.2.3",
+        str(policy_path),
+        "9001",
+        "1",
+        "314",
+        str(tmp_path),
+    ]
     good = subprocess.run(
-        [
-            "bash",
-            str(checker),
-            "rocketweb/squirrelops-home",
-            "home-v1.2.3",
-            str(policy_path),
-            "9001",
-            "1",
-            "314",
-            str(tmp_path),
-        ],
+        checker_command,
         check=False,
         capture_output=True,
         text=True,
         env=env,
     )
     assert good.returncode == 0, good.stderr
+
+    for ruleset_fixture, expected_error in (
+        (
+            ruleset_path,
+            "component-tag ruleset changed from its reviewed configuration",
+        ),
+        (
+            main_ruleset_path,
+            "main ruleset does not enforce reviewed branch protections",
+        ),
+    ):
+        safe_ruleset = json.loads(ruleset_fixture.read_text(encoding="utf-8"))
+        for bypass_value in ("always", "pull_requests_only", None):
+            unsafe_ruleset = dict(safe_ruleset)
+            if bypass_value is None:
+                unsafe_ruleset.pop("current_user_can_bypass")
+            else:
+                unsafe_ruleset["current_user_can_bypass"] = bypass_value
+            ruleset_fixture.write_text(
+                json.dumps(unsafe_ruleset),
+                encoding="utf-8",
+            )
+            bypassable = subprocess.run(
+                checker_command,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            assert bypassable.returncode != 0
+            assert expected_error in bypassable.stderr.lower()
+        ruleset_fixture.write_text(
+            json.dumps(safe_ruleset),
+            encoding="utf-8",
+        )
 
     approvals = json.loads(approvals_path.read_text(encoding="utf-8"))
     approvals.append(

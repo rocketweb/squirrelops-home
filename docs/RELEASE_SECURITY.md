@@ -1,11 +1,11 @@
 # Release security
 
-The release workflow is intentionally blocked until the repository trust
-controls below are configured. The workflow does not create tags, bump
+The release workflow fails closed unless the repository trust controls below
+remain configured exactly as reviewed. The workflow does not create tags, bump
 versions, publish from a branch, update `main`, update the website, or update a
 Homebrew tap.
 
-Do not prepare or dispatch Home 2.0.0 or Sensor 2.0.0 until the applicable
+Do not prepare or dispatch a Home or Sensor release until the applicable
 security review and remote controls are complete.
 
 ## Current Linux release block
@@ -44,7 +44,7 @@ path fails closed.
 
 ## Required GitHub settings
 
-Configure these settings before the next release:
+Keep these settings in place for every release:
 
 1. Enable **release immutability**. The workflow checks the repository setting
    before building and again immediately before publication. A published
