@@ -215,24 +215,15 @@ def test_release_container_build_inputs_are_digest_pinned() -> None:
         re.MULTILINE,
     )
 
-    external_references = [
-        reference for reference in image_references if reference != "app"
-    ]
+    external_references = [reference for reference in image_references if reference != "app"]
     assert len(external_references) == 2
-    assert all(
-        re.search(r"@sha256:[0-9a-f]{64}$", reference)
-        for reference in external_references
-    )
+    assert all(re.search(r"@sha256:[0-9a-f]{64}$", reference) for reference in external_references)
     assert image_references.count("app") == 2
     assert "ghcr.io/astral-sh/uv:0.10.2@" in dockerfile
-    assert 'CMD ["/app/.venv/bin/python", "-m", "squirrelops_home_sensor"]' in (
-        dockerfile
-    )
+    assert 'CMD ["/app/.venv/bin/python", "-m", "squirrelops_home_sensor"]' in (dockerfile)
     assert 'CMD ["uv", "run"' not in dockerfile
 
-    workflow = (
-        REPO_ROOT / ".github/workflows/release-sensor.yml"
-    ).read_text()
+    workflow = (REPO_ROOT / ".github/workflows/release-sensor.yml").read_text()
     assert "no-cache: true" in workflow
     assert "cache-from:" not in workflow
     assert "cache-to:" not in workflow
@@ -261,8 +252,7 @@ def test_package_builders_sanitize_and_revalidate_the_python_payload() -> None:
     assert runtime_sanitization_match is not None
     runtime_sanitization = runtime_sanitization_match.start()
     runtime_smoke_import = runtime_builder.index(
-        "'import aiohttp, aiosqlite, cryptography, fastapi, "
-        "squirrelops_home_sensor, zeroconf'"
+        "'import aiohttp, aiosqlite, cryptography, fastapi, squirrelops_home_sensor, zeroconf'"
     )
     assert runtime_install < runtime_smoke_import < runtime_sanitization
 
@@ -286,6 +276,20 @@ def test_package_checks_do_not_regenerate_build_host_bytecode() -> None:
 
     assert 'PYTHONDONTWRITEBYTECODE=1 "$SENSOR_PYTHON_BIN" -c' in package_builder
     assert 'PYTHONDONTWRITEBYTECODE=1 "$PYTHON_BIN" -c' in package_builder
+
+
+def test_macos_recovery_and_uninstall_paths_match_the_package_layout() -> None:
+    guide = (REPO_ROOT / "docs/USER_GUIDE.md").read_text()
+    preinstall = (REPO_ROOT / "scripts/pkg/app-scripts/preinstall").read_text()
+
+    assert "### Recovering Legacy macOS Network State" in guide
+    assert "/Library/SquirrelOps/sensor/data/squirrelops.db" in guide
+    assert "pfctl -a com.apple/squirrelops -F all" in guide
+    assert '/usr/sbin/arp -d "$IP" pub ifscope "$INTERFACE"' in guide
+    assert '/sbin/ifconfig lo0 inet "$IP" -alias' in guide
+    assert "docs/USER_GUIDE.md#recovering-legacy-macos-network-state" in preinstall
+    assert "sudo bash /Library/SquirrelOps/sensor/uninstall.sh" in guide
+    assert "sudo bash /Library/SquirrelOps/uninstall.sh" not in guide
 
 
 def test_release_app_strips_and_rejects_embedded_build_host_paths() -> None:
@@ -335,10 +339,7 @@ def test_macos_package_rejects_missing_or_unusable_helper() -> None:
         sensor_postinstall
     )
     assert "verify_helper_for_sensor_account()" in sensor_postinstall
-    assert (
-        '/usr/bin/sudo -n -u "$SENSOR_USER" /usr/bin/env -i'
-        in sensor_postinstall
-    )
+    assert '/usr/bin/sudo -n -u "$SENSOR_USER" /usr/bin/env -i' in sensor_postinstall
     assert '"$PYTHON_PATH" -I - "$HELPER_SOCKET"' in sensor_postinstall
     assert '"method": "ping"' in sensor_postinstall
     assert 'result.get("protocol_version") == 1' in sensor_postinstall
@@ -355,13 +356,8 @@ def test_sensor_postinstall_fails_when_daemon_does_not_become_healthy() -> None:
 
     assert 'if ! launchctl bootstrap system "$PLIST_DEST"' in sensor_postinstall
     assert "Failed to bootstrap sensor service" in sensor_postinstall
-    assert (
-        "Sensor did not become healthy within ${HEALTH_TIMEOUT_SECONDS}s"
-        in sensor_postinstall
-    )
-    timeout_guard = sensor_postinstall.index(
-        'if [ "$SENSOR_HEALTHY" -ne 1 ]; then'
-    )
+    assert "Sensor did not become healthy within ${HEALTH_TIMEOUT_SECONDS}s" in sensor_postinstall
+    timeout_guard = sensor_postinstall.index('if [ "$SENSOR_HEALTHY" -ne 1 ]; then')
     assert "exit 1" in sensor_postinstall[timeout_guard:]
 
 
@@ -386,14 +382,14 @@ def test_component_versions_are_independently_authoritative() -> None:
     assert install_match is not None
     assert install_match.group(1) == sensor_version
 
-    assert 'home-v${DISTRIBUTION_VERSION}' in workflow
+    assert "home-v${DISTRIBUTION_VERSION}" in workflow
     assert "sensor-v${SENSOR_VERSION}" in workflow
     assert "git diff --quiet" in workflow
     assert "APP_VERSION_VALUE" in workflow
 
     assert 'DISTRIBUTION_VERSION="$(tr -d' in package_builder
     assert 'APP_VERSION="$(tr -d' in package_builder
-    assert 'SENSOR_VERSION=$(' in package_builder
+    assert "SENSOR_VERSION=$(" in package_builder
     assert package_builder.count('--version "$APP_VERSION"') == 1
     assert package_builder.count('--version "$SENSOR_VERSION"') == 1
     assert 'printf \'%s\\n\' "$SENSOR_VERSION" > "$SENSOR_INSTALL/VERSION"' in package_builder
@@ -437,10 +433,7 @@ def test_app_signer_requires_identity_for_release_but_not_local_builds(
     tmp_path: Path,
 ) -> None:
     app_bundle = tmp_path / "SquirrelOpsHome.app"
-    helper = (
-        app_bundle
-        / "Contents/Library/LaunchServices/com.squirrelops.helper"
-    )
+    helper = app_bundle / "Contents/Library/LaunchServices/com.squirrelops.helper"
     helper.parent.mkdir(parents=True)
     helper.write_text("#!/bin/sh\n", encoding="utf-8")
     helper.chmod(0o755)
@@ -487,12 +480,8 @@ def test_release_package_builder_fails_closed_on_all_trust_gates() -> None:
     assert "Release builds require notarization credentials" in package_builder
     assert "Release builds cannot set SKIP_PKG_SIGNING=1" in package_builder
     assert "Release builds require an available app signing identity" in signer
-    assert "Release builds require every sensor Mach-O binary to be signed" in (
-        package_builder
-    )
-    assert "Release builds require an available installer signing identity" in (
-        package_builder
-    )
+    assert "Release builds require every sensor Mach-O binary to be signed" in (package_builder)
+    assert "Release builds require an available installer signing identity" in (package_builder)
 
     notary_start = package_builder.index("xcrun notarytool submit")
     notary_end = package_builder.index("# Check if notarization was accepted")
@@ -500,16 +489,9 @@ def test_release_package_builder_fails_closed_on_all_trust_gates() -> None:
     assert "Release notarization was not accepted" in package_builder
     assert 'xcrun stapler validate "$OUTPUT_DIR/$PKG_NAME"' in package_builder
     assert 'pkgutil --check-signature "$OUTPUT_DIR/$PKG_NAME"' in package_builder
-    assert (
-        'spctl --assess --type install --verbose=2 "$OUTPUT_DIR/$PKG_NAME"'
-        in package_builder
-    )
-    assert 'codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"' in (
-        package_builder
-    )
-    assert 'codesign --verify --deep --strict --verbose=2 "$STAGED_APP_BUNDLE"' in (
-        package_builder
-    )
+    assert 'spctl --assess --type install --verbose=2 "$OUTPUT_DIR/$PKG_NAME"' in package_builder
+    assert 'codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"' in (package_builder)
+    assert 'codesign --verify --deep --strict --verbose=2 "$STAGED_APP_BUNDLE"' in (package_builder)
     assert 'codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"' in signer
 
 
@@ -548,18 +530,14 @@ def test_release_workflow_requires_credentials_and_verifies_before_upload() -> N
     assert "xcrun stapler validate" in verification_step
     assert "spctl --assess --type install --verbose=2" in verification_step
 
-    preparer = (
-        REPO_ROOT / "scripts/prepare-release-assets.py"
-    ).read_text(encoding="utf-8")
+    preparer = (REPO_ROOT / "scripts/prepare-release-assets.py").read_text(encoding="utf-8")
     assert "Gatekeeper validates the Developer ID signature" in preparer
     assert "notarization ticket, and" in preparer
     assert "stapled ticket" in preparer
 
 
 def test_certificate_modernizer_uses_current_pkcs12_protection() -> None:
-    modernizer = (
-        REPO_ROOT / "scripts/modernize-apple-p12.sh"
-    ).read_text(encoding="utf-8")
+    modernizer = (REPO_ROOT / "scripts/modernize-apple-p12.sh").read_text(encoding="utf-8")
 
     assert "-keypbe AES-256-CBC" in modernizer
     assert "-certpbe AES-256-CBC" in modernizer
@@ -600,12 +578,201 @@ def test_linux_release_installer_requires_an_immutable_image_digest() -> None:
     assert 'IMAGE_REF="${IMAGE}@${SQUIRRELOPS_IMAGE_DIGEST}"' in installer
     assert 'docker pull --platform "$PLATFORM" "$IMAGE_REF"' in installer
     assert "image: ${IMAGE_REF}" in installer
-    assert 'docker pull --platform "$PLATFORM" "$IMAGE:$SQUIRRELOPS_VERSION"' not in (
-        installer
-    )
+    assert 'docker pull --platform "$PLATFORM" "$IMAGE:$SQUIRRELOPS_VERSION"' not in (installer)
     assert not (REPO_ROOT / "site/public/install.sh").exists()
     vercel = (REPO_ROOT / "site/vercel.json").read_text()
     assert '"/install.sh"' not in vercel
+
+
+def _linux_installer_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, dict[str, str]]:
+    install_dir = tmp_path / "installed"
+    script = tmp_path / "install.sh"
+    source = (REPO_ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+    source = source.replace(
+        'SQUIRRELOPS_IMAGE_DIGEST="__RELEASE_IMAGE_DIGEST__"',
+        f'SQUIRRELOPS_IMAGE_DIGEST="sha256:{"a" * 64}"',
+    )
+    source = source.replace(
+        'INSTALL_DIR="/opt/squirrelops"',
+        f'INSTALL_DIR="{install_dir}"',
+    )
+    script.write_text(source, encoding="utf-8")
+    script.chmod(0o755)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_docker_log = tmp_path / "docker.log"
+    commands = {
+        "id": """#!/bin/bash
+if [ "${1:-}" = "-u" ]; then
+    printf '0\\n'
+    exit 0
+fi
+exec /usr/bin/id "$@"
+""",
+        "docker": """#!/bin/bash
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+exit 0
+""",
+        "uname": """#!/bin/bash
+printf 'x86_64\\n'
+""",
+        "curl": """#!/bin/bash
+exit 0
+""",
+        "sleep": """#!/bin/bash
+exit 0
+""",
+        "ip": """#!/bin/bash
+case "$*" in
+  "-4 route show default")
+    printf 'default via 10.23.4.1 dev enp3s0 proto dhcp src 10.23.4.19 metric 100\\n'
+    ;;
+  "-4 -o addr show dev enp3s0 scope global")
+    printf '2: enp3s0 inet 10.23.4.19/24 brd 10.23.4.255 scope global enp3s0\\n'
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+""",
+    }
+    for name, body in commands.items():
+        command = fake_bin / name
+        command.write_text(body, encoding="utf-8")
+        command.chmod(0o755)
+
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_DOCKER_LOG": str(fake_docker_log),
+    }
+    return script, install_dir, env
+
+
+def _compose_service_block(text: str, service: str) -> str:
+    lines = text.splitlines()
+    start = lines.index(f"  {service}:")
+    block: list[str] = []
+    for line in lines[start + 1 :]:
+        if re.match(r"^  [A-Za-z0-9_.-]+:\s*$", line) or (line and not line[0].isspace()):
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
+def test_linux_installer_detects_the_host_lan_without_a_guessed_default(
+    tmp_path: Path,
+) -> None:
+    script, install_dir, env = _linux_installer_fixture(tmp_path)
+
+    result = subprocess.run(
+        ["bash", str(script)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    compose = (install_dir / "docker-compose.yml").read_text(encoding="utf-8")
+    assert 'SQUIRRELOPS_LAN_SUBNET: "10.23.4.0/24"' in compose
+    assert 'SQUIRRELOPS_SUBNET: "10.23.4.0/24"' in compose
+    assert "192.168.1.0/24" not in compose
+    assert "Using LAN subnet 10.23.4.0/24" in result.stdout
+
+
+def test_linux_upgrade_migrates_legacy_privileges_and_preserves_settings(
+    tmp_path: Path,
+) -> None:
+    script, install_dir, env = _linux_installer_fixture(tmp_path)
+    install_dir.mkdir()
+    compose_path = install_dir / "docker-compose.yml"
+    compose_path.write_text(
+        """services:
+  sensor:
+    image: ghcr.io/rocketweb/squirrelops-sensor:1.1.14
+    network_mode: host
+    user: "0:0"
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      SQUIRRELOPS_DATA_DIR: /app/data
+      SQUIRRELOPS_PORT: "9443"
+      SQUIRRELOPS_SUBNET: "10.55.8.19/24"
+      SQUIRRELOPS_PROFILE: "full"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(script), "--upgrade"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    compose = compose_path.read_text(encoding="utf-8")
+    sensor_block = _compose_service_block(compose, "sensor")
+    helper_block = _compose_service_block(compose, "network-helper")
+    assert "network_mode: host" not in sensor_block
+    assert "NET_RAW" not in sensor_block
+    assert "NET_ADMIN" not in sensor_block
+    assert 'user: "10001:10001"' in sensor_block
+    assert "cap_drop:\n      - ALL" in sensor_block
+    assert "read_only: true" in sensor_block
+    assert "no-new-privileges:true" in sensor_block
+    assert "helper_socket:/run/squirrelops:ro" in sensor_block
+    assert "network_mode: host" in helper_block
+    assert "NET_RAW" in helper_block
+    assert "NET_ADMIN" in helper_block
+    assert 'SQUIRRELOPS_PORT: "9443"' in compose
+    assert 'SQUIRRELOPS_SUBNET: "10.55.8.0/24"' in compose
+    assert 'SQUIRRELOPS_LAN_SUBNET: "10.55.8.0/24"' in compose
+    assert 'SQUIRRELOPS_PROFILE: "full"' in compose
+    assert '"9443:9443"' in compose
+    assert "Migrating the legacy root/host-network sensor" in result.stdout
+    assert not list(install_dir.glob(".docker-compose.previous.*"))
+
+
+def test_linux_upgrade_restores_legacy_compose_after_failed_health_check(
+    tmp_path: Path,
+) -> None:
+    script, install_dir, env = _linux_installer_fixture(tmp_path)
+    install_dir.mkdir()
+    compose_path = install_dir / "docker-compose.yml"
+    legacy_compose = """services:
+  sensor:
+    image: ghcr.io/rocketweb/squirrelops-sensor:1.1.14
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      SQUIRRELOPS_PORT: "8443"
+      SQUIRRELOPS_SUBNET: "10.55.8.0/24"
+"""
+    compose_path.write_text(legacy_compose, encoding="utf-8")
+    fake_curl = Path(env["PATH"].split(":", 1)[0]) / "curl"
+    fake_curl.write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    fake_curl.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(script), "--upgrade"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert compose_path.read_text(encoding="utf-8") == legacy_compose
+    assert "previous compose configuration was restored" in result.stderr
+    assert not list(install_dir.glob(".docker-compose.previous.*"))
 
 
 def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
@@ -686,9 +853,7 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     verification_sha = hashlib.sha256(verification_path.read_bytes()).hexdigest()
     assert metadata["release"]["verification_artifact"] == verification_path.name
     assert metadata["release"]["verification_sha256"] == verification_sha
-    assert metadata["release"]["verification_url"].endswith(
-        "/RELEASE-VERIFICATION.md"
-    )
+    assert metadata["release"]["verification_url"].endswith("/RELEASE-VERIFICATION.md")
     assert f"Release commit: `{commit}`" in verification
     assert "canonical release-notes and verification document" in verification
     assert "GitHub's release title and description are editable" in verification
@@ -697,16 +862,15 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     assert f"--signer-digest {commit}" in verification
     assert f"--source-digest {commit}" in verification
     assert "It is not\npublished automatically" in verification
-    expected_package_sha = hashlib.sha256(
-        (output_dir / package.name).read_bytes()
-    ).hexdigest()
+    expected_package_sha = hashlib.sha256((output_dir / package.name).read_bytes()).hexdigest()
     assert metadata["macos"]["sha256"] == expected_package_sha
-    assert metadata["macos"]["app_version"] == (
-        REPO_ROOT / "APP_VERSION"
-    ).read_text().strip()
-    assert metadata["macos"]["sensor_version"] == tomllib.loads(
-        (REPO_ROOT / "sensor/pyproject.toml").read_text(encoding="utf-8")
-    )["project"]["version"]
+    assert metadata["macos"]["app_version"] == (REPO_ROOT / "APP_VERSION").read_text().strip()
+    assert (
+        metadata["macos"]["sensor_version"]
+        == tomllib.loads((REPO_ROOT / "sensor/pyproject.toml").read_text(encoding="utf-8"))[
+            "project"
+        ]["version"]
+    )
     assert metadata["macos"]["sensor_api_protocol"] == 2
     assert "docker" not in metadata
     cask_path = output_dir / "squirrelops-home.rb"
@@ -731,9 +895,7 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     assert '"com.squirrelops.home.app"' in cask
     assert '"com.squirrelops.home.sensor"' in cask
     assert metadata["homebrew"]["cask_artifact"] == "squirrelops-home.rb"
-    assert metadata["homebrew"]["cask_sha256"] == hashlib.sha256(
-        cask_path.read_bytes()
-    ).hexdigest()
+    assert metadata["homebrew"]["cask_sha256"] == hashlib.sha256(cask_path.read_bytes()).hexdigest()
     assert metadata["homebrew"]["cask_url"] == (
         "https://github.com/rocketweb/squirrelops-home/releases/download/"
         f"home-v{version}/squirrelops-home.rb"
@@ -755,12 +917,8 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
         text=True,
     )
     assert repeat.returncode == 0, repeat.stderr
-    assert {
-        path.name: path.read_bytes()
-        for path in output_dir.iterdir()
-    } == {
-        path.name: path.read_bytes()
-        for path in repeat_output.iterdir()
+    assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == {
+        path.name: path.read_bytes() for path in repeat_output.iterdir()
     }
 
 
@@ -835,9 +993,7 @@ def test_sensor_release_assets_are_independent_and_digest_pinned(
     installer = (output_dir / "install.sh").read_text(encoding="utf-8")
     assert "__RELEASE_IMAGE_DIGEST__" not in installer
     assert f'SQUIRRELOPS_IMAGE_DIGEST="{digest}"' in installer
-    metadata = json.loads(
-        (output_dir / "sensor-release-metadata.json").read_text(encoding="utf-8")
-    )
+    metadata = json.loads((output_dir / "sensor-release-metadata.json").read_text(encoding="utf-8"))
     assert metadata["release"] == {
         "commit": commit,
         "repository": "rocketweb/squirrelops-home",
@@ -852,9 +1008,7 @@ def test_sensor_release_assets_are_independent_and_digest_pinned(
 
 def test_release_workflow_is_manual_main_pinned_and_approval_gated() -> None:
     home_workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
-    sensor_workflow = (
-        REPO_ROOT / ".github/workflows/release-sensor.yml"
-    ).read_text()
+    sensor_workflow = (REPO_ROOT / ".github/workflows/release-sensor.yml").read_text()
 
     for workflow in (home_workflow, sensor_workflow):
         assert "workflow_dispatch:" in workflow
@@ -863,9 +1017,9 @@ def test_release_workflow_is_manual_main_pinned_and_approval_gated() -> None:
         assert "GITHUB_RUN_ATTEMPT" in workflow
         assert "$GITHUB_RUN_ID" in workflow
         assert "$GITHUB_ACTOR_ID" in workflow
-        assert 'refs/heads/main' in workflow
-        assert 'EXPECTED_COMMIT: ${{ inputs.commit_sha }}' in workflow
-        assert 'ref: ${{ needs.verify-release.outputs.commit_sha }}' in workflow
+        assert "refs/heads/main" in workflow
+        assert "EXPECTED_COMMIT: ${{ inputs.commit_sha }}" in workflow
+        assert "ref: ${{ needs.verify-release.outputs.commit_sha }}" in workflow
         assert workflow.count("environment: release") >= 2
         assert workflow.count("bash scripts/check-release-controls.sh") >= 2
         assert "actions: read" in workflow
@@ -874,21 +1028,19 @@ def test_release_workflow_is_manual_main_pinned_and_approval_gated() -> None:
         assert "push origin HEAD:main" not in workflow
 
     assert "home-v${DISTRIBUTION_VERSION}" in home_workflow
-    assert "APP_TAG=\"app-v${APP_VERSION_VALUE}\"" in home_workflow
-    assert "SENSOR_TAG=\"sensor-v${SENSOR_VERSION}\"" in home_workflow
+    assert 'APP_TAG="app-v${APP_VERSION_VALUE}"' in home_workflow
+    assert 'SENSOR_TAG="sensor-v${SENSOR_VERSION}"' in home_workflow
     assert "docker/build-push-action@" not in home_workflow
     assert "sensor-v${SENSOR_VERSION}" in sensor_workflow
     assert "docker/build-push-action@" in sensor_workflow
     assert "check-linux-release-boundary.py" in sensor_workflow
-    assert "git/ref/tags/" in (
-        REPO_ROOT / "scripts/check-release-controls.sh"
-    ).read_text(encoding="utf-8")
+    assert "git/ref/tags/" in (REPO_ROOT / "scripts/check-release-controls.sh").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_checked_in_release_policy_has_a_fail_closed_schema() -> None:
-    policy = json.loads(
-        (REPO_ROOT / ".github/release-policy.json").read_text(encoding="utf-8")
-    )
+    policy = json.loads((REPO_ROOT / ".github/release-policy.json").read_text(encoding="utf-8"))
     assert policy["schema_version"] == 3
     assert set(policy) == {
         "schema_version",
@@ -1097,7 +1249,7 @@ def test_remote_release_control_checker_is_complete_and_fail_closed(
     assert "actions/runs/${WORKFLOW_RUN_ID}/approvals" in checker_text
     assert "($decisions | length >= 1)" in checker_text
     assert "and all(" in checker_text
-    assert '.run_attempt == 1' in checker_text
+    assert ".run_attempt == 1" in checker_text
     assert '.event == "workflow_dispatch"' in checker_text
     assert "main_ruleset.id" in checker_text
     assert "main_ruleset.required_check_integration_id" in checker_text
@@ -1108,10 +1260,7 @@ def test_remote_release_control_checker_is_complete_and_fail_closed(
     assert "required_status_checks" in checker_text
     assert ".integration_id == $check_integration_id" in checker_text
     assert "Verify release and package controls" in checker_text
-    assert (
-        "Supply Chain CI / Verify release and package controls"
-        not in checker_text
-    )
+    assert "Supply Chain CI / Verify release and package controls" not in checker_text
     assert "Only the pinned tag-bypass User may dispatch a release" in checker_text
     assert "fresh run lacks exact approval" in checker_text
     assert "verification.verified == true" in checker_text
@@ -1238,9 +1387,7 @@ esac
                             "strict_required_status_checks_policy": True,
                             "required_status_checks": [
                                 {
-                                    "context": (
-                                        "Verify release and package controls"
-                                    ),
+                                    "context": ("Verify release and package controls"),
                                     "integration_id": 15368,
                                 }
                             ],
@@ -1497,9 +1644,7 @@ volumes:
     environment["can_admins_bypass"] = False
     environment_path.write_text(json.dumps(environment), encoding="utf-8")
     main_ruleset = json.loads(main_ruleset_path.read_text(encoding="utf-8"))
-    release_check = main_ruleset["rules"][-1]["parameters"][
-        "required_status_checks"
-    ][0]
+    release_check = main_ruleset["rules"][-1]["parameters"]["required_status_checks"][0]
     for untrusted_integration_id in (None, 9999):
         release_check["integration_id"] = untrusted_integration_id
         main_ruleset_path.write_text(
@@ -1524,16 +1669,12 @@ volumes:
             env=env,
         )
         assert spoofable_check.returncode != 0
-        assert "does not enforce reviewed branch protections" in (
-            spoofable_check.stderr
-        )
+        assert "does not enforce reviewed branch protections" in (spoofable_check.stderr)
 
 
 def test_release_workflow_drafts_attests_and_publishes_last() -> None:
     home = (REPO_ROOT / ".github/workflows/release.yml").read_text()
-    sensor = (
-        REPO_ROOT / ".github/workflows/release-sensor.yml"
-    ).read_text()
+    sensor = (REPO_ROOT / ".github/workflows/release-sensor.yml").read_text()
 
     home_draft = home.index("- name: Create draft release")
     home_attest = home.index("- name: Attest release assets")
@@ -1548,9 +1689,7 @@ def test_release_workflow_drafts_attests_and_publishes_last() -> None:
 
     sensor_draft = sensor.index("- name: Create draft sensor release")
     sensor_attest = sensor.index("- name: Attest sensor release assets")
-    sensor_publish = sensor.index(
-        "- name: Promote exact image and publish release last"
-    )
+    sensor_publish = sensor.index("- name: Promote exact image and publish release last")
     assert sensor_draft < sensor_attest < sensor_publish
     assert sensor.rfind("- name:") == sensor_publish
     final_step = sensor[sensor_publish:]
@@ -1564,9 +1703,7 @@ def test_release_workflow_drafts_attests_and_publishes_last() -> None:
     assert "--from-oci-layout" in sensor
     assert ') == ["amd64", "arm64"]' in sensor
     assert "oras manifest delete" in sensor
-    assert '[ "$(oras resolve "${IMAGE}:${SENSOR_VERSION}")" = "$DOCKER_DIGEST" ]' in (
-        sensor
-    )
+    assert '[ "$(oras resolve "${IMAGE}:${SENSOR_VERSION}")" = "$DOCKER_DIGEST" ]' in (sensor)
 
     for workflow in (home, sensor):
         assert "actions/attest@" in workflow
@@ -1585,9 +1722,7 @@ def test_release_workflow_drafts_attests_and_publishes_last() -> None:
 
 def test_release_policy_token_is_short_lived_narrow_and_environment_gated() -> None:
     home = (REPO_ROOT / ".github/workflows/release.yml").read_text()
-    sensor = (
-        REPO_ROOT / ".github/workflows/release-sensor.yml"
-    ).read_text()
+    sensor = (REPO_ROOT / ".github/workflows/release-sensor.yml").read_text()
 
     assert home.count("environment: release") == 3
     assert sensor.count("environment: release") == 2
@@ -1600,21 +1735,19 @@ def test_release_policy_token_is_short_lived_narrow_and_environment_gated() -> N
         assert "RELEASE_POLICY_APP_CLIENT_ID" in workflow
         assert "RELEASE_POLICY_APP_PRIVATE_KEY" in workflow
         assert "RELEASE_POLICY_TOKEN" in workflow
-        assert "GH_TOKEN=\"$RELEASE_POLICY_TOKEN\"" in workflow
+        assert 'GH_TOKEN="$RELEASE_POLICY_TOKEN"' in workflow
         assert "personal access token" not in workflow.lower()
 
 
 def test_release_verifier_checks_exact_identity_state_and_asset_bytes() -> None:
-    verifier = (
-        REPO_ROOT / "scripts/verify-github-release.sh"
-    ).read_text(encoding="utf-8")
+    verifier = (REPO_ROOT / "scripts/verify-github-release.sh").read_text(encoding="utf-8")
 
     assert "--json assets,isDraft,isImmutable,tagName,targetCommitish" in verifier
     assert ".tagName == $tag" in verifier
     assert ".targetCommitish == $commit" not in verifier
     assert "git/ref/tags/${RELEASE_TAG}" in verifier
     assert "git/tags/${TAG_OBJECT_SHA}" in verifier
-    assert '.object.sha == $commit' in verifier
+    assert ".object.sha == $commit" in verifier
     assert ".verification.verified == true" in verifier
     assert ".isDraft == false and .isImmutable == true" in verifier
     assert "GitHub digest mismatch" in verifier
@@ -1625,6 +1758,7 @@ def test_release_verifier_uses_tag_object_not_target_commitish(
     tmp_path: Path,
 ) -> None:
     verifier = REPO_ROOT / "scripts/verify-github-release.sh"
+    release_tag = "home-v1.2.3"
     commit = "c" * 40
     tag_object = "a" * 40
     asset_dir = tmp_path / "assets"
@@ -1637,7 +1771,7 @@ def test_release_verifier_uses_tag_object_not_target_commitish(
     release_json.write_text(
         json.dumps(
             {
-                "tagName": "v1.2.3",
+                "tagName": release_tag,
                 "targetCommitish": "main",
                 "isDraft": False,
                 "isImmutable": True,
@@ -1675,7 +1809,7 @@ def test_release_verifier_uses_tag_object_not_target_commitish(
 set -eu
 case "$*" in
   "release view"*) cat "$FAKE_RELEASE_JSON" ;;
-  *git/ref/tags/v1.2.3*) cat "$FAKE_TAG_REF_JSON" ;;
+  *git/ref/tags/*) cat "$FAKE_TAG_REF_JSON" ;;
   *git/tags/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa*) \
     cat "$FAKE_TAG_OBJECT_JSON" ;;
   *) exit 64 ;;
@@ -1694,7 +1828,7 @@ esac
         "bash",
         str(verifier),
         "rocketweb/squirrelops-home",
-        "v1.2.3",
+        release_tag,
         commit,
         str(asset_dir),
         "immutable",
@@ -1708,6 +1842,30 @@ esac
         env=env,
     )
     assert exact.returncode == 0, exact.stderr
+
+    release_payload = json.loads(release_json.read_text(encoding="utf-8"))
+    for component_tag in ("app-v1.2.3", "sensor-v1.2.3"):
+        release_payload["tagName"] = component_tag
+        release_json.write_text(
+            json.dumps(release_payload),
+            encoding="utf-8",
+        )
+        component_command = list(command)
+        component_command[3] = component_tag
+        component = subprocess.run(
+            component_command,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert component.returncode == 0, component.stderr
+
+    release_payload["tagName"] = release_tag
+    release_json.write_text(
+        json.dumps(release_payload),
+        encoding="utf-8",
+    )
 
     tag_object_json.write_text(
         json.dumps(
@@ -1729,6 +1887,38 @@ esac
     assert "does not resolve to the reviewed commit" in moved.stderr
 
 
+def test_release_verifier_rejects_legacy_and_malformed_tags(
+    tmp_path: Path,
+) -> None:
+    verifier = REPO_ROOT / "scripts/verify-github-release.sh"
+    commit = "c" * 40
+    asset_dir = tmp_path / "assets"
+    asset_dir.mkdir()
+
+    for release_tag in (
+        "v1.2.3",
+        "home-v1.2",
+        "distribution-v1.2.3",
+        "home-v1.2.3-rc1",
+    ):
+        result = subprocess.run(
+            [
+                "bash",
+                str(verifier),
+                "rocketweb/squirrelops-home",
+                release_tag,
+                commit,
+                str(asset_dir),
+                "draft",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode != 0
+        assert "Release tag must be home-vX.Y.Z" in result.stderr
+
+
 def test_release_docs_require_remote_trust_controls_and_reviewed_promotion() -> None:
     policy = (REPO_ROOT / "docs/RELEASE_SECURITY.md").read_text()
 
@@ -1742,6 +1932,15 @@ def test_release_docs_require_remote_trust_controls_and_reviewed_promotion() -> 
     assert "hardware" in policy.lower()
     assert "Homebrew" in policy
     assert "squirrelops-home.rb" in policy
+    assert 'git tag -s "app-v${APP_VERSION}"' in policy
+    assert 'git tag -s "sensor-v${SENSOR_VERSION}"' in policy
+    assert 'git tag -s "home-v${DISTRIBUTION_VERSION}"' in policy
+    assert "git push --atomic origin" in policy
+    assert "git tag -s vX.Y.Z" not in policy
+    assert "## Post-release website manifest" in policy
+    assert "Do not update `site/public/manifest.json` to a future version" in policy
+    assert "Do not advertise a Linux image or sensor release" in policy
+    assert "separately reviewed post-release" in policy
     assert "homebrew-cask" in policy
     assert "pull request" in policy.lower()
     assert "release-metadata.json" in policy
@@ -1753,9 +1952,7 @@ def test_release_docs_require_remote_trust_controls_and_reviewed_promotion() -> 
 
 
 def test_required_supply_chain_ci_always_runs_and_validates_controls() -> None:
-    workflow = (
-        REPO_ROOT / ".github/workflows/supply-chain-ci.yml"
-    ).read_text(encoding="utf-8")
+    workflow = (REPO_ROOT / ".github/workflows/supply-chain-ci.yml").read_text(encoding="utf-8")
 
     assert "pull_request: {}" in workflow
     assert "branches:" in workflow
@@ -1771,10 +1968,7 @@ def test_required_supply_chain_ci_always_runs_and_validates_controls() -> None:
     assert "Run macOS package lifecycle security tests" in workflow
     assert "bash -n" in workflow
     assert "json.tool .github/release-policy.json" in workflow
-    assert (
-        "actions/dependency-review-action@"
-        "a1d282b36b6f3519aa1f3fc636f609c47dddb294"
-    ) in workflow
+    assert ("actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294") in workflow
     assert "if: github.event_name == 'pull_request'" in workflow
     assert "fail-on-severity: moderate" in workflow
     assert "fail-on-scopes: runtime, development" in workflow

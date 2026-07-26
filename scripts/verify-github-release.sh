@@ -13,8 +13,8 @@ if [[ ! "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
     echo "Repository must use the owner/name form." >&2
     exit 1
 fi
-if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Release tag must be a full semantic version." >&2
+if [[ ! "$RELEASE_TAG" =~ ^(home|app|sensor)-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Release tag must be home-vX.Y.Z, app-vX.Y.Z, or sensor-vX.Y.Z." >&2
     exit 1
 fi
 if [[ ! "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then

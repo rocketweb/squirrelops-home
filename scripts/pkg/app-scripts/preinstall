@@ -692,6 +692,7 @@ if [ "$state_was_loaded" -eq 0 ]; then
     fi
     if ! legacy_network_state_is_safe; then
         echo "[app-preinstall] Legacy loopback or proxy-ARP state is unsafe; manual cleanup is required before upgrade." >&2
+        echo "[app-preinstall] See https://github.com/rocketweb/squirrelops-home/blob/main/docs/USER_GUIDE.md#recovering-legacy-macos-network-state" >&2
         exit 1
     fi
 fi

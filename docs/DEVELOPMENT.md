@@ -211,6 +211,14 @@ The helper isn't running or can't execute `ifconfig`. Reinstall and check logs.
 | App (release) | `cd app && BUILD_CONFIG=release bash build-app.sh` |
 | Installer (.pkg) | `bash scripts/build-pkg.sh` |
 
+The source Linux Compose file deliberately has no guessed LAN. Set the directly
+connected private CIDR explicitly before using it:
+
+```bash
+cd sensor
+SQUIRRELOPS_SUBNET=192.168.1.0/24 docker compose up
+```
+
 ### Release workflow
 
 Releases are manual deployments from protected `main`. Pushing a tag does not

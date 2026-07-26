@@ -33,7 +33,7 @@ services:
       SQUIRRELOPS_NETWORK_HELPER_SOCKET: /run/squirrelops/network-helper.sock
       SQUIRRELOPS_SENSOR_UID: "10001"
       SQUIRRELOPS_SENSOR_BRIDGE_IP: 172.30.0.2
-      SQUIRRELOPS_LAN_SUBNET: ${SQUIRRELOPS_SUBNET:-192.168.1.0/24}
+      SQUIRRELOPS_LAN_SUBNET: ${SQUIRRELOPS_SUBNET:?Set SQUIRRELOPS_SUBNET to the directly connected private CIDR}
       SQUIRRELOPS_NETWORK_INTERFACE: ${SQUIRRELOPS_NETWORK_INTERFACE:-auto}
     healthcheck:
       test:
@@ -78,7 +78,7 @@ services:
     environment:
       SQUIRRELOPS_DATA_DIR: /app/data
       SQUIRRELOPS_PORT: "8443"
-      SQUIRRELOPS_SUBNET: ${SQUIRRELOPS_SUBNET:-192.168.1.0/24}
+      SQUIRRELOPS_SUBNET: ${SQUIRRELOPS_SUBNET:?Set SQUIRRELOPS_SUBNET to the directly connected private CIDR}
       SQUIRRELOPS_NETWORK_HELPER_SOCKET: /run/squirrelops/network-helper.sock
       SQUIRRELOPS_SENSOR_BRIDGE_IP: 172.30.0.2
     depends_on:

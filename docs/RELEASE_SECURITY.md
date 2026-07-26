@@ -147,26 +147,42 @@ After the release changes pass review and CI:
 ```bash
 git fetch origin
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
-git tag -s vX.Y.Z -m "SquirrelOps Home X.Y.Z"
-git verify-tag vX.Y.Z
-git push origin vX.Y.Z
+DISTRIBUTION_VERSION="$(tr -d '[:space:]' < VERSION)"
+APP_VERSION="$(tr -d '[:space:]' < APP_VERSION)"
+SENSOR_VERSION="$(
+  awk -F'"' '/^version = / { print $2; exit }' sensor/pyproject.toml
+)"
+git tag -s "app-v${APP_VERSION}" \
+  -m "SquirrelOps Home App ${APP_VERSION}"
+git tag -s "sensor-v${SENSOR_VERSION}" \
+  -m "SquirrelOps Home Sensor ${SENSOR_VERSION}"
+git tag -s "home-v${DISTRIBUTION_VERSION}" \
+  -m "SquirrelOps Home ${DISTRIBUTION_VERSION}"
+git verify-tag "app-v${APP_VERSION}"
+git verify-tag "sensor-v${SENSOR_VERSION}"
+git verify-tag "home-v${DISTRIBUTION_VERSION}"
+git push --atomic origin \
+  "app-v${APP_VERSION}" \
+  "sensor-v${SENSOR_VERSION}" \
+  "home-v${DISTRIBUTION_VERSION}"
 ```
 
-Only the dedicated tag-ruleset bypass identity creates this signed tag. The
+Only the dedicated tag-ruleset bypass identity creates these signed tags. The
 separate environment reviewer approves the workflow after confirming GitHub
-shows the tag signature as verified.
+shows every required tag signature as verified.
 
 Do not rerun a failed release workflow. GitHub retains approvals on a rerun,
 so the workflow requires `run_attempt == 1`. Preserve and inspect the failed
 draft, remove only that draft after independent review, and start a fresh
 manual dispatch.
 
-Release the independently versioned sensor first with the `Release Sensor`
-workflow and a protected `sensor-vX.Y.Z` tag. Create a protected
-`app-vX.Y.Z` tag for the exact app component source. Release the signed macOS
-distribution with `Release Home Distribution` and a protected
-`home-vX.Y.Z` tag. Enter the full 40-character commit SHA. The workflows
-verify that:
+Create protected, signed `app-vX.Y.Z` and `sensor-vX.Y.Z` component tags for
+the exact embedded sources. When Linux publication is approved, release the
+independently versioned sensor with the `Release Sensor` workflow. While Linux
+publication remains blocked, do not dispatch that workflow; the signed sensor
+tag is component identity only. Release the signed macOS distribution with
+`Release Home Distribution` and a protected `home-vX.Y.Z` tag. Enter the full
+40-character commit SHA. The workflows verify that:
 
 - the dispatched workflow, protected `main`, typed commit, and tag all resolve
   to the same commit;
@@ -222,6 +238,31 @@ semver image exists only in the last bounded interval before GitHub publication,
 so the immutable release is never sealed before its digest-pinned dependency is
 available.
 
+## Post-release website manifest
+
+Do not update `site/public/manifest.json` to a future version before its
+immutable GitHub Release exists. The existing manifest must continue to point
+at the latest release that users can actually download.
+
+After a Home release succeeds, open a separate reviewed pull request based on
+the attested `release-metadata.json`, `SHA256SUMS`, and published release:
+
+1. Verify the immutable `home-vX.Y.Z` release and download its attested metadata
+   and checksums.
+2. Update the distribution and app versions, `home-vX.Y.Z` package and release
+   URLs, and exact package SHA-256 in `site/public/manifest.json`.
+3. Do not advertise a Linux image or sensor release that was not published.
+   While Linux publication remains blocked, remove stale Linux download claims
+   rather than changing them to the component-only `sensor-vX.Y.Z` tag.
+4. Update the site's static fallback version and download URL to the same
+   published Home release.
+5. Require normal CI and independent pull-request approval, merge the manifest
+   PR, and verify the deployed `/manifest.json` and package URL byte-for-byte.
+
+The release workflow intentionally cannot push this update to protected
+`main`. Website state therefore remains a separately reviewed post-release
+publication action.
+
 ## Independent verification
 
 Download `RELEASE-VERIFICATION.md` first. Treat that attested asset as the
@@ -231,8 +272,9 @@ and their two matching `.sha256` files from the pinned release and verify both
 provenance and bytes:
 
 ```bash
-RELEASE_COMMIT="$(git rev-parse 'vX.Y.Z^{commit}')"
-gh release verify vX.Y.Z --repo rocketweb/squirrelops-home
+RELEASE_TAG=home-vX.Y.Z
+RELEASE_COMMIT="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+gh release verify "$RELEASE_TAG" --repo rocketweb/squirrelops-home
 gh attestation verify RELEASE-VERIFICATION.md \
   --repo rocketweb/squirrelops-home \
   --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \

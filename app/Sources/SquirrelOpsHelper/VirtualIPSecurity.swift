@@ -254,10 +254,9 @@ final class VirtualIPOwnershipStore {
                 remaining -= written
             }
         }
-        guard writeSucceeded,
-              fsync(descriptor) == 0,
-              close(descriptor) == 0 else {
-            _ = close(descriptor)
+        let syncSucceeded = writeSucceeded && fsync(descriptor) == 0
+        let closeSucceeded = close(descriptor) == 0
+        guard syncSucceeded, closeSucceeded else {
             throw RPCError.internalError(
                 "Could not durably write virtual-IP ownership state"
             )
@@ -278,12 +277,14 @@ final class VirtualIPOwnershipStore {
         )
 
         let directoryDescriptor = open(parentURL.path, O_RDONLY)
-        guard directoryDescriptor >= 0,
-              fsync(directoryDescriptor) == 0,
-              close(directoryDescriptor) == 0 else {
-            if directoryDescriptor >= 0 {
-                _ = close(directoryDescriptor)
-            }
+        guard directoryDescriptor >= 0 else {
+            throw RPCError.internalError(
+                "Could not open virtual-IP ownership directory"
+            )
+        }
+        let directorySyncSucceeded = fsync(directoryDescriptor) == 0
+        let directoryCloseSucceeded = close(directoryDescriptor) == 0
+        guard directorySyncSucceeded, directoryCloseSucceeded else {
             throw RPCError.internalError(
                 "Could not durably commit virtual-IP ownership state"
             )

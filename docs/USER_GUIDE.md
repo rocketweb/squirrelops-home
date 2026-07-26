@@ -22,7 +22,9 @@ SquirrelOps Home is a local-first home network security platform. It passively m
 
 - Docker Engine and Docker Compose v2
 - Linux ARM64 (Raspberry Pi 3/4/5) or x86_64 (NAS, general Linux)
-- Network access: the container runs with host networking and `NET_RAW`/`NET_ADMIN` capabilities
+- Network access: the unprivileged sensor stays on a private bridge; only the
+  constrained network-helper sidecar uses host networking with
+  `NET_RAW`/`NET_ADMIN`
 - Do not use the v1.1.14 installer for a new deployment. A compromised sensor
   would inherit broad authority over the host network.
 
@@ -797,6 +799,56 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 
 The sensor always falls back to local classification and deterministic decoy names if AI is unavailable. No alert is generated for provider failures.
 
+### Recovering Legacy macOS Network State
+
+An upgrade from a pre-2.0 installation stops if it cannot prove that every old
+SquirrelOps loopback alias, proxy-ARP publication, and PF rule is gone. This is
+intentional: the installer will not treat the sensor-writable legacy database
+as trusted root instructions.
+
+First inspect the recorded legacy rows and the live state. These commands do
+not change the system:
+
+```bash
+sudo sqlite3 -separator ' | ' \
+  /Library/SquirrelOps/sensor/data/squirrelops.db \
+  'SELECT DISTINCT ip_address, interface FROM virtual_ips WHERE released_at IS NULL;'
+sudo /sbin/pfctl -a com.apple/squirrelops -sr
+sudo /sbin/pfctl -a com.apple/squirrelops -sn
+/sbin/ifconfig lo0 | /usr/bin/awk '$1 == "inet" { print }'
+/usr/sbin/arp -an | /usr/bin/grep -i published
+```
+
+Review every reported IP and interface. Do not remove an address assigned to a
+physical interface, and do not delete a published ARP entry owned by another
+application. If the database is missing or corrupt, or ownership is unclear,
+stop and request support rather than guessing.
+
+For each IP that you have independently confirmed is a stale SquirrelOps
+virtual IP, run the following with its exact recorded interface:
+
+```bash
+IP=192.168.1.200
+INTERFACE=en0
+sudo /usr/sbin/arp -d "$IP" pub ifscope "$INTERFACE"
+sudo /sbin/ifconfig lo0 inet "$IP" -alias
+```
+
+After every confirmed SquirrelOps alias and proxy entry is absent, clear only
+the dedicated SquirrelOps PF anchor and verify the result:
+
+```bash
+sudo /sbin/pfctl -a com.apple/squirrelops -F all
+sudo /sbin/pfctl -a com.apple/squirrelops -sr
+sudo /sbin/pfctl -a com.apple/squirrelops -sn
+/sbin/ifconfig lo0 | /usr/bin/awk '$1 == "inet" { print }'
+/usr/sbin/arp -an | /usr/bin/grep -i published || true
+```
+
+The two PF queries should print no rules, the stale `/32` alias should be gone
+from `lo0`, and no stale SquirrelOps entry should be marked `published`. Then
+run the 2.0 package again.
+
 ### Uninstalling
 
 **Docker sensor:**
@@ -807,7 +859,7 @@ sudo rm -rf /opt/squirrelops
 
 **macOS sensor:**
 ```bash
-sudo bash /Library/SquirrelOps/uninstall.sh
+sudo bash /Library/SquirrelOps/sensor/uninstall.sh
 ```
 
 The uninstaller stops the services and asks before deleting the private sensor
