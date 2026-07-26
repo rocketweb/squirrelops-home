@@ -1967,6 +1967,12 @@ func runCommand(
     }
 
     try process.run()
+    // Process owns the duplicated child-side descriptors after launch. Close
+    // the parent's copies so readers observe EOF when the child exits and the
+    // parent cannot keep a full output pipe alive indefinitely.
+    try? stdoutPipe.fileHandleForWriting.close()
+    try? stderrPipe.fileHandleForWriting.close()
+    try? inputPipe?.fileHandleForReading.close()
     let start = DispatchTime.now().uptimeNanoseconds
     guard timeoutNanoseconds <= UInt64.max - start else {
         if process.isRunning {
@@ -1981,7 +1987,7 @@ func runCommand(
     let stderrBox = CommandOutputBox(limit: outputLimitBytes)
     let outputReaders = DispatchGroup()
     outputReaders.enter()
-    DispatchQueue.global(qos: .utility).async {
+    DispatchQueue.global(qos: .userInitiated).async {
         defer { outputReaders.leave() }
         drainCommandOutput(
             stdoutPipe.fileHandleForReading,
@@ -1989,7 +1995,7 @@ func runCommand(
         )
     }
     outputReaders.enter()
-    DispatchQueue.global(qos: .utility).async {
+    DispatchQueue.global(qos: .userInitiated).async {
         defer { outputReaders.leave() }
         drainCommandOutput(
             stderrPipe.fileHandleForReading,
