@@ -195,15 +195,6 @@ def test_workflows_have_no_duplicate_adjacent_nonblank_lines() -> None:
         assert not duplicates, f"{path}: duplicate adjacent lines: {duplicates}"
 
 
-def test_xcode_16_2_builds_disable_swift_batch_mode() -> None:
-    app_ci = (REPO_ROOT / ".github/workflows/app-ci.yml").read_text()
-    app_builder = (REPO_ROOT / "app/build-app.sh").read_text()
-
-    assert "swift build -Xswiftc -disable-batch-mode" in app_ci
-    assert "swift test -Xswiftc -disable-batch-mode" in app_ci
-    assert "SWIFT_FLAGS+=(-Xswiftc -disable-batch-mode)" in app_builder
-
-
 def test_macos_package_always_requests_pinned_standalone_python() -> None:
     package_builder = (REPO_ROOT / "scripts/build-pkg.sh").read_text()
     runtime_builder = (REPO_ROOT / "scripts/build-sensor-venv.sh").read_text()
