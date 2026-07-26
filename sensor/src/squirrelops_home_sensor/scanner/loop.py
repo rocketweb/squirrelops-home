@@ -15,6 +15,7 @@ import ipaddress
 import logging
 import socket
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -35,6 +36,22 @@ DEFAULT_SCAN_PORTS = [
     3000, 3001, 3389, 5000, 5173, 5353, 5900,
     8000, 8080, 8123, 8443, 8888, 9090, 49152,
 ]
+
+
+@dataclass(frozen=True)
+class ARPIdentityConflict:
+    """One ambiguous IP/MAC ownership claim from a single ARP snapshot."""
+
+    kind: str
+    ip_addresses: tuple[str, ...]
+    mac_addresses: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "ip_addresses": list(self.ip_addresses),
+            "mac_addresses": list(self.mac_addresses),
+        }
 
 
 def _local_interface_macs() -> set[str]:
@@ -58,13 +75,15 @@ def _local_interface_macs() -> set[str]:
 
 def _inventory_arp_results(
     arp_results: list[tuple[str, str]],
-) -> list[tuple[str, str]]:
+) -> tuple[list[tuple[str, str]], list[ARPIdentityConflict]]:
     """Normalize a raw ARP snapshot into unambiguous physical devices.
 
     Proxy-ARP creates duplicate rows that carry this sensor's own MAC. Those
     rows are useful to the virtual-IP conflict handler, but must never enter
-    device inventory. A single MAC seen at several IPs is represented by its
-    lowest address because the current inventory schema tracks one IP per MAC.
+    device inventory. Any IP claimed by several MACs or MAC observed at several
+    IPs is quarantined from inventory and port scanning. Selecting one claim
+    would let a forged lower address redirect an existing device row and erase
+    its last verified ports.
     """
     local_macs: set[str] = set()
     for mac in _local_interface_macs():
@@ -85,22 +104,58 @@ def _inventory_arp_results(
             continue
         macs_by_ip.setdefault(parsed_ip, set()).add(normalized_mac)
 
+    conflicts: list[ARPIdentityConflict] = []
     unambiguous: list[tuple[str, str]] = []
     for ip, macs in macs_by_ip.items():
         if len(macs) != 1:
-            logger.warning("Ignoring ambiguous ARP ownership for %s", ip)
+            conflict = ARPIdentityConflict(
+                kind="ip_claimed_by_multiple_macs",
+                ip_addresses=(ip,),
+                mac_addresses=tuple(sorted(macs)),
+            )
+            conflicts.append(conflict)
+            logger.warning(
+                "Quarantining ambiguous ARP claim: ip=%s macs=%s",
+                ip,
+                ",".join(conflict.mac_addresses),
+            )
             continue
         unambiguous.append((ip, next(iter(macs))))
 
-    lowest_ip_by_mac: dict[str, str] = {}
+    ips_by_mac: dict[str, set[str]] = {}
     for ip, mac in unambiguous:
-        current = lowest_ip_by_mac.get(mac)
-        if current is None or ipaddress.IPv4Address(ip) < ipaddress.IPv4Address(current):
-            lowest_ip_by_mac[mac] = ip
+        ips_by_mac.setdefault(mac, set()).add(ip)
 
-    return sorted(
-        ((ip, mac) for mac, ip in lowest_ip_by_mac.items()),
-        key=lambda item: ipaddress.IPv4Address(item[0]),
+    inventory: list[tuple[str, str]] = []
+    for mac, ips in ips_by_mac.items():
+        if len(ips) != 1:
+            ordered_ips = tuple(
+                sorted(ips, key=ipaddress.IPv4Address)
+            )
+            conflict = ARPIdentityConflict(
+                kind="mac_observed_at_multiple_ips",
+                ip_addresses=ordered_ips,
+                mac_addresses=(mac,),
+            )
+            conflicts.append(conflict)
+            logger.warning(
+                "Quarantining ambiguous ARP identity: mac=%s ips=%s",
+                mac,
+                ",".join(ordered_ips),
+            )
+            continue
+        inventory.append((next(iter(ips)), mac))
+
+    return (
+        sorted(inventory, key=lambda item: ipaddress.IPv4Address(item[0])),
+        sorted(
+            conflicts,
+            key=lambda conflict: (
+                conflict.kind,
+                conflict.ip_addresses,
+                conflict.mac_addresses,
+            ),
+        ),
     )
 
 
@@ -327,6 +382,7 @@ class ScanLoop:
                     "device_count": len(self._manager.get_known_devices()),
                     "scan_duration_ms": _elapsed_ms(scan_start),
                     "hosts_discovered": 0,
+                    "arp_identity_conflicts": 0,
                 },
             )
             return
@@ -342,7 +398,19 @@ class ScanLoop:
 
         # Normalize after conflict handling so the ownership logic still sees
         # every raw claimant, including this host's proxy-ARP responses.
-        inventory_results = _inventory_arp_results(arp_results)
+        inventory_results, arp_identity_conflicts = _inventory_arp_results(
+            arp_results
+        )
+        if self._security_analyzer is not None:
+            try:
+                await self._security_analyzer.record_arp_conflicts(
+                    [
+                        conflict.as_dict()
+                        for conflict in arp_identity_conflicts
+                    ]
+                )
+            except Exception:
+                logger.exception("Failed to record ARP identity conflicts")
 
         # Never feed active system decoys into discovery or the TCP scanner.
         real_arp_results: list[tuple[str, str]] = []
@@ -359,13 +427,16 @@ class ScanLoop:
                     "device_count": len(self._manager.get_known_devices()),
                     "scan_duration_ms": _elapsed_ms(scan_start),
                     "hosts_discovered": 0,
+                    "arp_identity_conflicts": len(arp_identity_conflicts),
                 },
             )
             return
 
         observed_device_ids: set[int] = set()
         observed_device_by_ip: dict[str, int] = {}
-        processing_succeeded = True
+        # An ambiguous ARP snapshot is not authoritative for online/offline
+        # reconciliation. Preserve the last trusted device addresses and ports.
+        processing_succeeded = not arp_identity_conflicts
         for ip, mac in real_arp_results:
             scan_result = ScanResult(ip_address=ip, mac_address=mac)
             try:
@@ -405,12 +476,21 @@ class ScanLoop:
                 )
                 port_scan_succeeded = True
                 enriched_count = 0
+                inconclusive_by_ip = getattr(
+                    port_results,
+                    "inconclusive_ports",
+                    {},
+                )
                 for ip in target_ips:
                     results = port_results.get(ip, [])
                     await self._manager.enrich_device_ports(
                         ip,
                         results,
                         device_id=observed_device_by_ip[ip],
+                        inconclusive_ports=inconclusive_by_ip.get(
+                            ip,
+                            frozenset(),
+                        ),
                     )
                     if results:
                         enriched_count += 1
@@ -487,6 +567,18 @@ class ScanLoop:
         else:
             await self._run_mdns_ssdp_enrichment(observed_device_by_ip)
 
+        try:
+            classified = await self._manager.finalize_pending_classifications(
+                observed_device_ids
+            )
+            if classified:
+                logger.info(
+                    "Optional AI classification enriched %d new devices",
+                    classified,
+                )
+        except Exception:
+            logger.exception("Optional AI device classification failed")
+
         # ---- Publish scan complete ----
         device_count = len(self._manager.get_known_devices())
         await self._bus.publish(
@@ -495,6 +587,7 @@ class ScanLoop:
                 "device_count": device_count,
                 "scan_duration_ms": _elapsed_ms(scan_start),
                 "hosts_discovered": len(real_arp_results),
+                "arp_identity_conflicts": len(arp_identity_conflicts),
             },
         )
 
@@ -539,9 +632,11 @@ class ScanLoop:
                 await self._manager.enrich_device_discovery(
                     ip_address=ip,
                     mdns_hostname=mdns.hostname if mdns else None,
+                    mdns_service_types=mdns.service_types if mdns else frozenset(),
                     upnp_friendly_name=ssdp.friendly_name if ssdp else None,
                     upnp_manufacturer=ssdp.manufacturer if ssdp else None,
                     upnp_model_name=ssdp.model_name if ssdp else None,
+                    upnp_server_header=ssdp.server_header if ssdp else None,
                     device_id=device_id,
                 )
                 enriched_count += 1

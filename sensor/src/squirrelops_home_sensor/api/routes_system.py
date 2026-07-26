@@ -18,6 +18,7 @@ from squirrelops_home_sensor.api.routes_scouts import (
     get_mimic_orchestrator,
     get_scout_scheduler,
 )
+from squirrelops_home_sensor.compatibility import SENSOR_API_PROTOCOL_VERSION
 from squirrelops_home_sensor.devices.decoy_filter import DECOY_DEVICE_FILTER
 from squirrelops_home_sensor.profiles import (
     PROFILE_SETTINGS,
@@ -55,6 +56,7 @@ class HealthResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     version: str
+    api_protocol_version: int
     profile: str
     learning_mode: bool
     device_count: int
@@ -140,6 +142,7 @@ async def status(
 
     return StatusResponse(
         version=__version__,
+        api_protocol_version=SENSOR_API_PROTOCOL_VERSION,
         profile=config.get("profile", "standard"),
         learning_mode=config.get("learning_mode", {}).get("enabled", False),
         device_count=device_count,
@@ -151,19 +154,54 @@ async def status(
 
 def _classification_mode(config: dict, profile: ResourceProfile) -> str:
     """Describe the classifier that can actually run with current settings."""
+    import ipaddress
     from urllib.parse import urlparse
 
     classifier = config.get("classifier", {})
-    endpoint = str(classifier.get("llm_endpoint") or "").strip()
+    provider = str(classifier.get("llm_provider") or "").strip().lower()
+    if provider in {"none", "off", "disabled"}:
+        return "local_signatures"
+    from squirrelops_home_sensor.devices.llm_classifier import (
+        CLOUD_LLM_PROVIDERS,
+        resolve_llm_endpoint,
+    )
+
+    endpoint = resolve_llm_endpoint(
+        provider,
+        classifier.get("llm_endpoint"),
+    )
     model = str(classifier.get("llm_model") or "").strip()
     if not endpoint or not model:
         return "local_signatures"
-
-    host = (urlparse(endpoint).hostname or "").lower()
-    if host in {"localhost", "127.0.0.1", "::1"}:
-        return "local_llm"
+    if provider in CLOUD_LLM_PROVIDERS and not classifier.get("llm_api_key"):
+        return "local_signatures"
     if profile is ResourceProfile.LITE:
         return "local_signatures"
+    if provider in CLOUD_LLM_PROVIDERS:
+        return "cloud_llm"
+
+    host = (urlparse(endpoint).hostname or "").lower().rstrip(".")
+    address_host = host.split("%", 1)[0]
+    try:
+        address = ipaddress.ip_address(address_host)
+    except ValueError:
+        address = None
+    is_local_destination = (
+        host == "localhost"
+        or host.endswith(".local")
+        or host.endswith(".localdomain")
+        or ("." not in host and ":" not in host)
+        or (
+            address is not None
+            and (
+                address.is_private
+                or address.is_loopback
+                or address.is_link_local
+            )
+        )
+    )
+    if is_local_destination:
+        return "local_llm"
     return "cloud_llm"
 
 
@@ -230,7 +268,7 @@ async def set_profile(
     old_mimic_limit = (
         mimic_orchestrator.max_mimics
         if mimic_orchestrator is not None
-        else config.get("scouts", {}).get("max_mimic_decoys", 10)
+        else config.get("scouts", {}).get("max_mimic_decoys", 5)
     )
     stopped_decoys: list[int] = []
     stopped_mimics: list[int] = []

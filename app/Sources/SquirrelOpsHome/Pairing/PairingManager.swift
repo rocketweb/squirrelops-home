@@ -149,6 +149,7 @@ extension SensorClient: PairingClientProtocol {
 
 public enum PairingError: Error, LocalizedError, Sendable {
     case noHostResolved
+    case manualCodeRequired
     case csrGenerationFailed(String)
     case decryptionFailed(String)
     case invalidCertificateData
@@ -159,6 +160,12 @@ public enum PairingError: Error, LocalizedError, Sendable {
         switch self {
         case .noHostResolved:
             return "Could not resolve host and port from discovered sensor"
+        case .manualCodeRequired:
+            return (
+                "For security, automatic setup-key delivery is disabled in "
+                + "packaged installs. Retrieve the key with the administrator "
+                + "command shown in the user guide, then enter it here."
+            )
         case .csrGenerationFailed(let detail):
             return "Failed to generate client certificate request: \(detail)"
         case .decryptionFailed(let detail):
@@ -281,7 +288,7 @@ public final class PairingManager: @unchecked Sendable {
         }
 
         // Use a TOFU session to accept the sensor's self-signed cert
-        let delegate = TLSPinningDelegate(caCertData: nil)
+        let delegate = TLSPinningDelegate(serverTrustMode: .pairingTOFU)
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 5
         let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
@@ -314,25 +321,22 @@ public final class PairingManager: @unchecked Sendable {
         FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/com.squirrelops.sensor.plist")
     }
 
-    /// Candidate paths for system and source-development sensor installs.
+    /// Source-development socket. Packaged installs require manual key entry.
     private static var localPairingSocketPaths: [String] {
         [
-            "/Library/SquirrelOps/sensor/run/pairing.sock",
             FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".squirrelops/sensor/run/pairing.sock").path,
         ]
     }
 
-    /// Auto-pair with a local sensor by fetching the pairing code over the
-    /// sensor's peer-verified Unix socket, then running the full challenge
-    /// response flow. The socket replaces the old loopback-TCP endpoint that
-    /// disclosed the code to any local process; the sensor checks our peer
-    /// credentials (and code signature, if configured) before responding.
+    /// Source-development convenience for a deliberately unsigned local socket.
+    /// Packaged installs never expose their setup key this way and require
+    /// administrator-assisted manual entry.
     public func autoLocalPair(sensor: DiscoveredSensor) async throws -> PairedSensor {
         guard let socketPath = PairingManager.localPairingSocketPaths.first(where: {
             FileManager.default.fileExists(atPath: $0)
         }) else {
-            throw PairingError.noHostResolved
+            throw PairingError.manualCodeRequired
         }
         let code = try await Task.detached(priority: .userInitiated) {
             try PairingManager.fetchLocalPairingCode(socketPath: socketPath)
@@ -698,14 +702,14 @@ public final class PairingManager: @unchecked Sendable {
         try deletePairedSensor()
     }
 
-    public static func loadCACertificateData(for sensor: PairedSensor) -> Data? {
-        try? KeychainStore.loadCertificateData(
+    public static func loadCACertificateData(for sensor: PairedSensor) throws -> Data {
+        try KeychainStore.loadCertificateData(
             label: "io.squirrelops.home.ca.\(sensor.credentialIdentifier)"
         )
     }
 
-    public static func loadClientIdentity(for sensor: PairedSensor) -> SecIdentity? {
-        try? KeychainStore.loadClientIdentity(
+    public static func loadClientIdentity(for sensor: PairedSensor) throws -> SecIdentity {
+        try KeychainStore.loadClientIdentity(
             certificateLabel: "io.squirrelops.home.client.\(sensor.credentialIdentifier)",
             privateKeyLabel: "io.squirrelops.home.key.\(sensor.credentialIdentifier)"
         )

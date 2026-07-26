@@ -47,8 +47,13 @@ CREATE TABLE home_alerts (
     decoy_id INTEGER,
     read_at TEXT,
     actioned_at TEXT,
-    event_seq INTEGER,
+    event_seq INTEGER REFERENCES events(seq),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE security_insight_state (
+    id INTEGER PRIMARY KEY,
+    alert_id INTEGER REFERENCES home_alerts(id)
 );
 
 CREATE TABLE events (
@@ -85,7 +90,7 @@ CREATE TABLE decoy_connections (
     request_path TEXT,
     credential_used TEXT,
     credential_id INTEGER,
-    event_seq INTEGER,
+    event_seq INTEGER REFERENCES events(seq),
     timestamp TEXT NOT NULL
 );
 
@@ -107,7 +112,7 @@ CREATE TABLE canary_observations (
     canary_hostname TEXT NOT NULL,
     queried_by_ip TEXT NOT NULL,
     queried_by_mac TEXT,
-    event_seq INTEGER,
+    event_seq INTEGER REFERENCES events(seq),
     observed_at TEXT NOT NULL
 );
 """
@@ -122,6 +127,7 @@ async def db():
     """In-memory SQLite database with full schema."""
     async with aiosqlite.connect(":memory:") as conn:
         conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA foreign_keys = ON")
         await conn.executescript(SCHEMA_SQL)
         await conn.commit()
         yield conn
@@ -141,12 +147,19 @@ async def _insert_alert(
     alert_type: str = "decoy.trip",
     severity: str = "high",
     created_at: datetime = RECENT,
+    event_seq: int | None = None,
 ) -> int:
     cursor = await db.execute(
         """INSERT INTO home_alerts
-           (incident_id, alert_type, severity, title, detail, created_at)
-           VALUES (?, ?, ?, 'Test', 'Detail', ?)""",
-        (incident_id, alert_type, severity, _iso_at(created_at)),
+           (incident_id, alert_type, severity, title, detail, event_seq, created_at)
+           VALUES (?, ?, ?, 'Test', 'Detail', ?, ?)""",
+        (
+            incident_id,
+            alert_type,
+            severity,
+            event_seq,
+            _iso_at(created_at),
+        ),
     )
     await db.commit()
     return cursor.lastrowid
@@ -185,12 +198,13 @@ async def _insert_decoy_connection(
     *,
     decoy_id: int,
     timestamp: datetime = RECENT,
+    event_seq: int | None = None,
 ) -> int:
     cursor = await db.execute(
         """INSERT INTO decoy_connections
-           (decoy_id, source_ip, port, timestamp)
-           VALUES (?, '192.168.1.99', 8445, ?)""",
-        (decoy_id, _iso_at(timestamp)),
+           (decoy_id, source_ip, port, event_seq, timestamp)
+           VALUES (?, '192.168.1.99', 8445, ?, ?)""",
+        (decoy_id, event_seq, _iso_at(timestamp)),
     )
     await db.commit()
     return cursor.lastrowid
@@ -212,12 +226,13 @@ async def _insert_canary_observation(
     *,
     credential_id: int,
     observed_at: datetime = RECENT,
+    event_seq: int | None = None,
 ) -> int:
     cursor = await db.execute(
         """INSERT INTO canary_observations
-           (credential_id, canary_hostname, queried_by_ip, observed_at)
-           VALUES (?, 'abc123.canary.squirrelops.io', '192.168.1.99', ?)""",
-        (credential_id, _iso_at(observed_at)),
+           (credential_id, canary_hostname, queried_by_ip, event_seq, observed_at)
+           VALUES (?, 'abc123.canary.squirrelops.io', '192.168.1.99', ?, ?)""",
+        (credential_id, event_seq, _iso_at(observed_at)),
     )
     await db.commit()
     return cursor.lastrowid
@@ -325,6 +340,28 @@ class TestAlertPurge:
         assert result.alerts_purged == 1
         assert await _count(db, "home_alerts") == 0
 
+    @pytest.mark.asyncio
+    async def test_clears_security_insight_reference_before_purge(self, db):
+        from squirrelops_home_sensor.alerts.retention import AlertRetentionService
+
+        alert_id = await _insert_alert(db, created_at=OLD)
+        await db.execute(
+            "INSERT INTO security_insight_state (alert_id) VALUES (?)",
+            (alert_id,),
+        )
+        await db.commit()
+
+        service = AlertRetentionService(db=db, retention_days=90)
+        result = await service.purge()
+
+        assert result.alerts_purged == 1
+        row = await (
+            await db.execute(
+                "SELECT alert_id FROM security_insight_state"
+            )
+        ).fetchone()
+        assert row["alert_id"] is None
+
 
 class TestEventPurge:
     """Events older than 90 days are purged."""
@@ -357,6 +394,66 @@ class TestEventPurge:
         # Insert a new event -- its seq must be higher than the purged one
         seq2 = await _insert_event(db, created_at=RECENT)
         assert seq2 > seq1
+
+    @pytest.mark.asyncio
+    async def test_purges_old_event_after_referenced_children(self, db):
+        from squirrelops_home_sensor.alerts.retention import AlertRetentionService
+
+        event_seq = await _insert_event(db, created_at=OLD)
+        decoy_id = await _insert_decoy(db)
+        await _insert_decoy_connection(
+            db,
+            decoy_id=decoy_id,
+            timestamp=OLD,
+            event_seq=event_seq,
+        )
+        credential_id = await _insert_credential(db)
+        await _insert_canary_observation(
+            db,
+            credential_id=credential_id,
+            observed_at=OLD,
+            event_seq=event_seq,
+        )
+
+        result = await AlertRetentionService(db=db).purge()
+
+        assert result.events_purged == 1
+        assert result.decoy_connections_purged == 1
+        assert result.canary_observations_purged == 1
+
+    @pytest.mark.asyncio
+    async def test_detaches_surviving_records_from_purged_event(self, db):
+        from squirrelops_home_sensor.alerts.retention import AlertRetentionService
+
+        event_seq = await _insert_event(db, created_at=OLD)
+        await _insert_alert(db, created_at=RECENT, event_seq=event_seq)
+        decoy_id = await _insert_decoy(db)
+        await _insert_decoy_connection(
+            db,
+            decoy_id=decoy_id,
+            timestamp=RECENT,
+            event_seq=event_seq,
+        )
+        credential_id = await _insert_credential(db)
+        await _insert_canary_observation(
+            db,
+            credential_id=credential_id,
+            observed_at=RECENT,
+            event_seq=event_seq,
+        )
+
+        result = await AlertRetentionService(db=db).purge()
+
+        assert result.events_purged == 1
+        for table in (
+            "home_alerts",
+            "decoy_connections",
+            "canary_observations",
+        ):
+            row = await (
+                await db.execute(f"SELECT event_seq FROM {table}")
+            ).fetchone()
+            assert row["event_seq"] is None
 
 
 class TestDecoyConnectionPurge:
@@ -495,3 +592,58 @@ class TestPurgeResult:
         assert result.canary_observations_purged == 0
         assert result.incidents_purged == 0
         assert result.total_purged == 0
+
+
+class TestRetentionFailureSafety:
+    """A failed daily purge cannot leave only part of the history removed."""
+
+    @pytest.mark.asyncio
+    async def test_late_failure_rolls_back_every_retention_delete(self, db):
+        from squirrelops_home_sensor.alerts.retention import AlertRetentionService
+
+        await _insert_alert(db, created_at=OLD)
+        await _insert_event(db, created_at=OLD)
+        await db.execute(
+            """CREATE TRIGGER fail_event_retention
+               BEFORE DELETE ON events
+               BEGIN
+                   SELECT RAISE(ABORT, 'forced late retention failure');
+               END"""
+        )
+        await db.commit()
+
+        service = AlertRetentionService(db=db, retention_days=90)
+        with pytest.raises(
+            aiosqlite.IntegrityError,
+            match="forced late retention failure",
+        ):
+            await service.purge()
+
+        assert await _count(db, "home_alerts") == 1
+        assert await _count(db, "events") == 1
+
+    @pytest.mark.asyncio
+    async def test_successful_purge_is_committed_before_connection_close(
+        self,
+        tmp_path,
+    ):
+        """The scheduler's dedicated connection must persist its purge."""
+        from squirrelops_home_sensor.alerts.retention import AlertRetentionService
+
+        db_path = tmp_path / "retention.db"
+        old_event_seq: int
+        async with aiosqlite.connect(db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            await conn.execute("PRAGMA foreign_keys = ON")
+            await conn.executescript(SCHEMA_SQL)
+            old_event_seq = await _insert_event(conn, created_at=OLD)
+            await AlertRetentionService(db=conn, retention_days=90).purge()
+
+        async with aiosqlite.connect(db_path) as reopened:
+            row = await (
+                await reopened.execute(
+                    "SELECT COUNT(*) FROM events WHERE seq = ?",
+                    (old_event_seq,),
+                )
+            ).fetchone()
+            assert row[0] == 0

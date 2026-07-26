@@ -6,7 +6,7 @@ import base64
 import ipaddress
 import json
 import ssl
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cryptography import x509
@@ -16,6 +16,7 @@ from squirrelops_home_sensor.decoys.tls_identity import (
     generate_host_tls_identity,
     server_ssl_context,
 )
+from squirrelops_home_sensor.decoys.types import mimic as mimic_module
 from squirrelops_home_sensor.decoys.types.mimic import (
     _STATUS_TEXTS,
     MimicDecoy,
@@ -73,6 +74,233 @@ class TestMimicEndpointHTTP:
 
         assert len(events) == 1
         assert events[0].dest_port == 0
+        assert events[0].request_path is None
+
+    @pytest.mark.asyncio
+    async def test_admission_drop_still_records_connection(
+        self,
+        monkeypatch,
+    ) -> None:
+        """A saturated async endpoint alerts before closing excess work."""
+        monkeypatch.setattr(mimic_module, "_MAX_CONCURRENT_CONNECTIONS", 1)
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "ok",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values=set(),
+        )
+        await endpoint.start()
+        first_reader, first_writer = await asyncio.open_connection(
+            "127.0.0.1",
+            endpoint.bind_port,
+        )
+        del first_reader
+        second_writer = None
+        try:
+            first_writer.write(b"GET / HTTP/1.1\r\nX-Hold: ")
+            await first_writer.drain()
+            for _ in range(50):
+                if endpoint._active_connections == 1:
+                    break
+                await asyncio.sleep(0.01)
+            assert endpoint._active_connections == 1
+
+            second_reader, second_writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            second_port = second_writer.get_extra_info("sockname")[1]
+            await asyncio.wait_for(second_reader.read(), timeout=1)
+            for _ in range(50):
+                if any(event.source_port == second_port for event in events):
+                    break
+                await asyncio.sleep(0.01)
+            assert any(event.source_port == second_port for event in events)
+        finally:
+            first_writer.close()
+            await first_writer.wait_closed()
+            if second_writer is not None:
+                second_writer.close()
+                await second_writer.wait_closed()
+            await endpoint.stop()
+
+    @pytest.mark.asyncio
+    async def test_slow_headers_have_absolute_deadline(
+        self,
+        monkeypatch,
+    ) -> None:
+        """Header drips cannot renew the request lifetime indefinitely."""
+        monkeypatch.setattr(
+            mimic_module,
+            "_HTTP_REQUEST_DEADLINE_SECONDS",
+            0.08,
+        )
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "must-not-serve",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values=set(),
+        )
+        await endpoint.start()
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1",
+            endpoint.bind_port,
+        )
+        try:
+            writer.write(b"GET / HTTP/1.1\r\n")
+            await writer.drain()
+            for index in range(30):
+                await asyncio.sleep(0.01)
+                try:
+                    writer.write(f"X-Slow-{index}: value\r\n".encode())
+                    await writer.drain()
+                except (ConnectionError, RuntimeError):
+                    break
+            try:
+                response = await asyncio.wait_for(reader.read(), timeout=1)
+            except (ConnectionError, OSError):
+                response = b""
+        finally:
+            writer.close()
+            # The server deliberately aborts this expired connection. Waiting
+            # for the peer-side close can replay its expected BrokenPipeError.
+            writer.transport.abort()
+            await endpoint.stop()
+
+        assert b"must-not-serve" not in response
+        assert len(events) == 1
+        assert events[0].request_path == "/"
+
+    @pytest.mark.asyncio
+    async def test_records_oversized_request_line_as_connection_trip(self) -> None:
+        """A parser limit violation must not suppress an accepted decoy connection."""
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "ok",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values=set(),
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            writer.write(
+                b"GET /"
+                + (b"a" * (70 * 1024))
+                + b" HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            )
+            await writer.drain()
+            await asyncio.wait_for(reader.read(), timeout=1.0)
+            writer.close()
+            await writer.wait_closed()
+            for _ in range(20):
+                if events:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].dest_port == 0
+        assert events[0].request_path is None
+
+    @pytest.mark.parametrize(
+        "header_block",
+        [
+            b"".join(
+                f"X-Field-{index}: value\r\n".encode("ascii")
+                for index in range(101)
+            ),
+            b"X-Oversized-Line: " + (b"a" * (9 * 1024)) + b"\r\n",
+            b"".join(
+                f"X-Large-{index}: ".encode("ascii")
+                + (b"a" * 1024)
+                + b"\r\n"
+                for index in range(40)
+            ),
+        ],
+        ids=["field-count", "line-bytes", "section-bytes"],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_bounded_header_limit_without_suppressing_trip(
+        self,
+        header_block: bytes,
+    ) -> None:
+        """Excess headers must stop parsing while preserving the trip signal."""
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "must-not-serve",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values=set(),
+        )
+        await endpoint.start()
+
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1",
+                endpoint.bind_port,
+            )
+            writer.write(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\n"
+                + header_block
+                + b"\r\n"
+            )
+            await writer.drain()
+            response = await asyncio.wait_for(reader.read(), timeout=1.0)
+            writer.close()
+            await writer.wait_closed()
+            for _ in range(20):
+                if events:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            await endpoint.stop()
+
+        assert b"must-not-serve" not in response
+        assert len(events) == 1
         assert events[0].request_path is None
 
     @pytest.mark.asyncio
@@ -183,6 +411,205 @@ class TestMimicEndpointHTTP:
         finally:
             await endpoint.stop()
 
+        assert len(events) == 1
+        assert events[0].credential_used == "secret-token-abc123"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_authorization_cannot_downgrade_credential_trip(
+        self,
+    ) -> None:
+        """Every bounded Authorization field remains visible to detection."""
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={"secret-token-abc123"},
+        )
+        await endpoint.start()
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1",
+            endpoint.bind_port,
+        )
+        try:
+            writer.write(
+                b"GET / HTTP/1.1\r\n"
+                b"Authorization: Bearer secret-token-abc123\r\n"
+                b"aUtHoRiZaTiOn: Bearer harmless\r\n\r\n"
+            )
+            await writer.drain()
+            await asyncio.wait_for(reader.read(), timeout=1)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].credential_used == "secret-token-abc123"
+
+    @pytest.mark.asyncio
+    async def test_header_credential_survives_body_stall_deadline(
+        self,
+        monkeypatch,
+    ) -> None:
+        """A stalled declared body cannot downgrade a parsed header credential."""
+        monkeypatch.setattr(
+            mimic_module,
+            "_HTTP_REQUEST_DEADLINE_SECONDS",
+            0.1,
+        )
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={"secret-token-abc123"},
+        )
+        await endpoint.start()
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1",
+            endpoint.bind_port,
+        )
+        try:
+            writer.write(
+                b"POST /login HTTP/1.1\r\n"
+                b"Authorization: Bearer secret-token-abc123\r\n"
+                b"Content-Length: 1024\r\n\r\n"
+            )
+            await writer.drain()
+            await asyncio.wait_for(reader.read(), timeout=1)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].request_path == "/login"
+        assert events[0].credential_used == "secret-token-abc123"
+
+    @pytest.mark.asyncio
+    async def test_body_credential_survives_body_stall_deadline(
+        self,
+        monkeypatch,
+    ) -> None:
+        """A bounded body prefix remains detectable when framing never completes."""
+        monkeypatch.setattr(
+            mimic_module,
+            "_HTTP_REQUEST_DEADLINE_SECONDS",
+            0.1,
+        )
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "POST",
+                "status": 200,
+                "headers": {},
+                "body": "",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={"secret-token-abc123"},
+        )
+        await endpoint.start()
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1",
+            endpoint.bind_port,
+        )
+        try:
+            writer.write(
+                b"POST /login HTTP/1.1\r\n"
+                b"Content-Length: 1024\r\n\r\n"
+                b"secret-token-abc123"
+            )
+            await writer.drain()
+            await asyncio.wait_for(reader.read(), timeout=1)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            await endpoint.stop()
+
+        assert len(events) == 1
+        assert events[0].request_path == "/login"
+        assert events[0].credential_used == "secret-token-abc123"
+
+    @pytest.mark.asyncio
+    async def test_credential_trip_is_recorded_before_response_io(
+        self,
+        monkeypatch,
+    ) -> None:
+        """A peer that stops reading cannot downgrade a parsed credential."""
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=0,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "response",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=events.append,
+            credential_values={"secret-token-abc123"},
+        )
+        observed_before_send = False
+
+        async def fail_response_io(writer, route) -> None:
+            nonlocal observed_before_send
+            del writer, route
+            observed_before_send = (
+                len(events) == 1
+                and events[0].credential_used == "secret-token-abc123"
+            )
+            raise BrokenPipeError
+
+        monkeypatch.setattr(endpoint, "_send_response", fail_response_io)
+        await endpoint.start()
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1",
+            endpoint.bind_port,
+        )
+        try:
+            writer.write(
+                b"GET / HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Authorization: Bearer secret-token-abc123\r\n\r\n"
+            )
+            await writer.drain()
+            try:
+                await asyncio.wait_for(reader.read(), timeout=1)
+            except (ConnectionError, OSError):
+                pass
+        finally:
+            writer.close()
+            writer.transport.abort()
+            await endpoint.stop()
+
+        assert observed_before_send is True
         assert len(events) == 1
         assert events[0].credential_used == "secret-token-abc123"
 
@@ -811,6 +1238,33 @@ class TestMimicEndpointHTTP:
 
 class TestMimicEndpointBanner:
     """Verify banner-replay handler for non-HTTP ports."""
+
+    @pytest.mark.asyncio
+    async def test_unexpected_banner_io_failure_still_records_trip(self) -> None:
+        """An attacker-triggered handler failure must not suppress detection."""
+        events = []
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=2222,
+            routes=[],
+            server_header=None,
+            protocol_banner="SSH-2.0-Test",
+            connection_callback=events.append,
+            credential_values=set(),
+        )
+        reader = MagicMock()
+        writer = MagicMock()
+        writer.get_extra_info.return_value = ("192.0.2.10", 49152)
+        writer.drain = AsyncMock(side_effect=ValueError("injected write failure"))
+        writer.wait_closed = AsyncMock()
+
+        await endpoint._handle_banner(reader, writer)
+
+        assert len(events) == 1
+        assert events[0].source_ip == "192.0.2.10"
+        assert events[0].source_port == 49152
+        assert events[0].dest_port == 2222
+        assert events[0].credential_used is None
 
     @pytest.mark.asyncio
     async def test_sends_protocol_banner(self) -> None:

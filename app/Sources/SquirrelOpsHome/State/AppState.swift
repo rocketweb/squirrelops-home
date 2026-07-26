@@ -86,6 +86,10 @@ public final class AppState {
     /// Set by App.swift to wire up credential cleanup and navigation.
     public var onRepairRequested: (() -> Void)?
 
+    /// Called for newly inserted or materially revised live alerts. Initial
+    /// REST synchronization intentionally does not call this hook.
+    public var onAlertNotificationsRequested: (([AlertSummary]) -> Void)?
+
     public var menuBarStatus: MenuBarStatus {
         switch connectionState {
         case .live, .connected, .syncing:
@@ -93,7 +97,7 @@ public final class AppState {
             if hasCriticalAlert { return .criticalAlert }
             else if hasUnreadAlerts { return .alertsPresent }
             else { return .connected }
-        case .disconnected, .connecting, .authFailed:
+        case .disconnected, .connecting, .authFailed, .incompatible:
             return .disconnected
         }
     }
@@ -152,12 +156,7 @@ public final class AppState {
     public static func activeDecoyDeploymentCount(
         in decoys: [DecoySummary]
     ) -> Int {
-        let active = decoys.filter(\.isActiveDeployment)
-        let classicListeners = active.filter(\.isHostListener).count
-        let fakeHosts = DecoyHostGroup.grouping(
-            active.filter(\.isVirtualMimic)
-        ).count
-        return classicListeners + fakeHosts
+        DecoyDeploymentSummary.active(in: decoys).deploymentCount
     }
 
     public static func visibleDevices(
@@ -351,7 +350,8 @@ public final class AppState {
                 deviceCount: status.deviceCount,
                 decoyCount: status.decoyCount,
                 alertCount: 0,
-                version: status.version
+                version: status.version,
+                apiProtocolVersion: status.apiProtocolVersion
             )
         }
     }
@@ -365,7 +365,8 @@ public final class AppState {
                 deviceCount: status.deviceCount,
                 decoyCount: status.decoyCount,
                 alertCount: status.alertCount,
-                version: status.version
+                version: status.version,
+                apiProtocolVersion: status.apiProtocolVersion
             )
         }
     }

@@ -1,10 +1,9 @@
 """Local pairing over an authenticated Unix domain socket.
 
 The setup key is never exposed through loopback HTTP or a shared temporary
-file. Production accepts root or the exact installed SquirrelOps app binary,
-after checking its executable path, code-signature integrity, and designated
-code requirement. Source builds can explicitly opt into console-UID
-authorization for development.
+file. Production accepts root or a running SquirrelOps app whose immutable
+socket audit token satisfies the pinned dynamic code requirement. Source
+builds can explicitly opt into console-UID authorization for development.
 """
 
 from __future__ import annotations
@@ -16,41 +15,41 @@ import json
 import logging
 import os
 import stat
-import struct
-import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# macOS getsockopt level/option for the peer PID of a Unix socket.
+# macOS getsockopt level/option for the audit token captured when the Unix
+# socket connection is established.
 _SOL_LOCAL = 0
-_LOCAL_PEERPID = 0x002
-_PROC_PIDPATHINFO_MAXSIZE = 4096
+_LOCAL_PEERTOKEN = 0x006
+_AUDIT_TOKEN_SIZE = 32
+_CF_STRING_ENCODING_UTF8 = 0x08000100
 
 
 def authorize_peer(
     uid: int | None,
-    pid: int | None,
+    audit_token: bytes | None,
     *,
     console_uid: int | None,
     allow_unsigned_local: bool,
-    allowed_app_path: str | None,
     allowed_app_requirement: str | None,
-    verify_application: Callable[[int, str, str], bool],
+    verify_application: Callable[[bytes, str], bool],
 ) -> bool:
     """Return whether a peer may receive the one-time setup key."""
     if uid is None:
         return False
     if uid == 0:
         return True
-    if console_uid is None or uid != console_uid or pid is None:
+    if console_uid is None or uid != console_uid or audit_token is None:
         return False
     if allow_unsigned_local:
         return True
-    if not allowed_app_path or not allowed_app_requirement:
+    if not allowed_app_requirement:
         return False
-    return verify_application(pid, allowed_app_path, allowed_app_requirement)
+    return verify_application(audit_token, allowed_app_requirement)
 
 
 def console_user_uid() -> int | None:
@@ -74,56 +73,173 @@ def get_peer_uid(sock) -> int | None:
         return None
 
 
-def get_peer_pid(sock) -> int | None:
-    """Peer PID of a connected Unix socket (macOS LOCAL_PEERPID)."""
+def get_peer_audit_token(sock) -> bytes | None:
+    """Immutable audit token captured for the connected Unix-socket peer."""
     try:
-        raw = sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERPID, 4)
-        return struct.unpack("i", raw)[0]
-    except (OSError, struct.error):
+        token = sock.getsockopt(_SOL_LOCAL, _LOCAL_PEERTOKEN, _AUDIT_TOKEN_SIZE)
+    except OSError:
         return None
-
-
-def _exe_path_for_pid(pid: int) -> str | None:
-    try:
-        libproc = ctypes.CDLL(ctypes.util.find_library("proc"), use_errno=True)
-        buf = ctypes.create_string_buffer(_PROC_PIDPATHINFO_MAXSIZE)
-        length = libproc.proc_pidpath(pid, buf, _PROC_PIDPATHINFO_MAXSIZE)
-        if length <= 0:
-            return None
-        return buf.value.decode()
-    except (OSError, AttributeError, UnicodeDecodeError, TypeError):
+    if len(token) != _AUDIT_TOKEN_SIZE:
         return None
+    return token
 
 
 def verify_peer_application(
-    pid: int,
-    allowed_app_path: str,
+    audit_token: bytes,
     allowed_app_requirement: str,
 ) -> bool:
-    """Verify the peer path, signature integrity, and designated requirement."""
-    executable = _exe_path_for_pid(pid)
-    if not executable:
+    """Validate the connected process against a dynamic code requirement.
+
+    ``LOCAL_PEERTOKEN`` binds the lookup to the socket peer captured at
+    connection time, including its process generation. Resolving a PID to a
+    filesystem path later would allow a connect-then-exec identity swap.
+    """
+    if sys.platform != "darwin" or len(audit_token) != _AUDIT_TOKEN_SIZE:
         return False
+
+    security_path = ctypes.util.find_library("Security")
+    core_foundation_path = ctypes.util.find_library("CoreFoundation")
+    if not security_path or not core_foundation_path:
+        return False
+
+    core_foundation: ctypes.CDLL | None = None
+    retained: list[int] = []
     try:
-        if Path(executable).resolve(strict=True) != Path(allowed_app_path).resolve(strict=True):
-            return False
-        result = subprocess.run(
-            [
-                "/usr/bin/codesign",
-                "--verify",
-                "--strict",
-                f"-R={allowed_app_requirement}",
-                "--",
-                executable,
-            ],
-            capture_output=True,
-            timeout=10,
-            check=False,
+        security = ctypes.CDLL(security_path)
+        core_foundation = ctypes.CDLL(core_foundation_path)
+
+        core_foundation.CFDataCreate.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_ubyte),
+            ctypes.c_long,
+        ]
+        core_foundation.CFDataCreate.restype = ctypes.c_void_p
+        core_foundation.CFDictionaryCreate.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_void_p),
+            ctypes.c_long,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        core_foundation.CFDictionaryCreate.restype = ctypes.c_void_p
+        core_foundation.CFStringCreateWithCString.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+        ]
+        core_foundation.CFStringCreateWithCString.restype = ctypes.c_void_p
+        core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+        core_foundation.CFRelease.restype = None
+
+        security.SecCodeCopyGuestWithAttributes.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        security.SecCodeCopyGuestWithAttributes.restype = ctypes.c_int32
+        security.SecRequirementCreateWithString.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        security.SecRequirementCreateWithString.restype = ctypes.c_int32
+        security.SecCodeCheckValidity.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        security.SecCodeCheckValidity.restype = ctypes.c_int32
+
+        token_buffer = (ctypes.c_ubyte * _AUDIT_TOKEN_SIZE).from_buffer_copy(
+            audit_token
         )
-        return result.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        logger.debug("App identity verification failed for pid %s", pid, exc_info=True)
+        token_data = core_foundation.CFDataCreate(
+            None,
+            token_buffer,
+            _AUDIT_TOKEN_SIZE,
+        )
+        if not token_data:
+            return False
+        retained.append(int(token_data))
+
+        audit_key = ctypes.c_void_p.in_dll(
+            security,
+            "kSecGuestAttributeAudit",
+        ).value
+        if not audit_key:
+            return False
+        keys = (ctypes.c_void_p * 1)(audit_key)
+        values = (ctypes.c_void_p * 1)(token_data)
+        attributes = core_foundation.CFDictionaryCreate(
+            None,
+            keys,
+            values,
+            1,
+            None,
+            None,
+        )
+        if not attributes:
+            return False
+        retained.append(int(attributes))
+
+        requirement_text = core_foundation.CFStringCreateWithCString(
+            None,
+            allowed_app_requirement.encode("utf-8"),
+            _CF_STRING_ENCODING_UTF8,
+        )
+        if not requirement_text:
+            return False
+        retained.append(int(requirement_text))
+
+        requirement = ctypes.c_void_p()
+        if (
+            security.SecRequirementCreateWithString(
+                requirement_text,
+                0,
+                ctypes.byref(requirement),
+            )
+            != 0
+            or not requirement.value
+        ):
+            return False
+        requirement_value = requirement.value
+        if requirement_value is None:
+            return False
+        retained.append(requirement_value)
+
+        guest = ctypes.c_void_p()
+        if (
+            security.SecCodeCopyGuestWithAttributes(
+                None,
+                attributes,
+                0,
+                ctypes.byref(guest),
+            )
+            != 0
+            or not guest.value
+        ):
+            return False
+        guest_value = guest.value
+        if guest_value is None:
+            return False
+        retained.append(guest_value)
+        return (
+            security.SecCodeCheckValidity(
+                guest,
+                0,
+                requirement,
+            )
+            == 0
+        )
+    except (OSError, AttributeError, TypeError, ValueError):
+        logger.debug("App audit-token verification failed", exc_info=True)
         return False
+    finally:
+        if core_foundation is not None:
+            for item in reversed(retained):
+                core_foundation.CFRelease(ctypes.c_void_p(item))
 
 
 class LocalPairingServer:
@@ -134,15 +250,13 @@ class LocalPairingServer:
         socket_path: str,
         get_code: Callable[[], str],
         *,
-        allowed_app_path: str | None,
         allowed_app_requirement: str | None,
         allow_unsigned_local: bool = False,
         console_uid_provider: Callable[[], int | None] = console_user_uid,
-        verify_application: Callable[[int, str, str], bool] = verify_peer_application,
+        verify_application: Callable[[bytes, str], bool] = verify_peer_application,
     ) -> None:
         self._socket_path = Path(socket_path)
         self._get_code = get_code
-        self._allowed_app_path = allowed_app_path
         self._allowed_app_requirement = allowed_app_requirement
         self._allow_unsigned_local = allow_unsigned_local
         self._console_uid_provider = console_uid_provider
@@ -151,18 +265,21 @@ class LocalPairingServer:
 
     def is_authorized(self, sock) -> bool:
         uid = get_peer_uid(sock)
-        pid = get_peer_pid(sock)
+        audit_token = get_peer_audit_token(sock)
         authorized = authorize_peer(
             uid,
-            pid,
+            audit_token,
             console_uid=self._console_uid_provider(),
             allow_unsigned_local=self._allow_unsigned_local,
-            allowed_app_path=self._allowed_app_path,
             allowed_app_requirement=self._allowed_app_requirement,
             verify_application=self._verify_application,
         )
         if not authorized:
-            logger.warning("Local pairing rejected peer uid=%s pid=%s", uid, pid)
+            logger.warning(
+                "Local pairing rejected peer uid=%s audit_token=%s",
+                uid,
+                "present" if audit_token is not None else "missing",
+            )
         return authorized
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -205,8 +322,8 @@ class LocalPairingServer:
             self._handle, path=str(self._socket_path)
         )
         # The signed desktop app runs as the console user while the sensor runs
-        # as _squirrelops. Filesystem mode permits the connection; SO_PEERCRED,
-        # exact executable matching, and codesign verification authorize it.
+        # as _squirrelops. Filesystem mode permits the connection; getpeereid,
+        # the captured audit token, and dynamic code validation authorize it.
         os.chmod(self._socket_path, 0o666)  # nosec B103
         logger.info("Local pairing socket listening at %s", self._socket_path)
 

@@ -135,7 +135,11 @@ class HomeAssistantDecoy(BaseDecoy):
     ) -> str | None:
         """Check if a planted credential appears in request headers or body."""
         # Check Authorization header
-        auth = headers.get("Authorization", "") or headers.get("authorization", "")
+        auth = "\n".join(
+            value
+            for key, value in headers.items()
+            if key.casefold() == "authorization"
+        )
         for cred_val in self._credential_values:
             if cred_val in auth:
                 return cred_val

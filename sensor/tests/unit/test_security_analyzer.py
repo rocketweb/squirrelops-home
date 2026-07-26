@@ -993,3 +993,79 @@ async def test_no_alert_for_expected_device_type(db, mock_event_bus):
     cursor = await db.execute("SELECT COUNT(*) as cnt FROM home_alerts")
     row = await cursor.fetchone()
     assert row["cnt"] == 0
+
+
+@pytest.mark.asyncio
+async def test_zero_device_group_is_resolved_and_recurrence_is_new(
+    db,
+    mock_event_bus,
+):
+    """A closed risky port cannot leave an unread zero-device stale alert."""
+    await _insert_test_device(db)
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+    risky = _make_device_dict(
+        1,
+        "192.168.1.100",
+        "AA:BB:CC:DD:EE:FF",
+        "smart_speaker",
+        frozenset({23}),
+        "test-device",
+    )
+
+    assert await analyzer.analyze_all_devices([risky]) == 1
+    await analyzer.analyze_all_devices([])
+
+    resolved = await (await db.execute(
+        "SELECT * FROM home_alerts ORDER BY id"
+    )).fetchone()
+    assert resolved["device_count"] == 0
+    assert resolved["title"].startswith("Resolved:")
+    assert resolved["read_at"] is not None
+    assert resolved["actioned_at"] is not None
+
+    assert await analyzer.analyze_all_devices([risky]) == 1
+    rows = await (await db.execute(
+        "SELECT device_count, read_at FROM home_alerts ORDER BY id"
+    )).fetchall()
+    assert [(row["device_count"], row["read_at"]) for row in rows] == [
+        (0, resolved["read_at"]),
+        (1, None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_arp_conflict_alert_is_deduplicated_and_auto_resolved(
+    db,
+    mock_event_bus,
+):
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+    conflicts = [{
+        "kind": "mac_observed_at_multiple_ips",
+        "ip_addresses": ["192.168.1.3", "192.168.1.50"],
+        "mac_addresses": ["AA:BB:CC:00:00:50"],
+    }]
+
+    await analyzer.record_arp_conflicts(conflicts)
+    await analyzer.record_arp_conflicts(conflicts)
+
+    rows = await (await db.execute(
+        "SELECT * FROM home_alerts "
+        "WHERE alert_type = 'security.arp_conflict'"
+    )).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["severity"] == "high"
+    assert rows[0]["device_count"] == 1
+    assert rows[0]["read_at"] is None
+    assert mock_event_bus.publish.await_count == 1
+
+    await analyzer.record_arp_conflicts([])
+
+    resolved = await (await db.execute(
+        "SELECT * FROM home_alerts "
+        "WHERE alert_type = 'security.arp_conflict'"
+    )).fetchone()
+    assert resolved["device_count"] == 0
+    assert resolved["title"].startswith("Resolved:")
+    assert resolved["read_at"] is not None
+    assert resolved["actioned_at"] is not None
+    assert mock_event_bus.publish.await_count == 2

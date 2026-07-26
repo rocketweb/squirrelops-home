@@ -11,6 +11,10 @@ struct PFIsolationTests {
         "to_ip": "192.168.1.200",
         "to_port": 10080,
     ]
+    private let testInterfaceAddresses = [
+        (interface: "lo0", address: "127.0.0.1"),
+        (interface: "en0", address: "192.168.1.18"),
+    ]
 
     @Test("Builds redirect-pass and default-deny alias rules")
     func buildsIsolatedRuleset() throws {
@@ -525,6 +529,70 @@ struct PFIsolationTests {
         }
     }
 
+    @Test("Listener ownership race quarantines and kills endpoint states")
+    func listenerRaceCleansRedirectStates() throws {
+        let endpoints: [[String: Any]] = [[
+            "ip": "192.168.1.200",
+            "direct_ports": [Int](),
+        ]]
+        // Normal flow first loads block-only quarantine before the alias is
+        // published. Even though the cached and fallback rules match, a state
+        // may have formed while the redirect rules were briefly live.
+        let live = try pfEndpointStateSignatures(
+            forwardingRules: [],
+            protectedEndpoints: endpoints,
+            interface: "en0"
+        )
+        var cache = cleanCache(with: live)
+        var calls: [[String]] = []
+
+        try quarantinePortForwardingAfterListenerRace(
+            protectedEndpoints: endpoints,
+            interface: "en0",
+            stateCache: &cache
+        ) { arguments, input in
+            calls.append(arguments)
+            if arguments == [
+                "-a", "com.apple/squirrelops", "-f", "-",
+            ] {
+                let text = input.flatMap {
+                    String(data: $0, encoding: .utf8)
+                } ?? ""
+                #expect(!text.contains("rdr pass"))
+                #expect(
+                    text.contains(
+                        "block drop in quick inet from any to 192.168.1.200"
+                    )
+                )
+                return CommandResult(status: 0, stdout: "", stderr: "")
+            }
+            if arguments == ["-s", "info"] {
+                return CommandResult(
+                    status: 0,
+                    stdout: "Status: Enabled\n",
+                    stderr: ""
+                )
+            }
+            if arguments == [
+                "-k", "0.0.0.0/0", "-k", "192.168.1.200",
+            ] {
+                return CommandResult(status: 0, stdout: "", stderr: "")
+            }
+            Issue.record("Unexpected pfctl call: \(arguments)")
+            return CommandResult(status: 1, stdout: "", stderr: "")
+        }
+
+        #expect(
+            calls == [
+                ["-a", "com.apple/squirrelops", "-f", "-"],
+                ["-s", "info"],
+                ["-k", "0.0.0.0/0", "-k", "192.168.1.200"],
+                ["-s", "info"],
+            ]
+        )
+        #expect(cache.cleanupIPs(for: [:]) == ["192.168.1.200"])
+    }
+
     @Test("Rejects malformed rule data")
     func rejectsMalformedRules() {
         #expect(throws: RPCError.self) {
@@ -558,6 +626,467 @@ struct PFIsolationTests {
         }
     }
 
+    @Test("PF redirects require the observed interface and owned protected VIPs")
+    func authorizesOnlyOwnedPFEndpoints() throws {
+        let listeners = try validatePortForwardRequest(
+            forwardingRules: [forwardingRule],
+            protectedEndpoints: [[
+                "ip": "192.168.1.200",
+                "direct_ports": [Int](),
+            ]],
+            interface: "en0",
+            route: testDefaultRoute,
+            networks: testNetworks,
+            interfaceAddresses: testInterfaceAddresses,
+            ownedEntries: [OwnedVirtualIP(ip: "192.168.1.200", interface: "en0")]
+        )
+
+        #expect(
+            listeners
+                == [PFBackendListener(ip: "192.168.1.200", port: 10080)]
+        )
+
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [forwardingRule],
+                protectedEndpoints: [[
+                    "ip": "192.168.1.200",
+                    "direct_ports": [Int](),
+                ]],
+                interface: "en1",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: [
+                    OwnedVirtualIP(ip: "192.168.1.200", interface: "en0"),
+                ]
+            )
+        }
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [[
+                    "from_ip": "127.0.0.1",
+                    "from_port": 80,
+                    "to_ip": "127.0.0.1",
+                    "to_port": 10080,
+                ]],
+                protectedEndpoints: [[
+                    "ip": "127.0.0.1",
+                    "direct_ports": [Int](),
+                ]],
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: [
+                    OwnedVirtualIP(ip: "192.168.1.200", interface: "en0"),
+                ]
+            )
+        }
+    }
+
+    @Test("PF replacements cannot omit owned aliases or allow direct host ports")
+    func requiresCompleteOwnedPFProtection() {
+        let owned: Set<OwnedVirtualIP> = [
+            OwnedVirtualIP(ip: "192.168.1.200", interface: "en0"),
+            OwnedVirtualIP(ip: "192.168.1.201", interface: "en0"),
+        ]
+
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [forwardingRule],
+                protectedEndpoints: [[
+                    "ip": "192.168.1.200",
+                    "direct_ports": [Int](),
+                ]],
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: owned
+            )
+        }
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [forwardingRule],
+                protectedEndpoints: [
+                    ["ip": "192.168.1.200", "direct_ports": [8443]],
+                    ["ip": "192.168.1.201", "direct_ports": [Int]()],
+                ],
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: owned
+            )
+        }
+    }
+
+    @Test("Unowned PF endpoints are bounded quarantine-only candidates")
+    func boundsPreAliasQuarantine() throws {
+        let endpoints: [[String: Any]] = [[
+            "ip": "192.168.1.200",
+            "direct_ports": [Int](),
+        ]]
+        let listeners = try validatePortForwardRequest(
+            forwardingRules: [],
+            protectedEndpoints: endpoints,
+            interface: "en0",
+            route: testDefaultRoute,
+            networks: testNetworks,
+            interfaceAddresses: testInterfaceAddresses,
+            ownedEntries: []
+        )
+        #expect(listeners.isEmpty)
+
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [],
+                protectedEndpoints: endpoints,
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses + [
+                    (interface: "en7", address: "192.168.1.200"),
+                ],
+                ownedEntries: []
+            )
+        }
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [forwardingRule],
+                protectedEndpoints: endpoints,
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: []
+            )
+        }
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [],
+                protectedEndpoints: [[
+                    "ip": "192.168.1.199",
+                    "direct_ports": [Int](),
+                ]],
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: []
+            )
+        }
+    }
+
+    @Test("First-ledger quarantine accepts the complete 51-address pool")
+    func acceptsCompleteFirstLedgerQuarantinePool() throws {
+        let endpoints: [[String: Any]] = (200...250).map { octet in
+            [
+                "ip": "192.168.1.\(octet)",
+                "direct_ports": [Int](),
+            ]
+        }
+
+        let listeners = try validatePortForwardRequest(
+            forwardingRules: [],
+            protectedEndpoints: endpoints,
+            interface: "en0",
+            route: testDefaultRoute,
+            networks: testNetworks,
+            interfaceAddresses: testInterfaceAddresses,
+            ownedEntries: []
+        )
+
+        #expect(listeners.isEmpty)
+    }
+
+    @Test("First-ledger quarantine rejects addresses outside its bounded pool")
+    func rejectsFirstLedgerQuarantineOutsideCandidatePool() {
+        let endpoints: [[String: Any]] = (199...250).map { octet in
+            [
+                "ip": "192.168.1.\(octet)",
+                "direct_ports": [Int](),
+            ]
+        }
+
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [],
+                protectedEndpoints: endpoints,
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: []
+            )
+        }
+    }
+
+    @Test(
+        "PF quarantine rejects addresses newly assigned on any local interface"
+    )
+    func rechecksGlobalLocalAddressesBeforePFLoad() throws {
+        let endpoints: [[String: Any]] = [[
+            "ip": "192.168.1.200",
+            "direct_ports": [Int](),
+        ]]
+
+        try requireNoLocalAddressConflictsForPreAliasQuarantine(
+            protectedEndpoints: endpoints,
+            interface: "en0",
+            ownedEntries: [],
+            interfaceAddresses: testInterfaceAddresses
+        )
+        #expect(throws: RPCError.self) {
+            try requireNoLocalAddressConflictsForPreAliasQuarantine(
+                protectedEndpoints: endpoints,
+                interface: "en0",
+                ownedEntries: [],
+                interfaceAddresses: testInterfaceAddresses + [
+                    (interface: "utun4", address: "192.168.1.200"),
+                ]
+            )
+        }
+
+        // An exact helper-owned loopback alias is not a pre-alias candidate.
+        try requireNoLocalAddressConflictsForPreAliasQuarantine(
+            protectedEndpoints: endpoints,
+            interface: "en0",
+            ownedEntries: [
+                OwnedVirtualIP(ip: "192.168.1.200", interface: "en0"),
+            ],
+            interfaceAddresses: testInterfaceAddresses + [
+                (interface: "lo0", address: "192.168.1.200"),
+            ]
+        )
+    }
+
+    @Test("PF redirects must stay on one VIP with unique ports")
+    func rejectsAmbiguousPFRedirects() {
+        let owned: Set<OwnedVirtualIP> = [
+            OwnedVirtualIP(ip: "192.168.1.200", interface: "en0"),
+        ]
+        let endpoints: [[String: Any]] = [[
+            "ip": "192.168.1.200",
+            "direct_ports": [Int](),
+        ]]
+
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [[
+                    "from_ip": "192.168.1.200",
+                    "from_port": 80,
+                    "to_ip": "192.168.1.201",
+                    "to_port": 10080,
+                ]],
+                protectedEndpoints: endpoints,
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: owned
+            )
+        }
+        #expect(throws: RPCError.self) {
+            try validatePortForwardRequest(
+                forwardingRules: [forwardingRule, forwardingRule],
+                protectedEndpoints: endpoints,
+                interface: "en0",
+                route: testDefaultRoute,
+                networks: testNetworks,
+                interfaceAddresses: testInterfaceAddresses,
+                ownedEntries: owned
+            )
+        }
+    }
+
+    @Test("PF ownership is rechecked immediately before live mutation")
+    func rechecksPFOwnership() throws {
+        try revalidatePortForwardOwnership(
+            forwardingRules: [forwardingRule],
+            protectedEndpoints: [[
+                "ip": "192.168.1.200",
+                "direct_ports": [Int](),
+            ]],
+            interface: "en0",
+            ownedEntries: [
+                OwnedVirtualIP(ip: "192.168.1.200", interface: "en0"),
+            ]
+        )
+        #expect(throws: RPCError.self) {
+            try revalidatePortForwardOwnership(
+                forwardingRules: [forwardingRule],
+                protectedEndpoints: [[
+                    "ip": "192.168.1.200",
+                    "direct_ports": [Int](),
+                ]],
+                interface: "en0",
+                ownedEntries: [
+                    OwnedVirtualIP(ip: "192.168.1.201", interface: "en0"),
+                ]
+            )
+        }
+    }
+
+    @Test("Virtual IP publication requires a successful PF quarantine")
+    func requiresPFQuarantineBeforeAliasPublication() throws {
+        var cache = PFEndpointStateCache()
+        #expect(throws: RPCError.self) {
+            try requirePFProtectedVirtualIP(
+                ip: "192.168.1.200",
+                interface: "en0",
+                stateCache: cache
+            )
+        }
+
+        let quarantine = try pfEndpointStateSignatures(
+            forwardingRules: [],
+            protectedEndpoints: [[
+                "ip": "192.168.1.200",
+                "direct_ports": [Int](),
+            ]],
+            interface: "en0"
+        )
+        cache.recordSuccessfulLiveMutation(
+            quarantine,
+            cleanupIPs: cache.cleanupIPs(for: quarantine)
+        )
+        cache.completeCleanup()
+
+        try requirePFProtectedVirtualIP(
+            ip: "192.168.1.200",
+            interface: "en0",
+            stateCache: cache
+        )
+        #expect(throws: RPCError.self) {
+            try requirePFProtectedVirtualIP(
+                ip: "192.168.1.200",
+                interface: "en1",
+                stateCache: cache
+            )
+        }
+    }
+
+    @Test("PF network context is unchanged immediately before mutation")
+    func rechecksPFNetworkContext() throws {
+        let routeResult = CommandResult(
+            status: 0,
+            stdout: """
+               route to: default
+            destination: default
+                gateway: 192.168.1.1
+              interface: en0
+            """,
+            stderr: ""
+        )
+        let interfaceResult = CommandResult(
+            status: 0,
+            stdout: """
+            en0: flags=8863<UP,BROADCAST,RUNNING> mtu 1500
+                inet 192.168.1.18 netmask 0xffffff00 broadcast 192.168.1.255
+            """,
+            stderr: ""
+        )
+        try requireUnchangedPFNetworkContext(
+            expectedRoute: testDefaultRoute,
+            expectedNetworks: testNetworks,
+            routeResult: routeResult,
+            interfaceResult: interfaceResult
+        )
+
+        #expect(throws: RPCError.self) {
+            try requireUnchangedPFNetworkContext(
+                expectedRoute: testDefaultRoute,
+                expectedNetworks: testNetworks,
+                routeResult: CommandResult(
+                    status: 0,
+                    stdout: """
+                       route to: default
+                    destination: default
+                        gateway: 192.168.2.1
+                      interface: en1
+                    """,
+                    stderr: ""
+                ),
+                interfaceResult: interfaceResult
+            )
+        }
+        #expect(throws: RPCError.self) {
+            try requireUnchangedPFNetworkContext(
+                expectedRoute: testDefaultRoute,
+                expectedNetworks: testNetworks,
+                routeResult: routeResult,
+                interfaceResult: CommandResult(
+                    status: 0,
+                    stdout: """
+                    en0: flags=8863<UP,BROADCAST,RUNNING> mtu 1500
+                        inet 10.0.0.18 netmask 0xffffff00 broadcast 10.0.0.255
+                    """,
+                    stderr: ""
+                )
+            )
+        }
+    }
+
+    @Test("Backend listeners require one exact sensor-owned VIP bind")
+    func validatesBackendListenerOwnership() throws {
+        let listener = PFBackendListener(
+            ip: "192.168.1.200",
+            port: 10080
+        )
+        try requireSensorOwnedListener(
+            listener,
+            serviceUID: 309
+        ) { executable, arguments in
+            #expect(executable == "/usr/sbin/lsof")
+            #expect(arguments.contains("-iTCP:10080"))
+            return CommandResult(
+                status: 0,
+                stdout: """
+                p123
+                u309
+                f10
+                n192.168.1.200:10080
+                """,
+                stderr: ""
+            )
+        }
+
+        for output in [
+            "p123\nu0\nf10\nn192.168.1.200:10080\n",
+            "p123\nu309\nf10\nn*:10080\n",
+            "p123\nu309\nf10\n",
+            """
+            p123
+            u309
+            p124
+            u309
+            f11
+            n192.168.1.200:10080
+            """,
+            """
+            p123
+            u309
+            f10
+            n192.168.1.200:10080
+            p124
+            u309
+            f11
+            n192.168.1.200:10080
+            """,
+        ] {
+            #expect(throws: RPCError.self) {
+                try requireSensorOwnedListener(
+                    listener,
+                    serviceUID: 309
+                ) { _, _ in
+                    CommandResult(status: 0, stdout: output, stderr: "")
+                }
+            }
+        }
+    }
+
     @Test("IPv4 netmasks require contiguous one bits")
     func validatesNetmasks() {
         #expect(ipv4PrefixLength("255.255.255.255") == 32)
@@ -575,6 +1104,546 @@ struct PFIsolationTests {
         #expect(!isValidIPv4("192.168.1.256"))
         #expect(!isValidIPv4("192.168..200"))
         #expect(!isValidIPv4("-1.168.1.200"))
+    }
+
+    @Test("Virtual IP policy is derived from the selected interface")
+    func parsesInterfaceAddressPolicy() throws {
+        let networks = try interfaceIPv4Networks(
+            from: """
+            en0: flags=8863<UP,BROADCAST,RUNNING> mtu 1500
+                ether 1c:1d:d3:e0:7d:03
+                inet 192.168.1.18 netmask 0xffffff00 broadcast 192.168.1.255
+            """
+        )
+
+        #expect(networks.count == 1)
+        #expect(networks[0].address == "192.168.1.18")
+        #expect(networks[0].network == "192.168.1.0")
+        #expect(networks[0].broadcast == "192.168.1.255")
+        try validateVirtualIPAddress(
+            "192.168.1.200",
+            interface: "en0",
+            networks: networks,
+            gateway: "192.168.1.1"
+        )
+    }
+
+    @Test(
+        "Virtual IP policy rejects gateway, boundaries, public, and off-subnet addresses",
+        arguments: [
+            "192.168.1.1",
+            "192.168.1.0",
+            "192.168.1.255",
+            "192.168.1.199",
+            "192.168.1.251",
+            "192.168.2.200",
+            "127.0.0.1",
+            "8.8.8.8",
+        ]
+    )
+    func rejectsUnsafeVirtualAddresses(ip: String) throws {
+        let networks = try interfaceIPv4Networks(
+            from: "inet 192.168.1.18 netmask 0xffffff00 broadcast 192.168.1.255"
+        )
+
+        #expect(throws: RPCError.self) {
+            try validateVirtualIPAddress(
+                ip,
+                interface: "en0",
+                networks: networks,
+                gateway: "192.168.1.1"
+            )
+        }
+    }
+
+    @Test("Virtual IP pool uses fixed offsets from the observed network base")
+    func enforcesHelperOwnedCandidatePool() throws {
+        let networks = try interfaceIPv4Networks(
+            from: """
+            inet 192.168.1.18 netmask 0xfffffe00 broadcast 192.168.1.255
+            """
+        )
+
+        try validateVirtualIPAddress(
+            "192.168.0.200",
+            interface: "en0",
+            networks: networks,
+            gateway: "192.168.1.1"
+        )
+        #expect(throws: RPCError.self) {
+            try validateVirtualIPAddress(
+                "192.168.1.200",
+                interface: "en0",
+                networks: networks,
+                gateway: "192.168.1.1"
+            )
+        }
+    }
+
+    @Test("Duplicate-address probe accepts unresolved candidates without mutation")
+    func acceptsUnresolvedCandidateWithoutMutation() throws {
+        var commands: [[String]] = []
+        var results = [
+            CommandResult(
+                status: 0,
+                stdout:
+                    "? (192.168.1.200) at (incomplete) "
+                    + "on en0 ifscope [ethernet]\n",
+                stderr: ""
+            ),
+            CommandResult(status: 2, stdout: "", stderr: ""),
+            CommandResult(
+                status: 0,
+                stdout:
+                    "? (192.168.1.200) at (incomplete) "
+                    + "on en0 ifscope [ethernet]\n",
+                stderr: ""
+            ),
+        ]
+
+        try requireUnusedVirtualIPAddress(
+            ip: "192.168.1.200",
+            interface: "en0"
+        ) { executable, arguments in
+            commands.append([executable] + arguments)
+            return results.removeFirst()
+        }
+
+        #expect(
+            commands == [
+                [
+                    "/usr/sbin/arp", "-n", "-i", "en0",
+                    "192.168.1.200",
+                ],
+                [
+                    "/sbin/ping", "-n", "-b", "en0", "-c", "1",
+                    "-W", "1000", "192.168.1.200",
+                ],
+                [
+                    "/usr/sbin/arp", "-n", "-i", "en0",
+                    "192.168.1.200",
+                ],
+            ]
+        )
+        #expect(!commands.contains(where: { $0.contains("-d") }))
+        #expect(results.isEmpty)
+    }
+
+    @Test("Duplicate-address probe rejects an existing complete owner")
+    func rejectsExistingAddressOwnerBeforeMutation() {
+        var commands: [[String]] = []
+
+        #expect(throws: RPCError.self) {
+            try requireUnusedVirtualIPAddress(
+                ip: "192.168.1.200",
+                interface: "en0"
+            ) { executable, arguments in
+                commands.append([executable] + arguments)
+                return CommandResult(
+                    status: 0,
+                    stdout:
+                        "? (192.168.1.200) at aa:bb:cc:dd:ee:ff "
+                        + "on en0 ifscope [ethernet]\n",
+                    stderr: ""
+                )
+            }
+        }
+
+        #expect(commands.count == 1)
+        #expect(!commands[0].contains("-d"))
+
+        #expect(throws: RPCError.self) {
+            try requireUnusedVirtualIPAddress(
+                ip: "192.168.1.200",
+                interface: "en0"
+            ) { _, _ in
+                CommandResult(
+                    status: 0,
+                    stdout:
+                        "? (192.168.1.200) at aa:bb:cc:dd:ee:ff "
+                        + "on en0 ifscope permanent published "
+                        + "(proxy only) [ethernet]\n",
+                    stderr: ""
+                )
+            }
+        }
+    }
+
+    @Test("ICMP-drop still rejects an ARP-present address")
+    func rejectsARPResponseWhenICMPDrops() {
+        var commands: [[String]] = []
+        var results = [
+            CommandResult(
+                status: 1,
+                stdout:
+                    "192.168.1.200 (192.168.1.200) "
+                    + "-- no entry on en0\n",
+                stderr: ""
+            ),
+            CommandResult(status: 2, stdout: "", stderr: ""),
+            CommandResult(
+                status: 0,
+                stdout:
+                    "? (192.168.1.200) at aa:bb:cc:dd:ee:ff "
+                    + "on en0 ifscope [ethernet]\n",
+                stderr: ""
+            ),
+        ]
+
+        #expect(throws: RPCError.self) {
+            try requireUnusedVirtualIPAddress(
+                ip: "192.168.1.200",
+                interface: "en0"
+            ) { executable, arguments in
+                commands.append([executable] + arguments)
+                return results.removeFirst()
+            }
+        }
+
+        #expect(commands.count == 3)
+        #expect(!commands.contains(where: { $0.contains("-d") }))
+        #expect(results.isEmpty)
+    }
+
+    @Test("Duplicate-address probe fails closed on command and parser errors")
+    func duplicateProbeRejectsUnverifiableResults() {
+        #expect(throws: RPCError.self) {
+            try requireUnusedVirtualIPAddress(
+                ip: "192.168.1.200",
+                interface: "en0"
+            ) { _, _ in
+                CommandResult(
+                    status: 64,
+                    stdout: "",
+                    stderr: "arp: invalid output"
+                )
+            }
+        }
+
+        var results = [
+            CommandResult(
+                status: 1,
+                stdout:
+                    "192.168.1.200 (192.168.1.200) "
+                    + "-- no entry on en0\n",
+                stderr: ""
+            ),
+            CommandResult(status: 68, stdout: "", stderr: "no route"),
+        ]
+        #expect(throws: RPCError.self) {
+            try requireUnusedVirtualIPAddress(
+                ip: "192.168.1.200",
+                interface: "en0"
+            ) { _, _ in
+                results.removeFirst()
+            }
+        }
+        #expect(results.isEmpty)
+
+        var respondingResults = [
+            CommandResult(
+                status: 1,
+                stdout:
+                    "192.168.1.200 (192.168.1.200) "
+                    + "-- no entry on en0\n",
+                stderr: ""
+            ),
+            CommandResult(status: 0, stdout: "64 bytes", stderr: ""),
+        ]
+        #expect(throws: RPCError.self) {
+            try requireUnusedVirtualIPAddress(
+                ip: "192.168.1.200",
+                interface: "en0"
+            ) { _, _ in
+                respondingResults.removeFirst()
+            }
+        }
+        #expect(respondingResults.isEmpty)
+    }
+
+    @Test("Gateway policy requires the exact scoped route")
+    func parsesScopedDefaultGateway() {
+        let route = """
+           route to: default
+        destination: default
+            gateway: 192.168.1.1
+          interface: en0
+        """
+
+        #expect(
+            defaultGateway(from: route, expectedInterface: "en0")
+                == "192.168.1.1"
+        )
+        #expect(
+            defaultGateway(from: route, expectedInterface: "en1") == nil
+        )
+        #expect(
+            defaultGateway(
+                from: "gateway: link#24\ninterface: en0",
+                expectedInterface: "en0"
+            ) == nil
+        )
+    }
+
+    @Test("Alias removal requires durable helper ownership")
+    func tracksAliasOwnershipDurably() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let stateFile = directory.appendingPathComponent("owned-aliases")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = VirtualIPOwnershipStore(
+            stateFileURL: stateFile,
+            expectedOwnerUID: geteuid(),
+            expectedOwnerGID: getegid()
+        )
+        #expect(
+            try !store.contains(ip: "192.168.1.200", interface: "en0")
+        )
+
+        try store.insert(ip: "192.168.1.200", interface: "en0")
+        #expect(
+            try store.contains(ip: "192.168.1.200", interface: "en0")
+        )
+        let directoryMode = try #require(
+            FileManager.default.attributesOfItem(atPath: directory.path)[
+                .posixPermissions
+            ] as? NSNumber
+        )
+        let stateMode = try #require(
+            FileManager.default.attributesOfItem(atPath: stateFile.path)[
+                .posixPermissions
+            ] as? NSNumber
+        )
+        #expect(directoryMode.intValue & 0o777 == 0o700)
+        #expect(stateMode.intValue & 0o777 == 0o600)
+        #expect(
+            try !store.contains(ip: "192.168.1.200", interface: "en1")
+        )
+
+        let reloaded = VirtualIPOwnershipStore(
+            stateFileURL: stateFile,
+            expectedOwnerUID: geteuid(),
+            expectedOwnerGID: getegid()
+        )
+        #expect(
+            try reloaded.contains(ip: "192.168.1.200", interface: "en0")
+        )
+
+        try reloaded.remove(ip: "192.168.1.200", interface: "en0")
+        #expect(
+            try !store.contains(ip: "192.168.1.200", interface: "en0")
+        )
+    }
+
+    @Test("Corrupt alias ownership state fails closed")
+    func rejectsCorruptAliasOwnershipState() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let stateFile = directory.appendingPathComponent("owned-aliases")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try Data("127.0.0.1|lo0\n".utf8).write(to: stateFile)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: stateFile.path
+        )
+
+        let store = VirtualIPOwnershipStore(
+            stateFileURL: stateFile,
+            expectedOwnerUID: geteuid(),
+            expectedOwnerGID: getegid()
+        )
+        #expect(throws: RPCError.self) {
+            try store.contains(ip: "192.168.1.200", interface: "en0")
+        }
+    }
+
+    @Test("Alias ownership rejects a symlinked state file")
+    func rejectsSymlinkedAliasOwnershipState() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let stateFile = directory.appendingPathComponent("owned-aliases")
+        let targetFile = directory.appendingPathComponent("attacker-state")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try Data("192.168.1.200|en0\n".utf8).write(to: targetFile)
+        try FileManager.default.createSymbolicLink(
+            at: stateFile,
+            withDestinationURL: targetFile
+        )
+
+        let store = VirtualIPOwnershipStore(
+            stateFileURL: stateFile,
+            expectedOwnerUID: geteuid(),
+            expectedOwnerGID: getegid()
+        )
+        #expect(throws: RPCError.self) {
+            try store.contains(ip: "192.168.1.200", interface: "en0")
+        }
+    }
+
+    @Test("Legacy unowned alias removal succeeds only when already absent")
+    func allowsProvenAbsentLegacyAlias() throws {
+        var commands: [[String]] = []
+        var results = [
+            CommandResult(
+                status: 1,
+                stdout:
+                    "192.168.1.200 (192.168.1.200) "
+                    + "-- no entry on en0\n",
+                stderr: ""
+            ),
+            CommandResult(
+                status: 0,
+                stdout:
+                    "? (192.168.1.1) at aa:bb:cc:dd:ee:ff "
+                    + "on en0 ifscope [ethernet]\n",
+                stderr: ""
+            ),
+        ]
+
+        let disposition = try authorizeVirtualIPRemoval(
+            ip: "192.168.1.200",
+            interface: "en0",
+            isOwned: false,
+            interfaceAddresses: testInterfaceAddresses
+        ) { executable, arguments in
+            commands.append([executable] + arguments)
+            return results.removeFirst()
+        }
+
+        #expect(disposition == .alreadyAbsent)
+        #expect(
+            commands == [
+                [
+                    "/usr/sbin/arp", "-n", "-i", "en0",
+                    "192.168.1.200",
+                ],
+                ["/usr/sbin/arp", "-an"],
+            ]
+        )
+        #expect(results.isEmpty)
+        #expect(!commands.contains(where: {
+            $0.contains("-d") || $0.first == "/sbin/ifconfig"
+        }))
+    }
+
+    @Test("Durably owned alias removal proceeds without legacy probes")
+    func allowsOwnedAliasWithdrawal() throws {
+        var commandWasRun = false
+
+        let disposition = try authorizeVirtualIPRemoval(
+            ip: "192.168.1.200",
+            interface: "en0",
+            isOwned: true,
+            interfaceAddresses: testInterfaceAddresses
+        ) { _, _ in
+            commandWasRun = true
+            return CommandResult(status: 1, stdout: "", stderr: "")
+        }
+
+        #expect(disposition == .withdrawOwned)
+        #expect(!commandWasRun)
+    }
+
+    @Test("Unowned alias removal rejects every local address")
+    func rejectsUnownedLocalAlias() {
+        var commandWasRun = false
+
+        #expect(throws: RPCError.self) {
+            try authorizeVirtualIPRemoval(
+                ip: "192.168.1.200",
+                interface: "en0",
+                isOwned: false,
+                interfaceAddresses: testInterfaceAddresses + [
+                    (interface: "lo0", address: "192.168.1.200"),
+                ]
+            ) { _, _ in
+                commandWasRun = true
+                return CommandResult(status: 0, stdout: "", stderr: "")
+            }
+        }
+        #expect(!commandWasRun)
+    }
+
+    @Test("Unowned alias removal rejects scoped or global proxy publication")
+    func rejectsUnownedPublishedProxyARP() {
+        let published =
+            "? (192.168.1.200) at 1c:1d:d3:e0:7d:03 "
+            + "on en0 ifscope permanent published "
+            + "(proxy only) [ethernet]\n"
+
+        #expect(throws: RPCError.self) {
+            try authorizeVirtualIPRemoval(
+                ip: "192.168.1.200",
+                interface: "en0",
+                isOwned: false,
+                interfaceAddresses: testInterfaceAddresses
+            ) { _, _ in
+                CommandResult(status: 0, stdout: published, stderr: "")
+            }
+        }
+
+        var results = [
+            CommandResult(
+                status: 1,
+                stdout:
+                    "192.168.1.200 (192.168.1.200) "
+                    + "-- no entry on en0\n",
+                stderr: ""
+            ),
+            CommandResult(status: 0, stdout: published, stderr: ""),
+        ]
+        #expect(throws: RPCError.self) {
+            try authorizeVirtualIPRemoval(
+                ip: "192.168.1.200",
+                interface: "en0",
+                isOwned: false,
+                interfaceAddresses: testInterfaceAddresses
+            ) { _, _ in
+                results.removeFirst()
+            }
+        }
+        #expect(results.isEmpty)
+    }
+
+    @Test("Unowned alias removal fails closed when ARP absence is unverified")
+    func rejectsUnverifiedLegacyAbsence() {
+        var results = [
+            CommandResult(
+                status: 1,
+                stdout:
+                    "192.168.1.200 (192.168.1.200) "
+                    + "-- no entry on en0\n",
+                stderr: ""
+            ),
+            CommandResult(
+                status: 1,
+                stdout: "",
+                stderr: "arp table unavailable"
+            ),
+        ]
+
+        #expect(throws: RPCError.self) {
+            try authorizeVirtualIPRemoval(
+                ip: "192.168.1.200",
+                interface: "en0",
+                isOwned: false,
+                interfaceAddresses: testInterfaceAddresses
+            ) { _, _ in
+                results.removeFirst()
+            }
+        }
+        #expect(results.isEmpty)
     }
 
     @Test("Virtual IPs use loopback ownership and scoped proxy ARP")
@@ -1109,6 +2178,20 @@ struct PFIsolationTests {
             redirects: [],
             directPorts: directPorts
         )
+    }
+
+    private var testDefaultRoute: IPv4DefaultRoute {
+        IPv4DefaultRoute(gateway: "192.168.1.1", interface: "en0")
+    }
+
+    private var testNetworks: [IPv4InterfaceNetwork] {
+        [
+            IPv4InterfaceNetwork(
+                address: "192.168.1.18",
+                network: "192.168.1.0",
+                broadcast: "192.168.1.255"
+            ),
+        ]
     }
 
     private func cleanCache(

@@ -277,7 +277,8 @@
         const manifest = await resp.json();
         if (manifest.schema_version < 2) return;
 
-        const version = manifest.latest && manifest.latest.app;
+        const version = manifest.latest &&
+          (manifest.latest.distribution || manifest.latest.app);
         if (!version) return;
 
         const badge = document.getElementById('version-badge');

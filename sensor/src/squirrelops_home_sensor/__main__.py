@@ -205,6 +205,18 @@ async def run_migrations(db: Any) -> None:
     await apply_migrations(db)
 
 
+def create_retention_scheduler(config: dict[str, Any]) -> Any:
+    """Create the daily retention scheduler on its own SQLite connection."""
+    from squirrelops_home_sensor.alerts.retention import AlertRetentionScheduler
+
+    data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
+    retention_days = int(config.get("alerts", {}).get("retention_days", 90))
+    return AlertRetentionScheduler(
+        db_path=data_dir / "squirrelops.db",
+        retention_days=retention_days,
+    )
+
+
 def create_event_bus(db: Any) -> Any:
     """Create the event bus backed by the persistent event log."""
     from squirrelops_home_sensor.events.bus import EventBus
@@ -293,7 +305,8 @@ def create_scan_loop(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
             ha_config=ha_config,
             config=config,
             security_analyzer=security_analyzer,
-        )
+        ),
+        llm=llm,
     )
     wrapper.privileged_ops = priv_ops
     return wrapper
@@ -304,33 +317,63 @@ def _create_llm_classifier(config: dict[str, Any]) -> Any:
     classifier_cfg = config.get("classifier", {})
     if classifier_cfg.get("mode") in {"local", "local_signatures", "none"}:
         return None
-    endpoint = classifier_cfg.get("llm_endpoint")
+    from squirrelops_home_sensor.devices.llm_classifier import (
+        CLOUD_LLM_PROVIDERS,
+        OpenAICompatibleClassifier,
+        resolve_llm_endpoint,
+    )
+
+    provider = str(classifier_cfg.get("llm_provider") or "").strip().lower()
+    endpoint = resolve_llm_endpoint(
+        provider,
+        classifier_cfg.get("llm_endpoint"),
+    )
     model = classifier_cfg.get("llm_model")
+    api_key = classifier_cfg.get("llm_api_key")
 
     if not endpoint or not model:
         return None
+    if provider in CLOUD_LLM_PROVIDERS and not api_key:
+        logger.warning(
+            "LLM classifier provider %s requires an API key; classifier disabled",
+            provider,
+        )
+        return None
 
-    from squirrelops_home_sensor.devices.llm_classifier import OpenAICompatibleClassifier
-
-    logger.info("LLM classifier enabled: %s (model: %s)", endpoint, model)
+    logger.info(
+        "LLM classifier enabled: %s at %s (model: %s)",
+        provider or "custom",
+        endpoint,
+        model,
+    )
     return OpenAICompatibleClassifier(
         endpoint=endpoint,
         model=model,
-        api_key=classifier_cfg.get("llm_api_key"),
+        api_key=api_key,
     )
 
 
 class _ScanLoopWrapper:
     """Wraps ScanLoop to provide start()/stop() instead of run(event)."""
 
-    def __init__(self, loop: Any) -> None:
+    def __init__(self, loop: Any, *, llm: Any = None) -> None:
         self._loop = loop
+        self._llm = llm
+        self._hostname_advisor_target: Any = None
         self._shutdown = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        self._llm_close_tasks: set[asyncio.Task[None]] = set()
 
     def set_orchestrator(self, orchestrator: Any) -> None:
         """Attach a DecoyOrchestrator for auto-deploy after scans."""
         self._loop._orchestrator = orchestrator
+
+    def set_hostname_advisor_target(self, orchestrator: Any) -> None:
+        """Share the live optional AI client with fake-host naming."""
+        self._hostname_advisor_target = orchestrator
+        setter = getattr(orchestrator, "set_hostname_advisor", None)
+        if callable(setter):
+            setter(self._llm)
 
     @property
     def scan_interval(self) -> int:
@@ -347,7 +390,61 @@ class _ScanLoopWrapper:
         classifier_config["mode"] = mode
         runtime_config = dict(config)
         runtime_config["classifier"] = classifier_config
-        self._loop._manager._classifier.set_llm(_create_llm_classifier(runtime_config))
+        self._replace_llm(_create_llm_classifier(runtime_config))
+
+    def set_classifier_config(self, config: dict[str, Any]) -> None:
+        """Apply provider, endpoint, model, and key changes without a restart."""
+        self._replace_llm(_create_llm_classifier(config))
+
+    def _replace_llm(self, llm: Any) -> None:
+        previous = self._loop._manager._classifier.set_llm(llm)
+        self._llm = llm
+        setter = getattr(
+            self._hostname_advisor_target,
+            "set_hostname_advisor",
+            None,
+        )
+        if callable(setter):
+            setter(llm)
+        self._schedule_llm_close(previous)
+
+    def _schedule_llm_close(self, llm: Any) -> None:
+        if llm is None or not callable(getattr(llm, "aclose", None)):
+            return
+        task = asyncio.create_task(self._close_llm(llm))
+        self._llm_close_tasks.add(task)
+        task.add_done_callback(self._llm_close_tasks.discard)
+
+    @staticmethod
+    async def _close_llm(llm: Any) -> None:
+        close = getattr(llm, "aclose", None)
+        if not callable(close):
+            return
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.warning("Failed to close LLM classifier client", exc_info=True)
+
+    async def _close_classifier_clients(self) -> None:
+        setter = getattr(
+            self._hostname_advisor_target,
+            "set_hostname_advisor",
+            None,
+        )
+        if callable(setter):
+            setter(None)
+        self._llm = None
+        manager = getattr(self._loop, "_manager", None)
+        classifier = getattr(manager, "_classifier", None)
+        set_llm = getattr(classifier, "set_llm", None)
+        if callable(set_llm):
+            await self._close_llm(set_llm(None))
+        pending = tuple(self._llm_close_tasks)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+            self._llm_close_tasks.difference_update(pending)
 
     def set_ip_conflict_handler(self, handler: Any) -> None:
         """Attach raw-ARP virtual-IP conflict reconciliation."""
@@ -361,23 +458,27 @@ class _ScanLoopWrapper:
         self._shutdown.set()
         task = self._task
         self._task = None
-        if task is not None:
-            try:
+        try:
+            if task is not None:
                 await asyncio.wait_for(
                     asyncio.shield(task),
                     timeout=SCAN_STOP_TIMEOUT_SECONDS,
                 )
-            except TimeoutError:
-                logger.warning(
-                    "Scan loop did not stop in %.0fs; cancelling it",
-                    SCAN_STOP_TIMEOUT_SECONDS,
-                )
+        except TimeoutError:
+            logger.warning(
+                "Scan loop did not stop in %.0fs; cancelling it",
+                SCAN_STOP_TIMEOUT_SECONDS,
+            )
+            if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-            except asyncio.CancelledError:
+        except asyncio.CancelledError:
+            if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-                raise
+            raise
+        finally:
+            await self._close_classifier_clients()
 
 
 def create_secret_store(config: dict[str, Any]) -> Any:
@@ -490,6 +591,9 @@ def create_orchestrator(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
         sensor_ip,
     )
     scouts_cfg = config.get("scouts", {})
+    from squirrelops_home_sensor.privileged.helper import create_privileged_ops
+
+    network_publisher = create_privileged_ops()
 
     return _OrchestratorWrapper(
         DecoyOrchestrator(
@@ -500,6 +604,7 @@ def create_orchestrator(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
             interface=interface,
             virtual_ip_range_start=scouts_cfg.get("virtual_ip_range_start", 200),
             virtual_ip_range_end=scouts_cfg.get("virtual_ip_range_end", 250),
+            network_publisher=network_publisher,
         )
     )
 
@@ -520,6 +625,7 @@ def create_scouts_subsystem(
         logger.info("Squirrel Scouts disabled in config")
         return None
 
+    from squirrelops_home_sensor.mdns import _get_mdns_hostname
     from squirrelops_home_sensor.network.port_forward import PortForwardManager
     from squirrelops_home_sensor.network.virtual_ip import IPAllocator, VirtualIPManager
     from squirrelops_home_sensor.scouts.engine import ScoutEngine
@@ -586,7 +692,14 @@ def create_scouts_subsystem(
 
     # Build mimic orchestrator
     template_gen = MimicTemplateGenerator()
-    max_mimics = scouts_cfg.get("max_mimic_decoys", 10)
+    max_mimics = scouts_cfg.get("max_mimic_decoys", 5)
+    import socket
+
+    sensor_hostnames = {
+        _get_mdns_hostname(),
+        socket.gethostname(),
+        socket.getfqdn(),
+    }
     mimic_orchestrator = MimicOrchestrator(
         scout_engine=scout_engine,
         template_generator=template_gen,
@@ -596,6 +709,8 @@ def create_scouts_subsystem(
         max_mimics=max_mimics,
         mdns_advertiser=mimic_mdns,
         port_forward_manager=port_fwd,
+        sensor_hostnames=sensor_hostnames,
+        backend_bind_address_for=priv_ops.listener_bind_address,
     )
     # Every scheduled or manual scout cycle also fills available mimic capacity.
     scheduler.set_post_scout_hook(mimic_orchestrator.evaluate_and_deploy)
@@ -705,10 +820,11 @@ def _local_pairing_socket(config: dict[str, Any]) -> Path:
 def _display_pairing_code(code: str, config: dict[str, Any]) -> None:
     """Print the setup key and store a private recovery copy.
 
-    The local app retrieves the key over a peer-verified Unix socket. The file
-    is mode 0600 inside the private data directory for an administrator or
-    service operator using ``--show-pairing-code``; no secret is written to a
-    shared temporary directory.
+    The file is mode 0600 inside the private data directory for an administrator
+    or service operator using ``--show-pairing-code``; no secret is written to
+    a shared temporary directory. Production never serves this key over a local
+    socket because a connected descriptor can outlive or be passed away from
+    the process identity checked at accept time.
     """
     from squirrelops_home_sensor.secure_io import atomic_write_private_text
 
@@ -749,6 +865,8 @@ class _RuntimeResources:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
         self.db: Any | None = None
+        self.retention_scheduler: Any | None = None
+        self.retention_start_attempted = False
         self.orchestrator: Any | None = None
         self.orchestrator_start_attempted = False
         self.scan_loop: Any | None = None
@@ -788,6 +906,15 @@ async def _cleanup_runtime(runtime: _RuntimeResources) -> list[BaseException]:
             errors.append(exc)
             logger.exception("%s failed during sensor shutdown", label)
             return None
+
+    if (
+        runtime.retention_scheduler is not None
+        and runtime.retention_start_attempted
+    ):
+        await stop_step(
+            "Stopping alert retention scheduler",
+            runtime.retention_scheduler.stop,
+        )
 
     if runtime.local_pairing is not None and runtime.local_pairing_start_attempted:
         await stop_step(
@@ -928,6 +1055,14 @@ async def run_sensor(
         # 3. Run migrations
         await run_migrations(db)
 
+        # 3a. Start daily history retention only after the schema is current.
+        # The scheduler uses a separate SQLite connection and runs once
+        # immediately, then every 24 hours.
+        retention_scheduler = create_retention_scheduler(config)
+        runtime.retention_scheduler = retention_scheduler
+        runtime.retention_start_attempted = True
+        await retention_scheduler.start()
+
         # 3b. Init TLS certs (unless --no-tls)
         ca_key = None
         ca_cert = None
@@ -995,6 +1130,7 @@ async def run_sensor(
         runtime.mimic_mdns = mimic_mdns
         runtime.port_fwd = port_fwd
         if mimic_orchestrator is not None:
+            scan_loop.set_hostname_advisor_target(mimic_orchestrator)
             # Reuse every regular scan's fresh ARP snapshot to evacuate
             # conflicts before virtual IPs are filtered from device inventory.
             conflict_hook_result = scan_loop.set_ip_conflict_handler(
@@ -1178,6 +1314,7 @@ async def run_sensor(
             log_config=None,
             http=ClientCertH11Protocol,
             ws=ClientCertWebSocketProtocol,
+            proxy_headers=False,
             **uvicorn_kwargs,
         )
         server = uvicorn.Server(uvicorn_config)
@@ -1201,38 +1338,44 @@ async def run_sensor(
         if isinstance(pairing_code, str) and pairing_code:
             _display_pairing_code(pairing_code, config)
 
-        # 9b. Local pairing over a peer-credential-verified Unix socket.
-        # Replaces the old loopback-TCP /pairing/local/code, which disclosed
-        # the code to any local process. Production accepts only the installed,
-        # signed app; source development can explicitly opt into UID-only
-        # authorization.
-        from squirrelops_home_sensor.api.local_pairing import LocalPairingServer
+        # The local socket is deliberately development-only. Kernel peer
+        # identity authenticates the process that connected, not necessarily
+        # the process that later reads or writes a passed descriptor. Production
+        # pairing therefore requires the administrator-readable setup key.
+        if bool(
+            config.get("pairing", {}).get(
+                "allow_unsigned_local",
+                False,
+            )
+        ):
+            from squirrelops_home_sensor.api.local_pairing import (
+                LocalPairingServer,
+            )
 
-        def _get_local_pairing_code() -> str:
-            state = _init_pairing_state(app.state, config)
-            _maybe_regenerate_code(state)
-            return state["code"]
+            def _get_local_pairing_code() -> str:
+                state = _init_pairing_state(app.state, config)
+                _maybe_regenerate_code(state)
+                return state["code"]
 
-        local_pairing = LocalPairingServer(
-            str(_local_pairing_socket(config)),
-            _get_local_pairing_code,
-            allowed_app_path=config.get("pairing", {}).get("allowed_app_path"),
-            allowed_app_requirement=config.get("pairing", {}).get("allowed_app_requirement"),
-            allow_unsigned_local=bool(
-                config.get("pairing", {}).get(
-                    "allow_unsigned_local",
-                    False,
+            local_pairing = LocalPairingServer(
+                str(_local_pairing_socket(config)),
+                _get_local_pairing_code,
+                allowed_app_requirement=None,
+                allow_unsigned_local=True,
+            )
+            runtime.local_pairing = local_pairing
+            runtime.local_pairing_start_attempted = True
+            try:
+                await local_pairing.start()
+            except Exception:
+                logger.warning(
+                    "Failed to start development local pairing socket",
+                    exc_info=True,
                 )
-            ),
-        )
-        runtime.local_pairing = local_pairing
-        runtime.local_pairing_start_attempted = True
-        try:
-            await local_pairing.start()
-        except Exception:
-            logger.warning(
-                "Failed to start local pairing socket",
-                exc_info=True,
+        else:
+            logger.info(
+                "Automatic local pairing disabled; retrieve the setup key "
+                "with --show-pairing-code"
             )
 
         try:

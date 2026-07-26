@@ -15,10 +15,20 @@ APP_PATH="/Applications/SquirrelOps Home.app"
 SENSOR_LABEL="com.squirrelops.sensor"
 SENSOR_PLIST="/Library/LaunchDaemons/${SENSOR_LABEL}.plist"
 SENSOR_INSTALL_DIR="/Library/SquirrelOps/sensor"
-SENSOR_DB="$SENSOR_INSTALL_DIR/data/squirrelops.db"
 HELPER_LABEL="com.squirrelops.helper"
 HELPER_PLIST="/Library/LaunchDaemons/${HELPER_LABEL}.plist"
 HELPER_BINARY="/Library/PrivilegedHelperTools/${HELPER_LABEL}"
+HELPER_STATE_DIR="/var/db/com.squirrelops.helper"
+HELPER_ALIAS_STATE="/var/db/com.squirrelops.helper/owned-aliases"
+SENSOR_USER="_squirrelops"
+SENSOR_GROUP="_squirrelops"
+STAGED_SENSOR_USER="_squirrelops_installing"
+STAGED_SENSOR_GROUP="_squirrelops_installing"
+ACCOUNT_PROVISIONING_DIR="/var/db/com.squirrelops.sensor"
+ACCOUNT_PROVISIONING_MARKER="$ACCOUNT_PROVISIONING_DIR/account-provisioning"
+ACCOUNT_DEPROVISIONING_MARKER="$ACCOUNT_PROVISIONING_DIR/account-deprovisioning"
+SENSOR_UID=""
+SENSOR_GID=""
 
 service_is_loaded() {
     local label="$1"
@@ -52,14 +62,411 @@ stop_service_and_verify() {
     done
 }
 
+directory_service_value() {
+    local record="$1"
+    local key="$2"
+    /usr/bin/dscl . -read "$record" "$key" 2>/dev/null \
+        | /usr/bin/awk \
+            -v expected="${key}:" \
+            -v native_hidden="dsAttrTypeNative:IsHidden:" '
+            ($1 == expected \
+                || (expected == "IsHidden:" && $1 == native_hidden)) \
+                && NF == 2 {
+                value = $2
+                count++
+            }
+            END {
+                if (count != 1) {
+                    exit 1
+                }
+                print value
+            }
+        '
+}
+
+validate_service_identity() {
+    local shell
+    local home
+    local hidden
+    local uid_owner
+    local gid_owner
+
+    SENSOR_UID=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "UniqueID") || return 1
+    SENSOR_GID=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "PrimaryGroupID") || return 1
+    shell=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "UserShell") || return 1
+    home=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "NFSHomeDirectory") || return 1
+    hidden=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "IsHidden") || return 1
+    [[ "$SENSOR_UID" =~ ^[0-9]+$ ]] \
+        && [[ "$SENSOR_GID" =~ ^[0-9]+$ ]] \
+        && [ "$SENSOR_UID" -ge 300 ] && [ "$SENSOR_UID" -le 499 ] \
+        && [ "$SENSOR_GID" = "$SENSOR_UID" ] \
+        && [ "$shell" = "/usr/bin/false" ] \
+        && [ "$home" = "/var/empty" ] \
+        && [ "$hidden" = "1" ] \
+        || return 1
+    [ "$(directory_service_value \
+        "/Groups/${SENSOR_GROUP}" "PrimaryGroupID")" = "$SENSOR_GID" ] \
+        || return 1
+    uid_owner=$(
+        /usr/bin/dscl . -list /Users UniqueID 2>/dev/null \
+            | /usr/bin/awk -v id="$SENSOR_UID" '
+                $2 == id { owner = $1; count++ }
+                END { if (count == 1) print owner }
+            '
+    ) || return 1
+    gid_owner=$(
+        /usr/bin/dscl . -list /Groups PrimaryGroupID 2>/dev/null \
+            | /usr/bin/awk -v id="$SENSOR_GID" '
+                $2 == id { owner = $1; count++ }
+                END { if (count == 1) print owner }
+            '
+    ) || return 1
+    [ "$uid_owner" = "$SENSOR_USER" ] \
+        && [ "$gid_owner" = "$SENSOR_GROUP" ]
+}
+
+sensor_processes_are_running() {
+    /usr/bin/pgrep -u "$SENSOR_UID" '.*' >/dev/null 2>&1 \
+        || /usr/bin/pgrep -U "$SENSOR_UID" '.*' >/dev/null 2>&1
+}
+
+terminate_sensor_processes() {
+    local attempts=0
+    /usr/bin/pkill -TERM -u "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    /usr/bin/pkill -TERM -U "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    while sensor_processes_are_running && [ "$attempts" -lt 5 ]; do
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    if sensor_processes_are_running; then
+        /usr/bin/pkill -KILL -u "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+        /usr/bin/pkill -KILL -U "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    fi
+    attempts=0
+    while sensor_processes_are_running && [ "$attempts" -lt 5 ]; do
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    ! sensor_processes_are_running
+}
+
+directory_service_text_value() {
+    local record="$1"
+    local key="$2"
+    /usr/bin/dscl . -read "$record" "$key" 2>/dev/null \
+        | /usr/bin/awk \
+            -v expected="${key}:" \
+            -v native_hidden="dsAttrTypeNative:IsHidden:" '
+            $1 == expected \
+                || (expected == "IsHidden:" && $1 == native_hidden) {
+                $1 = ""
+                sub(/^ /, "")
+                value = $0
+                count++
+            }
+            END {
+                if (count != 1 || value == "") {
+                    exit 1
+                }
+                print value
+            }
+        '
+}
+
+record_value_matches_or_is_missing() {
+    local record="$1"
+    local key="$2"
+    local expected="$3"
+    local actual
+    if ! /usr/bin/dscl . -read "$record" "$key" >/dev/null 2>&1; then
+        /usr/bin/dscl . -read "$record" >/dev/null 2>&1
+        return
+    fi
+    actual=$(directory_service_text_value "$record" "$key") || return 1
+    [ "$actual" = "$expected" ]
+}
+
+record_attribute_is_empty_or_missing() {
+    local record="$1"
+    local key="$2"
+    local output
+    if ! output=$(
+        /usr/bin/dscl . -read "$record" "$key" 2>/dev/null
+    ); then
+        /usr/bin/dscl . -read "$record" >/dev/null 2>&1
+        return
+    fi
+    printf '%s\n' "$output" \
+        | /usr/bin/awk -v expected="${key}:" '
+            $1 == expected && NF == 1 { seen++ ; next }
+            NF != 0 { bad = 1 }
+            END { exit !(seen == 1 && bad == 0) }
+        '
+}
+
+read_account_deprovisioning_id() {
+    local provisioned_id
+    if [ -L "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ ! -d "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' \
+            "$ACCOUNT_PROVISIONING_DIR")" != "root:wheel:700" ] \
+        || [ -L "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        || [ ! -f "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l:%z' \
+            "$ACCOUNT_DEPROVISIONING_MARKER")" != "root:wheel:600:1:4" ]
+    then
+        return 1
+    fi
+    provisioned_id=$(/bin/cat "$ACCOUNT_DEPROVISIONING_MARKER") \
+        || return 1
+    [[ "$provisioned_id" =~ ^[0-9]{3}$ ]] \
+        && [ "$provisioned_id" -ge 300 ] \
+        && [ "$provisioned_id" -le 499 ] \
+        || return 1
+    printf '%s\n' "$provisioned_id"
+}
+
+write_account_deprovisioning_id() {
+    local provisioned_id="$1"
+    local marker_temp
+    if [ -e "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || [ -L "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || [ -e "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        || [ -L "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        || [ -L "$ACCOUNT_PROVISIONING_DIR" ] \
+        || { [ -e "$ACCOUNT_PROVISIONING_DIR" ] \
+            && [ ! -d "$ACCOUNT_PROVISIONING_DIR" ]; }
+    then
+        return 1
+    fi
+    if ! /usr/bin/install -d -o root -g wheel -m 700 \
+        "$ACCOUNT_PROVISIONING_DIR" \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' \
+            "$ACCOUNT_PROVISIONING_DIR")" != "root:wheel:700" ]
+    then
+        return 1
+    fi
+    marker_temp=$(
+        /usr/bin/mktemp \
+            "$ACCOUNT_PROVISIONING_DIR/.account-deprovisioning.XXXXXXXX"
+    ) || return 1
+    if ! printf '%s\n' "$provisioned_id" > "$marker_temp" \
+        || ! /usr/sbin/chown root:wheel "$marker_temp" \
+        || ! /bin/chmod 600 "$marker_temp" \
+        || ! /bin/mv -fh "$marker_temp" \
+            "$ACCOUNT_DEPROVISIONING_MARKER" \
+        || ! /bin/sync
+    then
+        return 1
+    fi
+    [ "$(read_account_deprovisioning_id)" = "$provisioned_id" ]
+}
+
+deprovisioning_records_match_id() {
+    local provisioned_id="$1"
+    local conflicting_user
+    local conflicting_group
+    local user_present=0
+    local group_present=0
+
+    if /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
+        user_present=1
+    fi
+    if /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" >/dev/null 2>&1; then
+        group_present=1
+    fi
+    if [ "$user_present" -eq 1 ]; then
+        [ "$group_present" -eq 1 ] || return 1
+        record_value_matches_or_is_missing \
+            "/Users/${SENSOR_USER}" "RealName" "SquirrelOps Sensor" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "UserShell" "/usr/bin/false" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "UniqueID" "$provisioned_id" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "PrimaryGroupID" "$provisioned_id" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "NFSHomeDirectory" "/var/empty" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "IsHidden" "1" \
+            || return 1
+    fi
+    if [ "$group_present" -eq 1 ]; then
+        [ "$(directory_service_value \
+            "/Groups/${SENSOR_GROUP}" "PrimaryGroupID")" \
+            = "$provisioned_id" ] \
+            && record_attribute_is_empty_or_missing \
+                "/Groups/${SENSOR_GROUP}" "GroupMembership" \
+            && record_attribute_is_empty_or_missing \
+                "/Groups/${SENSOR_GROUP}" "GroupMembers" \
+            || return 1
+    fi
+    conflicting_user=$(
+        /usr/bin/dscl . -list /Users UniqueID 2>/dev/null \
+            | /usr/bin/awk \
+                -v id="$provisioned_id" \
+                -v final="$SENSOR_USER" \
+                '$2 == id && $1 != final { print $1 }'
+    ) || return 1
+    conflicting_group=$(
+        /usr/bin/dscl . -list /Groups PrimaryGroupID 2>/dev/null \
+            | /usr/bin/awk \
+                -v id="$provisioned_id" \
+                -v final="$SENSOR_GROUP" \
+                '$2 == id && $1 != final { print $1 }'
+    ) || return 1
+    [ -z "$conflicting_user" ] && [ -z "$conflicting_group" ]
+}
+
+retire_account_provisioning_dir() {
+    if [ ! -e "$ACCOUNT_PROVISIONING_DIR" ] \
+        && [ ! -L "$ACCOUNT_PROVISIONING_DIR" ]
+    then
+        return 0
+    fi
+    if [ -L "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ ! -d "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' \
+            "$ACCOUNT_PROVISIONING_DIR")" != "root:wheel:700" ]
+    then
+        return 1
+    fi
+    /usr/bin/find "$ACCOUNT_PROVISIONING_DIR" \
+        -xdev -mindepth 1 -maxdepth 1 -print0 \
+        | while IFS= read -r -d '' entry; do
+            local name
+            name=$(/usr/bin/basename "$entry") || return 1
+            case "$name" in
+                .account-provisioning.*|.account-deprovisioning.*) ;;
+                *) return 1 ;;
+            esac
+            [ ! -L "$entry" ] \
+                && [ "$(/usr/bin/stat -f '%Su:%Sg:%HT:%Lp:%l' "$entry")" \
+                    = "root:wheel:Regular File:600:1" ] \
+                || return 1
+            rm -f -- "$entry" || return 1
+        done \
+        || return 1
+    rmdir "$ACCOUNT_PROVISIONING_DIR" 2>/dev/null
+}
+
+cleanup_interrupted_account_deprovisioning() {
+    local provisioned_id
+    if [ ! -e "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        && [ ! -L "$ACCOUNT_DEPROVISIONING_MARKER" ]
+    then
+        return 0
+    fi
+    [ ! -e "$ACCOUNT_PROVISIONING_MARKER" ] \
+        && [ ! -L "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || return 1
+    provisioned_id=$(read_account_deprovisioning_id) || return 1
+    if /usr/bin/dscl . -read "/Users/${STAGED_SENSOR_USER}" \
+            >/dev/null 2>&1 \
+        || /usr/bin/dscl . -read "/Groups/${STAGED_SENSOR_GROUP}" \
+            >/dev/null 2>&1 \
+        || ! deprovisioning_records_match_id "$provisioned_id"
+    then
+        return 1
+    fi
+    SENSOR_UID="$provisioned_id"
+    terminate_sensor_processes || return 1
+    /usr/bin/crontab -u "$SENSOR_USER" -r >/dev/null 2>&1 || true
+    if /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
+        /usr/bin/dscl . -delete "/Users/${SENSOR_USER}" || return 1
+    fi
+    if /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" >/dev/null 2>&1; then
+        /usr/bin/dscl . -delete "/Groups/${SENSOR_GROUP}" || return 1
+    fi
+    ! /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1 \
+        && ! /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" \
+            >/dev/null 2>&1 \
+        || return 1
+    rm -f -- "$ACCOUNT_DEPROVISIONING_MARKER" || return 1
+    retire_account_provisioning_dir || return 1
+    /bin/sync
+}
+
+legacy_partial_account_id() {
+    local provisioned_id
+    [ ! -e "$ACCOUNT_PROVISIONING_MARKER" ] \
+        && [ ! -L "$ACCOUNT_PROVISIONING_MARKER" ] \
+        && [ ! -e "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        && [ ! -L "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        || return 1
+    /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" >/dev/null 2>&1 \
+        || return 1
+    provisioned_id=$(directory_service_value \
+        "/Groups/${SENSOR_GROUP}" "PrimaryGroupID") || return 1
+    [[ "$provisioned_id" =~ ^[0-9]{3}$ ]] \
+        && [ "$provisioned_id" -ge 300 ] \
+        && [ "$provisioned_id" -le 499 ] \
+        && deprovisioning_records_match_id "$provisioned_id" \
+        || return 1
+    printf '%s\n' "$provisioned_id"
+}
+
+recover_legacy_partial_service_identity() {
+    local provisioned_id
+    if [ -e "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || [ -L "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || [ -e "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        || [ -L "$ACCOUNT_DEPROVISIONING_MARKER" ]
+    then
+        return 0
+    fi
+    if ! /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1 \
+        && ! /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" \
+            >/dev/null 2>&1
+    then
+        return 0
+    fi
+    if validate_service_identity; then
+        return 0
+    fi
+    provisioned_id=$(legacy_partial_account_id) || return 1
+    write_account_deprovisioning_id "$provisioned_id" \
+        && cleanup_interrupted_account_deprovisioning
+}
+
+quiesce_sensor_identity() {
+    if ! /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
+        # A partial first install can leave app/helper artifacts before the
+        # service account is created. The helper is root-only while getpwnam()
+        # cannot resolve this account, so absence is safely quiesced.
+        return 0
+    fi
+    if ! validate_service_identity; then
+        return 1
+    fi
+    if /usr/bin/crontab -u "$SENSOR_USER" -l >/dev/null 2>&1; then
+        /usr/bin/crontab -u "$SENSOR_USER" -r >/dev/null 2>&1 \
+            || return 1
+    fi
+    ! /usr/bin/crontab -u "$SENSOR_USER" -l >/dev/null 2>&1 \
+        && terminate_sensor_processes
+}
+
 EXISTING_SENSOR_INSTALL=0
 if [ -f "$SENSOR_PLIST" ] || [ -d "$SENSOR_INSTALL_DIR" ] \
     || service_is_loaded "$SENSOR_LABEL" \
     || [ -f "$HELPER_PLIST" ] || [ -f "$HELPER_BINARY" ] \
+    || [ -e "$HELPER_STATE_DIR" ] || [ -L "$HELPER_STATE_DIR" ] \
+    || [ -e "$HELPER_ALIAS_STATE" ] || [ -L "$HELPER_ALIAS_STATE" ] \
     || service_is_loaded "$HELPER_LABEL"
 then
     EXISTING_SENSOR_INSTALL=1
 fi
+
+recover_unmarked_legacy_identity_for_existing_install() {
+    [ "$EXISTING_SENSOR_INSTALL" -eq 1 ] || return 0
+    recover_legacy_partial_service_identity
+}
 
 # ---------------------------------------------------------------------------
 # Step 1: Stop the sensor while the old helper is still available
@@ -69,6 +476,20 @@ fi
 # safe reason to assume the sensor package's preinstall already did this.
 if ! stop_service_and_verify "$SENSOR_LABEL" "sensor daemon"; then
     echo "[app-preinstall] Retaining PF and the existing installation." >&2
+    exit 1
+fi
+if ! cleanup_interrupted_account_deprovisioning \
+    || ! recover_unmarked_legacy_identity_for_existing_install
+then
+    echo "[app-preinstall] Interrupted or legacy sensor account removal is unsafe; aborting upgrade." >&2
+    exit 1
+fi
+if ! quiesce_sensor_identity; then
+    echo "[app-preinstall] Sensor service identity or detached processes are unsafe; aborting upgrade." >&2
+    exit 1
+fi
+if ! stop_service_and_verify "$HELPER_LABEL" "privileged helper daemon"; then
+    echo "[app-preinstall] Existing app and helper payloads were not replaced." >&2
     exit 1
 fi
 
@@ -107,11 +528,35 @@ proxy_arp_is_absent() {
     local interface="$1"
     local ip="$2"
     local output
+
+    # A recorded interface may disappear between releases (for example, a USB
+    # Ethernet adapter can be detached). In that case a scoped lookup cannot
+    # succeed even though the scoped proxy entry disappeared with the
+    # interface. Fall back to a bounded walk of the complete ARP table and fail
+    # closed if enumeration fails, is unexpectedly large, or still contains an
+    # exact published entry for this address.
+    if ! /sbin/ifconfig "$interface" >/dev/null 2>&1; then
+        global_proxy_arp_is_absent "$ip"
+        return
+    fi
     if output=$(/usr/sbin/arp -n -i "$interface" "$ip" 2>&1); then
         [[ "$output" != *published* && "$output" == *"($ip) at "* ]]
         return
     fi
+    if ! /sbin/ifconfig "$interface" >/dev/null 2>&1; then
+        global_proxy_arp_is_absent "$ip"
+        return
+    fi
     [[ "$output" != *published* && "$output" == *"-- no entry"* ]]
+}
+
+global_proxy_arp_is_absent() {
+    local ip="$1"
+    /usr/sbin/arp -an 2>/dev/null \
+        | /usr/bin/awk -v exact="(${ip})" '
+            NR > 16384 { exit 2 }
+            index($0, exact) != 0 && $0 ~ /published/ { exit 1 }
+        '
 }
 
 LOCAL_INTERFACES=()
@@ -128,14 +573,131 @@ physical_interface_for_ipv4() {
     return 1
 }
 
+tracked_network_state_is_absent() {
+    local tracked_ip
+    local tracked_interface
+    while IFS='|' read -r tracked_ip tracked_interface; do
+        if [ -z "$tracked_ip" ] && [ -z "$tracked_interface" ]; then
+            continue
+        fi
+        if has_ipv4_address lo0 "$tracked_ip" \
+            || ! proxy_arp_is_absent "$tracked_interface" "$tracked_ip"
+        then
+            return 1
+        fi
+    done <<< "$virtual_ip_rows"
+}
+
 remaining_aliases=0
 state_was_loaded=0
-if [ "$EXISTING_SENSOR_INSTALL" -eq 1 ] && [ ! -f "$SENSOR_DB" ]; then
-    echo "[app-preinstall] Cannot verify virtual-IP state for an existing installation; retaining PF and aborting." >&2
-    exit 1
+virtual_ip_rows=""
+helper_alias_rows=""
+helper_state_was_loaded=0
+helper_state_is_authoritative=0
+
+if [ -e "$HELPER_STATE_DIR" ] || [ -L "$HELPER_STATE_DIR" ]; then
+    if [ -L "$HELPER_STATE_DIR" ] || [ ! -d "$HELPER_STATE_DIR" ]; then
+        echo "[app-preinstall] Helper alias ownership directory has an unsafe file type; retaining PF and aborting." >&2
+        exit 1
+    fi
+    if [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' "$HELPER_STATE_DIR")" != "root:wheel:700" ]; then
+        echo "[app-preinstall] Helper alias ownership directory has unsafe permissions; retaining PF and aborting." >&2
+        exit 1
+    fi
+    helper_state_is_authoritative=1
 fi
 
-if [ -f "$SENSOR_DB" ]; then
+if [ -e "$HELPER_ALIAS_STATE" ] || [ -L "$HELPER_ALIAS_STATE" ]; then
+    if [ -L "$HELPER_ALIAS_STATE" ] || [ ! -f "$HELPER_ALIAS_STATE" ]; then
+        echo "[app-preinstall] Helper alias ownership state has an unsafe file type; retaining PF and aborting." >&2
+        exit 1
+    fi
+    if [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' "$HELPER_ALIAS_STATE")" != "root:wheel:600" ]; then
+        echo "[app-preinstall] Helper alias ownership state has unsafe permissions; retaining PF and aborting." >&2
+        exit 1
+    fi
+    if [ "$(/usr/bin/stat -f '%z' "$HELPER_ALIAS_STATE")" -gt 65536 ]; then
+        echo "[app-preinstall] Helper alias ownership state is oversized; retaining PF and aborting." >&2
+        exit 1
+    fi
+    if ! helper_alias_rows=$(/bin/cat "$HELPER_ALIAS_STATE"); then
+        echo "[app-preinstall] Cannot read helper alias ownership state; retaining PF and aborting." >&2
+        exit 1
+    fi
+    helper_state_was_loaded=1
+fi
+
+if [ "$helper_state_is_authoritative" -eq 1 ]; then
+    # The validated permanent directory is the authority marker. An absent
+    # ledger means no alias was ever claimed (for example, a crash after
+    # block-only PF quarantine but before addIPAlias).
+    # Package scripts never interpret the sensor-writable database as root.
+    virtual_ip_rows="$helper_alias_rows"
+    state_was_loaded=1
+fi
+
+squirrelops_pf_anchor_is_empty() {
+    local filter_rules
+    local translation_rules
+    filter_rules=$(
+        /sbin/pfctl -a com.apple/squirrelops -sr 2>/dev/null
+    ) || return 1
+    translation_rules=$(
+        /sbin/pfctl -a com.apple/squirrelops -sn 2>/dev/null
+    ) || return 1
+    [ -z "$(printf '%s' "$filter_rules$translation_rules" \
+        | /usr/bin/tr -d '[:space:]')" ]
+}
+
+legacy_network_state_is_safe() {
+    local loopback_output
+    local arp_output
+
+    loopback_output=$(/sbin/ifconfig lo0 2>/dev/null) || return 1
+    printf '%s\n' "$loopback_output" \
+        | /usr/bin/awk '
+            $1 == "inet" {
+                split($2, octets, ".")
+                if ($2 == "127.0.0.1" && $3 == "netmask" &&
+                    tolower($4) == "0xff000000") {
+                    required_loopback++
+                }
+                if (octets[1] != 127) {
+                    unsafe_nonloopback_alias = 1
+                }
+            }
+            END {
+                exit !(required_loopback == 1 &&
+                    !unsafe_nonloopback_alias)
+            }
+        ' \
+        || return 1
+
+    arp_output=$(/usr/sbin/arp -an 2>/dev/null) || return 1
+    if printf '%s\n' "$arp_output" \
+        | /usr/bin/awk '
+            tolower($0) ~ /published/ { found = 1 }
+            END { exit !found }
+        '
+    then
+        return 1
+    fi
+    return 0
+}
+
+if [ "$state_was_loaded" -eq 0 ]; then
+    if ! squirrelops_pf_anchor_is_empty; then
+        echo "[app-preinstall] Cannot prove the SquirrelOps PF anchor is empty without durable alias state; retaining the existing installation." >&2
+        exit 1
+    fi
+    if ! legacy_network_state_is_safe; then
+        echo "[app-preinstall] Legacy loopback or proxy-ARP state is unsafe; manual cleanup is required before upgrade." >&2
+        echo "[app-preinstall] See https://github.com/rocketweb/squirrelops-home/blob/main/docs/USER_GUIDE.md#recovering-legacy-macos-network-state" >&2
+        exit 1
+    fi
+fi
+
+if [ "$state_was_loaded" -eq 1 ]; then
     if ! local_interface_list=$(/sbin/ifconfig -l 2>/dev/null); then
         echo "[app-preinstall] Cannot enumerate local interfaces; retaining PF and aborting." >&2
         exit 1
@@ -159,28 +721,7 @@ if [ -f "$SENSOR_DB" ]; then
         echo "[app-preinstall] Cannot verify the loopback interface; retaining PF and aborting." >&2
         exit 1
     fi
-    if [ ! -x /usr/bin/sqlite3 ]; then
-        echo "[app-preinstall] sqlite3 is unavailable; retaining PF and aborting." >&2
-        exit 1
-    fi
-    if ! database_check=$(
-        /usr/bin/sqlite3 "$SENSOR_DB" "PRAGMA quick_check;"
-    ); then
-        echo "[app-preinstall] Cannot validate the sensor database; retaining PF and aborting." >&2
-        exit 1
-    fi
-    if [ "$database_check" != "ok" ]; then
-        echo "[app-preinstall] Sensor database integrity check failed; retaining PF and aborting." >&2
-        exit 1
-    fi
-    if ! virtual_ip_rows=$(
-        /usr/bin/sqlite3 -separator '|' "$SENSOR_DB" \
-            "SELECT DISTINCT ip_address, interface FROM virtual_ips WHERE released_at IS NULL;"
-    ); then
-        echo "[app-preinstall] Cannot read recorded virtual IPs; retaining PF and aborting." >&2
-        exit 1
-    fi
-    state_was_loaded=1
+
     while IFS='|' read -r virtual_ip virtual_interface; do
         # An empty result is represented by one empty here-string iteration.
         if [ -z "$virtual_ip" ] && [ -z "$virtual_interface" ]; then
@@ -192,7 +733,6 @@ if [ -f "$SENSOR_DB" ]; then
             remaining_aliases=1
             continue
         fi
-
         if physical_interface=$(
             physical_interface_for_ipv4 "$virtual_ip"
         ); then
@@ -257,10 +797,41 @@ if [ "$state_was_loaded" -eq 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: Stop the privileged helper daemon (if running)
+# Step 2: Reconfirm the sensor identity stayed quiescent
 # ---------------------------------------------------------------------------
-if ! stop_service_and_verify "$HELPER_LABEL" "privileged helper daemon"; then
-    echo "[app-preinstall] Existing app and helper payloads were not replaced." >&2
+if ! quiesce_sensor_identity; then
+    echo "[app-preinstall] Sensor UID process reappeared during network cleanup; aborting upgrade." >&2
+    exit 1
+fi
+if [ -e "$HELPER_ALIAS_STATE" ] || [ -L "$HELPER_ALIAS_STATE" ]; then
+    if [ -L "$HELPER_ALIAS_STATE" ]; then
+        echo "[app-preinstall] Helper alias ownership changed type during cleanup; aborting upgrade." >&2
+        exit 1
+    fi
+    if ! current_helper_alias_rows=$(/bin/cat "$HELPER_ALIAS_STATE"); then
+        echo "[app-preinstall] Cannot re-read helper alias ownership after shutdown; aborting upgrade." >&2
+        exit 1
+    fi
+    if [ "$helper_state_was_loaded" -ne 1 ] \
+        || [ "$current_helper_alias_rows" != "$helper_alias_rows" ]
+    then
+        echo "[app-preinstall] Helper alias ownership changed during cleanup; retaining state and aborting upgrade." >&2
+        exit 1
+    fi
+elif [ "$helper_state_was_loaded" -eq 1 ]; then
+    echo "[app-preinstall] Helper alias ownership disappeared during cleanup; aborting upgrade." >&2
+    exit 1
+fi
+if ! /sbin/pfctl -a com.apple/squirrelops -F all >/dev/null 2>&1; then
+    echo "[app-preinstall] PF anchor changed during helper shutdown; aborting upgrade." >&2
+    exit 1
+fi
+if ! tracked_network_state_is_absent; then
+    echo "[app-preinstall] A tracked alias or proxy-ARP entry reappeared during helper shutdown; aborting upgrade." >&2
+    exit 1
+fi
+if ! rm -f -- "$HELPER_ALIAS_STATE"; then
+    echo "[app-preinstall] Cannot retire verified helper alias ownership state; aborting upgrade." >&2
     exit 1
 fi
 

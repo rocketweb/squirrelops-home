@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import json
 import logging
 import ssl
@@ -29,10 +30,16 @@ _MAX_REPLAY_BODY_SIZE = 64 * 1024
 _MAX_CREDENTIAL_AUTH_SIZE = 8 * 1024
 _MAX_CREDENTIAL_BODY_SIZE = 4 * 1024
 _MAX_CREDENTIAL_FORM_FIELDS = 32
+_MAX_HTTP_REQUEST_LINE_SIZE = 8 * 1024
+_MAX_HTTP_HEADER_LINE_SIZE = 8 * 1024
+_MAX_HTTP_HEADER_SECTION_SIZE = 32 * 1024
+_MAX_HTTP_HEADER_FIELDS = 100
 _MAX_CHUNK_LINE_SIZE = 128
 _MAX_CHUNK_COUNT = 64
 _MAX_TRAILER_LINE_SIZE = 256
 _MAX_TRAILER_FIELDS = 16
+_MAX_CONCURRENT_CONNECTIONS = 16
+_HTTP_REQUEST_DEADLINE_SECONDS = 10.0
 _HTTP_BODY_TIMEOUT_SECONDS = 5.0
 _HTTP_TOKEN_BYTES = frozenset(
     b"!#$%&'*+-.^_`|~"
@@ -40,6 +47,10 @@ _HTTP_TOKEN_BYTES = frozenset(
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     b"abcdefghijklmnopqrstuvwxyz"
 )
+
+
+class _HTTPRequestLimitError(Exception):
+    """Raised when an untrusted request exceeds a parser resource limit."""
 
 
 class _MimicEndpoint:
@@ -81,6 +92,8 @@ class _MimicEndpoint:
         self.ssl_context = ssl_context
         self.advertised_hostname = advertised_hostname
         self._server: asyncio.Server | None = None
+        self._active_connections = 0
+        self._notified_connections: set[int] = set()
 
     async def start(self) -> None:
         """Start serving on bind_port."""
@@ -94,8 +107,14 @@ class _MimicEndpoint:
             handler = self._handle_http
         else:
             handler = self._handle_banner
+        async def bounded_handler(
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
+        ) -> None:
+            await self._handle_connection(handler, reader, writer)
+
         self._server = await asyncio.start_server(
-            handler,
+            bounded_handler,
             self.bind_ip,
             self.bind_port,
         )
@@ -125,6 +144,66 @@ class _MimicEndpoint:
     def is_running(self) -> bool:
         return self._server is not None and self._server.is_serving()
 
+    async def _handle_connection(
+        self,
+        handler,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Bound accepted work while preserving every trip signal."""
+        if self._active_connections >= _MAX_CONCURRENT_CONNECTIONS:
+            self._notify_connection(writer)
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            self._notified_connections.discard(id(writer))
+            return
+
+        # No await occurs between the check and increment, so this admission
+        # decision is atomic on the endpoint's event loop.
+        self._active_connections += 1
+        try:
+            await handler(reader, writer)
+        finally:
+            self._active_connections -= 1
+            self._notified_connections.discard(id(writer))
+
+    def _notify_connection(
+        self,
+        writer: asyncio.StreamWriter,
+        *,
+        request_path: str | None = None,
+        credential_used: str | None = None,
+    ) -> None:
+        """Emit at most one event for an accepted connection."""
+        connection_id = id(writer)
+        if (
+            connection_id in self._notified_connections
+            or self.connection_callback is None
+        ):
+            return
+        self._notified_connections.add(connection_id)
+
+        peername = writer.get_extra_info("peername")
+        source_ip = peername[0] if peername else "0.0.0.0"
+        source_port = peername[1] if peername else 0
+        try:
+            self.connection_callback(
+                DecoyConnectionEvent(
+                    source_ip=source_ip,
+                    source_port=source_port,
+                    dest_port=self.port,
+                    protocol="tcp",
+                    timestamp=datetime.now(UTC),
+                    request_path=request_path,
+                    credential_used=credential_used,
+                )
+            )
+        except Exception:
+            logger.exception("Mimic connection callback failed")
+
     async def _handle_tls(
         self,
         reader: asyncio.StreamReader,
@@ -132,25 +211,13 @@ class _MimicEndpoint:
     ) -> None:
         """Upgrade an accepted connection to TLS before serving a protocol."""
         assert self.ssl_context is not None
-        peername = writer.get_extra_info("peername")
-        source_ip = peername[0] if peername else "0.0.0.0"
-        source_port = peername[1] if peername else 0
         try:
             await writer.start_tls(
                 self.ssl_context,
                 ssl_handshake_timeout=5.0,
             )
         except Exception:
-            if self.connection_callback:
-                self.connection_callback(
-                    DecoyConnectionEvent(
-                        source_ip=source_ip,
-                        source_port=source_port,
-                        dest_port=self.port,
-                        protocol="tcp",
-                        timestamp=datetime.now(UTC),
-                    )
-                )
+            self._notify_connection(writer)
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -167,11 +234,58 @@ class _MimicEndpoint:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
     ) -> None:
         """Minimal HTTP request handler."""
-        peername = writer.get_extra_info("peername")
-        source_ip = peername[0] if peername else "0.0.0.0"
-        source_port = peername[1] if peername else 0
-        notified = False
+        parsed_request_path: str | None = None
+        parsed_header_credential: str | None = None
+        parsed_headers: dict[str, str] = {}
+        parsed_body_prefix = b""
 
+        def notify_connection(
+            *,
+            request_path: str | None = None,
+            credential_used: str | None = None,
+        ) -> None:
+            self._notify_connection(
+                writer,
+                request_path=request_path,
+                credential_used=credential_used,
+            )
+
+        def expire_request() -> None:
+            # Preserve any bounded request metadata parsed before a peer stalls.
+            # A planted header or body prefix must not be downgraded to a generic
+            # connection by advertising a body and waiting out the deadline.
+            credential_used = parsed_header_credential
+            if credential_used is None:
+                credential_used = self._check_credentials(
+                    parsed_headers,
+                    parsed_body_prefix.decode("utf-8", errors="replace"),
+                    body_complete=False,
+                )
+            notify_connection(
+                request_path=parsed_request_path,
+                credential_used=credential_used,
+            )
+            writer.close()
+
+        def preserve_body_prefix(body_prefix: bytes) -> None:
+            """Retain and immediately inspect the bounded bytes read so far."""
+            nonlocal parsed_body_prefix
+            parsed_body_prefix = body_prefix[:_MAX_CREDENTIAL_BODY_SIZE]
+            credential_used = self._check_credentials(
+                parsed_headers,
+                parsed_body_prefix.decode("utf-8", errors="replace"),
+                body_complete=False,
+            )
+            if credential_used is not None:
+                notify_connection(
+                    request_path=parsed_request_path,
+                    credential_used=credential_used,
+                )
+
+        deadline = asyncio.get_running_loop().call_later(
+            _HTTP_REQUEST_DEADLINE_SECONDS,
+            expire_request,
+        )
         try:
             # Read request line
             request_line = await asyncio.wait_for(reader.readline(), timeout=10.0)
@@ -180,39 +294,64 @@ class _MimicEndpoint:
                 # immediately close without sending an HTTP request.  The
                 # accepted connection is still a decoy trip and must not be
                 # silently discarded.
-                if self.connection_callback:
-                    event = DecoyConnectionEvent(
-                        source_ip=source_ip,
-                        source_port=source_port,
-                        dest_port=self.port,
-                        protocol="tcp",
-                        timestamp=datetime.now(UTC),
-                    )
-                    self.connection_callback(event)
-                    notified = True
+                notify_connection()
                 return
+            if len(request_line) > _MAX_HTTP_REQUEST_LINE_SIZE:
+                raise _HTTPRequestLimitError("HTTP request line exceeds limit")
 
             request_text = request_line.decode("utf-8", errors="replace").strip()
             parts = request_text.split(" ")
             path = parts[1] if len(parts) >= 2 else "/"
+            parsed_request_path = path
 
             # Read headers
-            headers: dict[str, str] = {}
+            headers = parsed_headers
             body_text = ""
             body_complete = True
             body_framing_valid = True
             content_length: int | None = None
             transfer_encoding: str | None = None
+            header_count = 0
+            header_section_size = 0
             while True:
                 header_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
                 if header_line in (b"\r\n", b"\n", b""):
                     break
+                header_count += 1
+                header_section_size += len(header_line)
+                if (
+                    len(header_line) > _MAX_HTTP_HEADER_LINE_SIZE
+                    or header_count > _MAX_HTTP_HEADER_FIELDS
+                    or header_section_size > _MAX_HTTP_HEADER_SECTION_SIZE
+                ):
+                    raise _HTTPRequestLimitError(
+                        "HTTP header section exceeds limit"
+                    )
                 decoded = header_line.decode("utf-8", errors="replace").strip()
                 if ":" in decoded:
                     key, _, value = decoded.partition(":")
                     normalized_key = key.strip().lower()
                     normalized_value = value.strip()
-                    headers[normalized_key] = normalized_value
+                    if normalized_key in headers:
+                        headers[normalized_key] = (
+                            f"{headers[normalized_key]}\n{normalized_value}"
+                        )
+                    else:
+                        headers[normalized_key] = normalized_value
+                    if normalized_key == "authorization":
+                        parsed_header_credential = self._check_credentials(
+                            headers,
+                            "",
+                            body_complete=False,
+                        )
+                        if parsed_header_credential is not None:
+                            # Record as soon as the bounded header is available.
+                            # Later malformed headers, body stalls, and response
+                            # backpressure cannot downgrade this detection.
+                            notify_connection(
+                                request_path=path,
+                                credential_used=parsed_header_credential,
+                            )
                     if normalized_key == "content-length":
                         if (
                             content_length is not None
@@ -237,12 +376,16 @@ class _MimicEndpoint:
                 if body_framing_valid:
                     try:
                         body_bytes, body_complete = await asyncio.wait_for(
-                            self._read_chunked_body(reader),
+                            self._read_chunked_body(
+                                reader,
+                                on_progress=preserve_body_prefix,
+                            ),
                             timeout=_HTTP_BODY_TIMEOUT_SECONDS,
                         )
                     except TimeoutError:
-                        body_bytes = b""
+                        body_bytes = parsed_body_prefix
                         body_complete = False
+                    preserve_body_prefix(body_bytes)
                     body_text = body_bytes.decode("utf-8", errors="replace")
                 else:
                     body_complete = False
@@ -250,13 +393,19 @@ class _MimicEndpoint:
                 read_size = min(content_length, _MAX_CREDENTIAL_BODY_SIZE)
                 body_complete = content_length <= _MAX_CREDENTIAL_BODY_SIZE
                 try:
-                    body_bytes = await asyncio.wait_for(
-                        reader.readexactly(read_size),
+                    body_bytes, read_complete = await asyncio.wait_for(
+                        self._read_body_prefix(
+                            reader,
+                            read_size,
+                            on_progress=preserve_body_prefix,
+                        ),
                         timeout=_HTTP_BODY_TIMEOUT_SECONDS,
                     )
-                except asyncio.IncompleteReadError as exc:
-                    body_bytes = exc.partial
+                    body_complete = body_complete and read_complete
+                except TimeoutError:
+                    body_bytes = parsed_body_prefix
                     body_complete = False
+                preserve_body_prefix(body_bytes)
                 body_text = body_bytes.decode("utf-8", errors="replace")
             elif not body_framing_valid:
                 body_complete = False
@@ -267,6 +416,12 @@ class _MimicEndpoint:
                 body_text,
                 body_complete=body_complete,
             )
+            # Detection precedes all response I/O. A peer that stops reading
+            # cannot turn a parsed credential trip into a generic timeout.
+            notify_connection(
+                request_path=path,
+                credential_used=credential_used,
+            )
 
             # Match route
             route = self.routes.get(path) or self.routes.get("/")
@@ -275,35 +430,21 @@ class _MimicEndpoint:
             else:
                 await self._send_404(writer)
 
-            # Notify connection
-            if self.connection_callback:
-                event = DecoyConnectionEvent(
-                    source_ip=source_ip,
-                    source_port=source_port,
-                    dest_port=self.port,
-                    protocol="tcp",
-                    timestamp=datetime.now(UTC),
-                    request_path=path,
-                    credential_used=credential_used,
-                )
-                self.connection_callback(event)
-                notified = True
-
         except (TimeoutError, ConnectionResetError, BrokenPipeError):
             # TCP connect without completing HTTP exchange (e.g. nmap scan).
             # Still record the connection attempt.
-            if not notified and self.connection_callback:
-                event = DecoyConnectionEvent(
-                    source_ip=source_ip,
-                    source_port=source_port,
-                    dest_port=self.port,
-                    protocol="tcp",
-                    timestamp=datetime.now(UTC),
-                )
-                self.connection_callback(event)
+            expire_request()
+        except _HTTPRequestLimitError:
+            # Resource-limit violations are attacker-controlled malformed
+            # requests, but the accepted TCP connection remains a decoy trip.
+            notify_connection()
         except Exception:
             logger.debug("Mimic HTTP handler error on %s:%d", self.bind_ip, self.port, exc_info=True)
+            # Parsing must fail closed for serving while failing open for
+            # detection: no malformed request may suppress the trip signal.
+            notify_connection()
         finally:
+            deadline.cancel()
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -313,6 +454,8 @@ class _MimicEndpoint:
     async def _read_chunked_body(
         self,
         reader: asyncio.StreamReader,
+        *,
+        on_progress: Callable[[bytes], None] | None = None,
     ) -> tuple[bytes, bool]:
         """Read one strictly framed, bounded HTTP chunked body."""
         body = bytearray()
@@ -350,21 +493,51 @@ class _MimicEndpoint:
             if len(body) + chunk_size > _MAX_CREDENTIAL_BODY_SIZE:
                 return bytes(body), False
 
-            try:
-                chunk_and_crlf = await reader.readexactly(chunk_size + 2)
-            except asyncio.IncompleteReadError as exc:
-                body.extend(
-                    exc.partial[: min(chunk_size, _MAX_CREDENTIAL_BODY_SIZE - len(body))]
+            chunk, chunk_complete = await self._read_body_prefix(
+                reader,
+                chunk_size,
+                on_progress=(
+                    (
+                        lambda partial: on_progress(bytes(body) + partial)
+                    )
+                    if on_progress is not None
+                    else None
                 )
-                return bytes(body), False
-            if not chunk_and_crlf.endswith(b"\r\n"):
-                body.extend(chunk_and_crlf[:chunk_size])
+            )
+            body.extend(chunk)
+            if on_progress is not None:
+                on_progress(bytes(body))
+            if not chunk_complete:
                 return bytes(body), False
 
-            body.extend(chunk_and_crlf[:chunk_size])
+            chunk_ending, ending_complete = await self._read_body_prefix(
+                reader,
+                2,
+            )
+            if not ending_complete or chunk_ending != b"\r\n":
+                return bytes(body), False
+
             chunk_count += 1
 
         return bytes(body), False
+
+    @staticmethod
+    async def _read_body_prefix(
+        reader: asyncio.StreamReader,
+        size: int,
+        *,
+        on_progress: Callable[[bytes], None] | None = None,
+    ) -> tuple[bytes, bool]:
+        """Read up to ``size`` bytes while retaining progress across timeouts."""
+        body = bytearray()
+        while len(body) < size:
+            chunk = await reader.read(min(4096, size - len(body)))
+            if not chunk:
+                return bytes(body), False
+            body.extend(chunk)
+            if on_progress is not None:
+                on_progress(bytes(body))
+        return bytes(body), True
 
     @staticmethod
     def _valid_chunk_extensions(extensions: bytes) -> bool:
@@ -419,10 +592,8 @@ class _MimicEndpoint:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
     ) -> None:
         """Banner-replay handler for non-HTTP ports (SSH, FTP, SMTP)."""
-        peername = writer.get_extra_info("peername")
-        source_ip = peername[0] if peername else "0.0.0.0"
-        source_port = peername[1] if peername else 0
-        notified = False
+        def notify_connection(*, credential_used: str | None = None) -> None:
+            self._notify_connection(writer, credential_used=credential_used)
 
         try:
             # Send banner
@@ -440,32 +611,16 @@ class _MimicEndpoint:
                 body_text = ""
 
             credential_used = self._check_credentials({}, body_text)
-
-            if self.connection_callback:
-                event = DecoyConnectionEvent(
-                    source_ip=source_ip,
-                    source_port=source_port,
-                    dest_port=self.port,
-                    protocol="tcp",
-                    timestamp=datetime.now(UTC),
-                    credential_used=credential_used,
-                )
-                self.connection_callback(event)
-                notified = True
+            notify_connection(credential_used=credential_used)
 
         except (ConnectionResetError, BrokenPipeError):
             # TCP connect without completing banner exchange (e.g. nmap scan).
-            if not notified and self.connection_callback:
-                event = DecoyConnectionEvent(
-                    source_ip=source_ip,
-                    source_port=source_port,
-                    dest_port=self.port,
-                    protocol="tcp",
-                    timestamp=datetime.now(UTC),
-                )
-                self.connection_callback(event)
+            notify_connection()
         except Exception:
             logger.debug("Mimic banner handler error", exc_info=True)
+            # An accepted connection is still a trip even when malformed I/O
+            # takes an unexpected parser or transport path.
+            notify_connection()
         finally:
             try:
                 writer.close()
@@ -485,7 +640,7 @@ class _MimicEndpoint:
                     encoded_body,
                     validate=True,
                 )[:_MAX_REPLAY_BODY_SIZE]
-            except (ValueError, base64.binascii.Error):
+            except (ValueError, binascii.Error):
                 body_bytes = b""
         else:
             body = route.get("body", "")
@@ -550,15 +705,10 @@ class _MimicEndpoint:
         body_complete: bool = True,
     ) -> str | None:
         """Return the canonical planted credential used by an HTTP request."""
-        auth = next(
-            (
-                value
-                for key, value in headers.items()
-                if key.casefold() == "authorization"
-            ),
-            "",
-        )
-        bounded_auth = auth[:_MAX_CREDENTIAL_AUTH_SIZE]
+        auth_values = self._header_values(headers, "authorization")
+        bounded_auth_values = [
+            value[:_MAX_CREDENTIAL_AUTH_SIZE] for value in auth_values
+        ]
         bounded_body = body[:_MAX_CREDENTIAL_BODY_SIZE]
 
         # Preserve exact token/Bearer and body matching within the same bounds
@@ -566,13 +716,15 @@ class _MimicEndpoint:
         for cred_val in self.credential_values:
             if not cred_val:
                 continue
-            if cred_val in bounded_auth:
+            if any(cred_val in value for value in bounded_auth_values):
                 return cred_val
             if cred_val in bounded_body:
                 return cred_val
 
         # HTTP Basic carries the canonical username:password value as base64.
-        if len(auth) <= _MAX_CREDENTIAL_AUTH_SIZE:
+        for auth in auth_values:
+            if len(auth) > _MAX_CREDENTIAL_AUTH_SIZE:
+                continue
             scheme = auth[:5]
             separator = auth[5:6]
             encoded = auth[5:].lstrip(" \t")
@@ -603,19 +755,14 @@ class _MimicEndpoint:
             or len(body) > _MAX_CREDENTIAL_BODY_SIZE
         ):
             return None
-        content_type = next(
-            (
-                value
-                for key, value in headers.items()
-                if key.casefold() == "content-type"
-            ),
-            "",
-        )
-        media_type = content_type.partition(";")[0].strip().casefold()
+        media_types = {
+            value.partition(";")[0].strip().casefold()
+            for value in self._header_values(headers, "content-type")
+        }
 
         username: str | None = None
         password: str | None = None
-        if media_type == "application/x-www-form-urlencoded":
+        if "application/x-www-form-urlencoded" in media_types:
             try:
                 fields = parse_qsl(
                     body,
@@ -638,7 +785,7 @@ class _MimicEndpoint:
                 login_fields[key] = value
             username = login_fields.get("username")
             password = login_fields.get("password")
-        elif media_type == "application/json":
+        elif "application/json" in media_types:
             def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
                 result: dict[str, object] = {}
                 for key, value in pairs:
@@ -670,6 +817,15 @@ class _MimicEndpoint:
             if canonical in self.credential_values:
                 return canonical
         return None
+
+    @staticmethod
+    def _header_values(headers: dict[str, str], name: str) -> list[str]:
+        """Return every bounded value retained for a case-insensitive header."""
+        values: list[str] = []
+        for key, value in headers.items():
+            if key.casefold() == name.casefold():
+                values.extend(value.split("\n"))
+        return values
 
 
 class MimicDecoy(BaseDecoy):
@@ -706,6 +862,7 @@ class MimicDecoy(BaseDecoy):
         tls_cert_pem: str | None = None,
         tls_key_pem: str | None = None,
         credentials_by_port: dict[int, list] | None = None,
+        backend_bind_address: str | None = None,
     ) -> None:
         # Use the first port as the primary port for the base class
         primary_port = port_configs[0]["port"] if port_configs else 0
@@ -717,6 +874,7 @@ class MimicDecoy(BaseDecoy):
             decoy_type="mimic",
         )
         self._port_configs = port_configs
+        self._backend_bind_address = backend_bind_address or bind_address
         self._server_header = server_header
         self._planted_credentials = planted_credentials or []
         self._credentials_scoped = credentials_by_port is not None
@@ -807,7 +965,7 @@ class MimicDecoy(BaseDecoy):
                 attempts = 16 if dynamic else 1
                 for _attempt in range(attempts):
                     endpoint = _MimicEndpoint(
-                        bind_ip=self.bind_address,
+                        bind_ip=self._backend_bind_address,
                         port=advertised_port,
                         bind_port=(
                             0 if dynamic else self._port_remaps.get(

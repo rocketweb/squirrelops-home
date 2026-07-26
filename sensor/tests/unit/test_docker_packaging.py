@@ -41,13 +41,14 @@ class TestDockerfile:
             "python:3.11-slim-bookworm" in l for l in from_lines
         ), f"Expected python:3.11-slim-bookworm in FROM, got: {from_lines}"
 
-    def test_installs_libpcap(self) -> None:
-        """Dockerfile must install libpcap-dev."""
-        assert "libpcap-dev" in self.content, "Missing libpcap-dev install"
+    def test_installs_runtime_libpcap(self) -> None:
+        """Helper needs libpcap at runtime, not compiler headers."""
+        assert "libpcap0.8" in self.content, "Missing libpcap runtime"
+        assert "libpcap-dev" not in self.content
 
-    def test_installs_nmap(self) -> None:
-        """Dockerfile must install nmap."""
-        assert "nmap" in self.content, "Missing nmap install"
+    def test_does_not_install_nmap(self) -> None:
+        """Service scans use bounded unprivileged TCP probes."""
+        assert "nmap" not in self.content
 
     def test_installs_uv(self) -> None:
         """Dockerfile must install uv for dependency management."""
@@ -86,24 +87,8 @@ class TestDockerfile:
 
     def test_healthcheck_targets_system_health(self) -> None:
         """HEALTHCHECK should probe /system/health."""
-        # Collect multi-line HEALTHCHECK directive into a single string.
-        healthcheck_text = ""
-        in_healthcheck = False
-        for line in self.content.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("HEALTHCHECK"):
-                in_healthcheck = True
-                healthcheck_text += stripped
-            elif in_healthcheck:
-                if stripped.startswith((
-                    "FROM", "RUN", "COPY", "CMD", "ENTRYPOINT",
-                    "EXPOSE", "ENV", "WORKDIR", "ARG", "LABEL",
-                )):
-                    break
-                healthcheck_text += " " + stripped
-        assert "/system/health" in healthcheck_text, (
-            f"HEALTHCHECK does not probe /system/health: {healthcheck_text}"
-        )
+        assert "/system/health" in self.content
+        assert "linux_sidecar\", \"--healthcheck" in self.content
 
     def test_has_cmd_or_entrypoint(self) -> None:
         """Must define a CMD or ENTRYPOINT."""
@@ -154,6 +139,9 @@ class TestDockerCompose:
     def test_has_sensor_service(self) -> None:
         assert "sensor" in self.compose["services"]
 
+    def test_has_constrained_network_helper_service(self) -> None:
+        assert "network-helper" in self.compose["services"]
+
     def test_sensor_has_build(self) -> None:
         sensor = self.compose["services"]["sensor"]
         assert "build" in sensor, "Sensor service missing 'build' key"
@@ -169,19 +157,26 @@ class TestDockerCompose:
             "8443" in p for p in port_strings
         ), f"Sensor does not expose port 8443. Ports: {port_strings}"
 
-    def test_sensor_has_net_raw_capability(self) -> None:
+    def test_sensor_drops_all_capabilities(self) -> None:
         sensor = self.compose["services"]["sensor"]
-        cap_add = sensor.get("cap_add", [])
-        assert "NET_RAW" in cap_add, (
-            f"Sensor missing NET_RAW capability. cap_add: {cap_add}"
-        )
+        assert sensor.get("cap_add", []) == []
+        assert sensor.get("cap_drop") == ["ALL"]
 
-    def test_sensor_has_net_admin_capability(self) -> None:
+    def test_helper_has_only_required_network_capabilities(self) -> None:
+        helper = self.compose["services"]["network-helper"]
+        assert helper.get("cap_drop") == ["ALL"]
+        assert set(helper.get("cap_add", [])) == {"NET_RAW", "NET_ADMIN"}
+
+    def test_sensor_is_non_root_and_read_only(self) -> None:
         sensor = self.compose["services"]["sensor"]
-        cap_add = sensor.get("cap_add", [])
-        assert "NET_ADMIN" in cap_add, (
-            f"Sensor missing NET_ADMIN capability. cap_add: {cap_add}"
-        )
+        assert sensor.get("user") == "10001:10001"
+        assert sensor.get("read_only") is True
+        assert "no-new-privileges:true" in sensor.get("security_opt", [])
+
+    def test_helper_is_read_only_and_cannot_gain_privileges(self) -> None:
+        helper = self.compose["services"]["network-helper"]
+        assert helper.get("read_only") is True
+        assert "no-new-privileges:true" in helper.get("security_opt", [])
 
     def test_sensor_has_volume_for_persistent_data(self) -> None:
         sensor = self.compose["services"]["sensor"]
@@ -192,11 +187,22 @@ class TestDockerCompose:
             "/app/data" in v or "sensor_data" in v for v in volume_strings
         ), f"No persistent data volume found. Volumes: {volume_strings}"
 
-    def test_sensor_has_network_mode_host(self) -> None:
+    def test_only_helper_has_network_mode_host(self) -> None:
         sensor = self.compose["services"]["sensor"]
-        assert sensor.get("network_mode") == "host", (
-            f"Expected network_mode: host, got: {sensor.get('network_mode')}"
+        helper = self.compose["services"]["network-helper"]
+        assert sensor.get("network_mode") != "host"
+        assert helper.get("network_mode") == "host"
+
+    def test_sensor_uses_private_static_bridge_address(self) -> None:
+        sensor = self.compose["services"]["sensor"]
+        assert (
+            sensor["networks"]["sensor_private"]["ipv4_address"]
+            == "172.30.0.2"
         )
+
+    def test_sensor_mounts_helper_socket_read_only(self) -> None:
+        mounts = [str(value) for value in self.compose["services"]["sensor"]["volumes"]]
+        assert "helper_socket:/run/squirrelops:ro" in mounts
 
     def test_sensor_has_restart_policy(self) -> None:
         sensor = self.compose["services"]["sensor"]

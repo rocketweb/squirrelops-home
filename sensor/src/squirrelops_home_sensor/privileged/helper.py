@@ -3,9 +3,9 @@
 Provides a platform-independent interface for network operations, including
 the subset that requires elevated privileges.
 
-On Linux/Docker, operations are performed directly (container runs as root).
-On macOS, privileged operations are delegated to the squirrelops-helper via
-Unix domain socket JSON-RPC; service scanning stays unprivileged (see xpc.py).
+On Linux/Docker and macOS, privileged operations are delegated to narrowly
+scoped companion processes over Unix sockets.  ``LinuxPrivilegedOps`` is the
+host-side implementation used only inside the constrained Linux helper.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
 import shlex
 import socket
 import sys
@@ -71,6 +72,25 @@ class PrivilegedOperations(ABC):
     """
 
     requires_active_alias_withdrawal_probe = False
+
+    def listener_bind_address(self, advertised_ip: str) -> str:
+        """Return the local address used for an advertised virtual address.
+
+        Direct/macOS deployments own the virtual address in the sensor network
+        namespace.  The constrained Linux deployment overrides this so the
+        backend listens on the sensor bridge while the helper owns the LAN IP.
+        """
+        return advertised_ip
+
+    async def publish_listener(self, listener_id: int, port: int) -> bool:
+        """Publish a classic decoy listener when namespaces are separated."""
+        del listener_id, port
+        return True
+
+    async def unpublish_listener(self, listener_id: int) -> bool:
+        """Withdraw a classic decoy listener publication."""
+        del listener_id
+        return True
 
     async def is_available(self) -> bool:
         """Check whether privileged operations are available.
@@ -240,11 +260,7 @@ class PrivilegedOperations(ABC):
 
 
 class LinuxPrivilegedOps(PrivilegedOperations):
-    """Direct privileged operations for Linux/Docker.
-
-    The sensor container runs as root with CAP_NET_RAW and CAP_NET_ADMIN,
-    so all operations are performed directly using scapy and nmap.
-    """
+    """Host-side implementation used only by the constrained Linux helper."""
 
     def __init__(self) -> None:
         self._dns_queries: list[DNSQuery] = []
@@ -470,7 +486,17 @@ class LinuxPrivilegedOps(PrivilegedOperations):
         ]
 
         filter_rules: list[str] = []
-        dnat_destinations = {to_ip for _, _, to_ip, _ in validated_rules}
+        # DNAT now crosses from the host namespace into the sensor's private
+        # bridge. The same owned chain is attached to FORWARD as well as INPUT:
+        # accept only the exact translated backends, while INPUT still protects
+        # every non-translated port on the advertised virtual address.
+        for _, _, to_ip, to_port in validated_rules:
+            rule = (
+                f"-A {_MIMIC_CHAIN} -m conntrack --ctstate DNAT "
+                f"-p tcp -d {to_ip} --dport {to_port} -j ACCEPT"
+            )
+            if rule not in filter_rules:
+                filter_rules.append(rule)
         for endpoint in protected_endpoints:
             try:
                 endpoint_ip = endpoint["ip"]
@@ -482,11 +508,6 @@ class LinuxPrivilegedOps(PrivilegedOperations):
             ipaddress.IPv4Address(endpoint_ip)
             if not isinstance(direct_ports, list):
                 raise ValueError("Protected endpoint direct_ports must be a list")
-            if endpoint_ip in dnat_destinations:
-                filter_rules.append(
-                    f"-A {_MIMIC_CHAIN} -m conntrack --ctstate DNAT "
-                    f"-p tcp -d {endpoint_ip} -j ACCEPT"
-                )
             for port in direct_ports:
                 if type(port) is not int or not 1 <= port <= 65535:
                     raise ValueError(
@@ -530,6 +551,7 @@ class LinuxPrivilegedOps(PrivilegedOperations):
             )
             target_filter = self._target_owned_iptables_state(
                 built_in_chain="INPUT",
+                additional_built_in_chains=("FORWARD",),
                 owned_rules=filter_rules,
                 include_owned_chain=include_owned_chains,
             )
@@ -726,22 +748,24 @@ class LinuxPrivilegedOps(PrivilegedOperations):
     def _target_owned_iptables_state(
         *,
         built_in_chain: str,
+        additional_built_in_chains: tuple[str, ...] = (),
         owned_rules: list[str],
         include_owned_chain: bool,
     ) -> _OwnedIptablesState:
         """Build the desired owned state without copying host-owned rules."""
         if not include_owned_chain:
             return _OwnedIptablesState(chain_exists=False)
-        jump_rule = f"-A {built_in_chain} -j {_MIMIC_CHAIN}"
+        built_in_chains = (built_in_chain, *additional_built_in_chains)
         return _OwnedIptablesState(
             chain_exists=True,
             rules=tuple(owned_rules),
-            jumps=(
+            jumps=tuple(
                 _IptablesJump(
-                    rule=jump_rule,
-                    source_chain=built_in_chain,
+                    rule=f"-A {chain} -j {_MIMIC_CHAIN}",
+                    source_chain=chain,
                     position=1,
-                ),
+                )
+                for chain in built_in_chains
             ),
         )
 
@@ -873,11 +897,17 @@ class LinuxPrivilegedOps(PrivilegedOperations):
 def create_privileged_ops() -> PrivilegedOperations:
     """Create the platform-appropriate privileged operations implementation.
 
-    Returns ``MacOSPrivilegedOps`` on macOS (delegates to the Swift helper
-    via JSON-RPC), ``LinuxPrivilegedOps`` everywhere else (direct root ops).
+    Returns a Unix-socket client on both supported production platforms.
     """
     if sys.platform == "darwin":
         from squirrelops_home_sensor.privileged.xpc import MacOSPrivilegedOps
 
         return MacOSPrivilegedOps()
-    return LinuxPrivilegedOps()
+    from squirrelops_home_sensor.privileged.linux_sidecar import (
+        DEFAULT_SOCKET_PATH,
+        LinuxNetworkHelperClient,
+    )
+
+    return LinuxNetworkHelperClient(
+        os.environ.get("SQUIRRELOPS_NETWORK_HELPER_SOCKET", DEFAULT_SOCKET_PATH)
+    )

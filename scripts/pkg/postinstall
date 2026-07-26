@@ -25,9 +25,72 @@ if [ ! -f "$PYTHON_MODE_FILE" ] \
     echo "[postinstall] Package does not contain the required standalone Python runtime." >&2
     exit 1
 fi
-PYTHON_PATH="$INSTALL_DIR/python/bin/python3"
+PYTHON_RUNTIME="$INSTALL_DIR/python"
+PYTHON_PATH="$PYTHON_RUNTIME/bin/python3"
+
+runtime_entry_is_safe() {
+    local runtime_root="$1"
+    local entry="$2"
+    local metadata
+    local owner
+    local group
+    local kind
+    local mode
+    local mode_decimal
+    local resolved
+
+    metadata=$(
+        /usr/bin/stat -f '%Su|%Sg|%HT|%Lp' "$entry" 2>/dev/null
+    ) || return 1
+    IFS='|' read -r owner group kind mode <<< "$metadata"
+    [ "$owner" = "root" ] && [ "$group" = "wheel" ] \
+        && [[ "$mode" =~ ^[0-7]{3,4}$ ]] \
+        || return 1
+    mode_decimal=$((8#$mode))
+    [ "$((mode_decimal & 8#022))" -eq 0 ] || return 1
+
+    case "$kind" in
+        Directory|"Regular File") ;;
+        "Symbolic Link")
+            resolved=$(/bin/realpath "$entry" 2>/dev/null) || return 1
+            case "$resolved" in
+                "$runtime_root"|"$runtime_root"/*) ;;
+                *) return 1 ;;
+            esac
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_root_owned_python_runtime() {
+    local runtime_root="$1"
+    local acl_entry
+    [ -d "$runtime_root" ] && [ ! -L "$runtime_root" ] || return 1
+    runtime_root=$(/bin/realpath "$runtime_root" 2>/dev/null) || return 1
+    acl_entry=$(
+        /usr/bin/find "$runtime_root" -xdev -acl -print -quit
+    ) || return 1
+    [ -z "$acl_entry" ] || return 1
+    runtime_entry_is_safe "$runtime_root" "$runtime_root" || return 1
+    /usr/bin/find "$runtime_root" -xdev -mindepth 1 -print0 \
+        | while IFS= read -r -d '' entry; do
+            runtime_entry_is_safe "$runtime_root" "$entry" || return 1
+        done
+}
+
+isolated_python() {
+    /usr/bin/env -i \
+        PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        LC_ALL=C \
+        "$PYTHON_PATH" -I "$@"
+}
+
 if [ ! -x "$PYTHON_PATH" ]; then
     echo "[postinstall] Standalone Python is missing or not executable." >&2
+    exit 1
+fi
+if ! validate_root_owned_python_runtime "$PYTHON_RUNTIME"; then
+    echo "[postinstall] Standalone Python runtime ownership or permissions are unsafe." >&2
     exit 1
 fi
 if [ ! -f "$EXPECTED_VERSION_FILE" ]; then
@@ -35,7 +98,7 @@ if [ ! -f "$EXPECTED_VERSION_FILE" ]; then
     exit 1
 fi
 EXPECTED_SENSOR_VERSION="$(tr -d '[:space:]' < "$EXPECTED_VERSION_FILE")"
-if ! INSTALLED_SENSOR_VERSION=$("$PYTHON_PATH" -c \
+if ! INSTALLED_SENSOR_VERSION=$(isolated_python -c \
     'from importlib.metadata import version; print(version("squirrelops-home-sensor"))' \
     2>/dev/null)
 then
@@ -54,78 +117,761 @@ HELPER_LABEL="com.squirrelops.helper"
 HELPER_BINARY="/Library/PrivilegedHelperTools/com.squirrelops.helper"
 HELPER_PLIST="/Library/LaunchDaemons/com.squirrelops.helper.plist"
 HELPER_SOCKET="/var/run/squirrelops-helper.sock"
+PLIST_TEMP=""
+ACCOUNT_MARKER_TEMP=""
+
+cleanup_staged_plist() {
+    if [ -n "$PLIST_TEMP" ]; then
+        rm -f -- "$PLIST_TEMP"
+    fi
+    if [ -n "$ACCOUNT_MARKER_TEMP" ]; then
+        rm -f -- "$ACCOUNT_MARKER_TEMP"
+    fi
+}
+trap cleanup_staged_plist EXIT
 
 # Dedicated non-root service account the sensor daemon runs as, so an RCE in the
 # network-facing sensor is not root. The privileged helper authorizes this
 # account (see SquirrelOpsHelper/main.swift serviceAccountUID()).
 SENSOR_USER="_squirrelops"
 SENSOR_GROUP="_squirrelops"
+SENSOR_UID=""
+SENSOR_GID=""
+STAGED_SENSOR_USER="_squirrelops_installing"
+STAGED_SENSOR_GROUP="_squirrelops_installing"
+ACCOUNT_PROVISIONING_DIR="/var/db/com.squirrelops.sensor"
+ACCOUNT_PROVISIONING_MARKER="$ACCOUNT_PROVISIONING_DIR/account-provisioning"
+ACCOUNT_DEPROVISIONING_MARKER="$ACCOUNT_PROVISIONING_DIR/account-deprovisioning"
 
 # ---------------------------------------------------------------------------
 # Step 0: Create the dedicated service account (idempotent)
 # ---------------------------------------------------------------------------
-create_service_account() {
-    if dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
-        local existing_gid
-        existing_gid=$(dscl . -read "/Users/${SENSOR_USER}" PrimaryGroupID 2>/dev/null \
-            | awk '{print $2}')
-        if [ -z "$existing_gid" ]; then
-            echo "[postinstall] WARNING: existing ${SENSOR_USER} has no primary group ID."
-            return 1
-        fi
-        # Repair upgrades from installations that created the user without a
-        # resolvable matching group; the helper fails closed without this.
-        dscl . -create "/Groups/${SENSOR_GROUP}" 2>/dev/null || true
-        dscl . -create "/Groups/${SENSOR_GROUP}" PrimaryGroupID "$existing_gid"
-        echo "[postinstall] Service account ${SENSOR_USER} already exists (gid ${existing_gid})."
-        return 0
-    fi
-    echo "[postinstall] Creating service account ${SENSOR_USER}..."
-    # Pick a free UID/GID in the hidden system-service range (300-499).
-    local new_id=""
-    for candidate in $(seq 300 499); do
-        if ! dscl . -list /Users UniqueID | awk '{print $2}' | grep -qx "$candidate"; then
-            new_id="$candidate"
-            break
-        fi
-    done
-    if [ -z "$new_id" ]; then
-        echo "[postinstall] WARNING: no free service UID found; sensor will run as root."
+directory_service_value() {
+    local record="$1"
+    local key="$2"
+    local value
+    if ! value=$(
+        /usr/bin/dscl . -read "$record" "$key" 2>/dev/null \
+            | /usr/bin/awk \
+                -v expected="${key}:" \
+                -v native_hidden="dsAttrTypeNative:IsHidden:" '
+                ($1 == expected \
+                    || (expected == "IsHidden:" && $1 == native_hidden)) \
+                    && NF == 2 {
+                    value = $2
+                    count++
+                }
+                END {
+                    if (count != 1) {
+                        exit 1
+                    }
+                    print value
+                }
+            '
+    ); then
         return 1
     fi
-    dscl . -create "/Groups/${SENSOR_GROUP}" 2>/dev/null || true
-    dscl . -create "/Groups/${SENSOR_GROUP}" PrimaryGroupID "$new_id"
-    dscl . -create "/Users/${SENSOR_USER}"
-    dscl . -create "/Users/${SENSOR_USER}" RealName "SquirrelOps Sensor"
-    dscl . -create "/Users/${SENSOR_USER}" UserShell /usr/bin/false
-    dscl . -create "/Users/${SENSOR_USER}" UniqueID "$new_id"
-    dscl . -create "/Users/${SENSOR_USER}" PrimaryGroupID "$new_id"
-    dscl . -create "/Users/${SENSOR_USER}" NFSHomeDirectory /var/empty
-    dscl . -create "/Users/${SENSOR_USER}" IsHidden 1
-    echo "[postinstall] Created ${SENSOR_USER} (uid/gid ${new_id})."
+    printf '%s\n' "$value"
+}
+
+validate_service_identity() {
+    local unique_uid_owner
+    local unique_gid_owner
+    local shell
+    local home
+    local hidden
+
+    SENSOR_UID=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "UniqueID") || return 1
+    SENSOR_GID=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "PrimaryGroupID") || return 1
+    shell=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "UserShell") || return 1
+    home=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "NFSHomeDirectory") || return 1
+    hidden=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "IsHidden") || return 1
+
+    [[ "$SENSOR_UID" =~ ^[0-9]+$ ]] \
+        && [[ "$SENSOR_GID" =~ ^[0-9]+$ ]] \
+        && [ "$SENSOR_UID" -ge 300 ] && [ "$SENSOR_UID" -le 499 ] \
+        && [ "$SENSOR_GID" = "$SENSOR_UID" ] \
+        && [ "$shell" = "/usr/bin/false" ] \
+        && [ "$home" = "/var/empty" ] \
+        && [ "$hidden" = "1" ] \
+        || return 1
+    [ "$(directory_service_value \
+        "/Groups/${SENSOR_GROUP}" "PrimaryGroupID")" = "$SENSOR_GID" ] \
+        || return 1
+
+    unique_uid_owner=$(
+        /usr/bin/dscl . -list /Users UniqueID 2>/dev/null \
+            | /usr/bin/awk -v expected_uid="$SENSOR_UID" '
+                $2 == expected_uid { owner = $1; count++ }
+                END {
+                    if (count == 1) {
+                        print owner
+                    }
+                }
+            '
+    ) || return 1
+    unique_gid_owner=$(
+        /usr/bin/dscl . -list /Groups PrimaryGroupID 2>/dev/null \
+            | /usr/bin/awk -v expected_gid="$SENSOR_GID" '
+                $2 == expected_gid { owner = $1; count++ }
+                END {
+                    if (count == 1) {
+                        print owner
+                    }
+                }
+            '
+    ) || return 1
+    [ "$unique_uid_owner" = "$SENSOR_USER" ] \
+        && [ "$unique_gid_owner" = "$SENSOR_GROUP" ]
+}
+
+read_account_provisioning_id() {
+    local provisioned_id
+    if [ -L "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ ! -d "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' \
+            "$ACCOUNT_PROVISIONING_DIR")" != "root:wheel:700" ] \
+        || [ -L "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || [ ! -f "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l:%z' \
+            "$ACCOUNT_PROVISIONING_MARKER")" != "root:wheel:600:1:4" ]
+    then
+        return 1
+    fi
+    provisioned_id=$(/bin/cat "$ACCOUNT_PROVISIONING_MARKER") \
+        || return 1
+    [[ "$provisioned_id" =~ ^[0-9]{3}$ ]] \
+        && [ "$provisioned_id" -ge 300 ] \
+        && [ "$provisioned_id" -le 499 ] \
+        || return 1
+    printf '%s\n' "$provisioned_id"
+}
+
+write_account_provisioning_id() {
+    local provisioned_id="$1"
+    if [ -L "$ACCOUNT_PROVISIONING_DIR" ] \
+        || { [ -e "$ACCOUNT_PROVISIONING_DIR" ] \
+            && [ ! -d "$ACCOUNT_PROVISIONING_DIR" ]; }
+    then
+        return 1
+    fi
+    if ! /usr/bin/install -d -o root -g wheel -m 700 \
+        "$ACCOUNT_PROVISIONING_DIR" \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' \
+            "$ACCOUNT_PROVISIONING_DIR")" != "root:wheel:700" ]
+    then
+        return 1
+    fi
+    ACCOUNT_MARKER_TEMP=$(
+        /usr/bin/mktemp \
+            "$ACCOUNT_PROVISIONING_DIR/.account-provisioning.XXXXXXXX"
+    ) || return 1
+    if ! printf '%s\n' "$provisioned_id" > "$ACCOUNT_MARKER_TEMP" \
+        || ! /usr/sbin/chown root:wheel "$ACCOUNT_MARKER_TEMP" \
+        || ! /bin/chmod 600 "$ACCOUNT_MARKER_TEMP" \
+        || ! /bin/mv -fh "$ACCOUNT_MARKER_TEMP" \
+            "$ACCOUNT_PROVISIONING_MARKER" \
+        || ! /bin/sync
+    then
+        return 1
+    fi
+    ACCOUNT_MARKER_TEMP=""
+    [ "$(read_account_provisioning_id)" = "$provisioned_id" ]
+}
+
+directory_service_text_value() {
+    local record="$1"
+    local key="$2"
+    /usr/bin/dscl . -read "$record" "$key" 2>/dev/null \
+        | /usr/bin/awk \
+            -v expected="${key}:" \
+            -v native_hidden="dsAttrTypeNative:IsHidden:" '
+            $1 == expected \
+                || (expected == "IsHidden:" && $1 == native_hidden) {
+                $1 = ""
+                sub(/^ /, "")
+                value = $0
+                count++
+            }
+            END {
+                if (count != 1 || value == "") {
+                    exit 1
+                }
+                print value
+            }
+        '
+}
+
+record_value_matches_or_is_missing() {
+    local record="$1"
+    local key="$2"
+    local expected="$3"
+    local actual
+    if ! /usr/bin/dscl . -read "$record" "$key" >/dev/null 2>&1; then
+        /usr/bin/dscl . -read "$record" >/dev/null 2>&1
+        return
+    fi
+    actual=$(directory_service_text_value "$record" "$key") || return 1
+    [ "$actual" = "$expected" ]
+}
+
+record_attribute_is_empty_or_missing() {
+    local record="$1"
+    local key="$2"
+    local output
+    if ! output=$(
+        /usr/bin/dscl . -read "$record" "$key" 2>/dev/null
+    ); then
+        /usr/bin/dscl . -read "$record" >/dev/null 2>&1
+        return
+    fi
+    printf '%s\n' "$output" \
+        | /usr/bin/awk -v expected="${key}:" '
+            $1 == expected && NF == 1 { seen++ ; next }
+            NF != 0 { bad = 1 }
+            END { exit !(seen == 1 && bad == 0) }
+        '
+}
+
+read_account_deprovisioning_id() {
+    local provisioned_id
+    if [ -L "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ ! -d "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' \
+            "$ACCOUNT_PROVISIONING_DIR")" != "root:wheel:700" ] \
+        || [ -L "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        || [ ! -f "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l:%z' \
+            "$ACCOUNT_DEPROVISIONING_MARKER")" != "root:wheel:600:1:4" ]
+    then
+        return 1
+    fi
+    provisioned_id=$(/bin/cat "$ACCOUNT_DEPROVISIONING_MARKER") \
+        || return 1
+    [[ "$provisioned_id" =~ ^[0-9]{3}$ ]] \
+        && [ "$provisioned_id" -ge 300 ] \
+        && [ "$provisioned_id" -le 499 ] \
+        || return 1
+    printf '%s\n' "$provisioned_id"
+}
+
+record_id_matches_or_is_unset() {
+    local record="$1"
+    local key="$2"
+    local expected_id="$3"
+    local actual_id
+    if ! /usr/bin/dscl . -read "$record" >/dev/null 2>&1; then
+        return 0
+    fi
+    if ! /usr/bin/dscl . -read "$record" "$key" >/dev/null 2>&1; then
+        return 0
+    fi
+    if ! actual_id=$(directory_service_value "$record" "$key"); then
+        return 1
+    fi
+    [ "$actual_id" = "$expected_id" ]
+}
+
+deprovisioning_records_match_id() {
+    local provisioned_id="$1"
+    local conflicting_user
+    local conflicting_group
+    local user_present=0
+    local group_present=0
+
+    if /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
+        user_present=1
+    fi
+    if /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" >/dev/null 2>&1; then
+        group_present=1
+    fi
+    if [ "$user_present" -eq 1 ]; then
+        [ "$group_present" -eq 1 ] || return 1
+        record_value_matches_or_is_missing \
+            "/Users/${SENSOR_USER}" "RealName" "SquirrelOps Sensor" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "UserShell" "/usr/bin/false" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "UniqueID" "$provisioned_id" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "PrimaryGroupID" "$provisioned_id" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "NFSHomeDirectory" "/var/empty" \
+            && record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "IsHidden" "1" \
+            || return 1
+    fi
+    if [ "$group_present" -eq 1 ]; then
+        [ "$(directory_service_value \
+            "/Groups/${SENSOR_GROUP}" "PrimaryGroupID")" \
+            = "$provisioned_id" ] \
+            && record_attribute_is_empty_or_missing \
+                "/Groups/${SENSOR_GROUP}" "GroupMembership" \
+            && record_attribute_is_empty_or_missing \
+                "/Groups/${SENSOR_GROUP}" "GroupMembers" \
+            || return 1
+    fi
+
+    conflicting_user=$(
+        /usr/bin/dscl . -list /Users UniqueID 2>/dev/null \
+            | /usr/bin/awk \
+                -v id="$provisioned_id" \
+                -v final="$SENSOR_USER" \
+                '$2 == id && $1 != final { print $1 }'
+    ) || return 1
+    conflicting_group=$(
+        /usr/bin/dscl . -list /Groups PrimaryGroupID 2>/dev/null \
+            | /usr/bin/awk \
+                -v id="$provisioned_id" \
+                -v final="$SENSOR_GROUP" \
+                '$2 == id && $1 != final { print $1 }'
+    ) || return 1
+    [ -z "$conflicting_user" ] && [ -z "$conflicting_group" ]
+}
+
+retire_account_provisioning_dir() {
+    if [ ! -e "$ACCOUNT_PROVISIONING_DIR" ] \
+        && [ ! -L "$ACCOUNT_PROVISIONING_DIR" ]
+    then
+        return 0
+    fi
+    if [ -L "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ ! -d "$ACCOUNT_PROVISIONING_DIR" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' \
+            "$ACCOUNT_PROVISIONING_DIR")" != "root:wheel:700" ]
+    then
+        return 1
+    fi
+    /usr/bin/find "$ACCOUNT_PROVISIONING_DIR" \
+        -xdev -mindepth 1 -maxdepth 1 -print0 \
+        | while IFS= read -r -d '' entry; do
+            local name
+            name=$(/usr/bin/basename "$entry") || return 1
+            case "$name" in
+                .account-provisioning.*|.account-deprovisioning.*) ;;
+                *) return 1 ;;
+            esac
+            [ ! -L "$entry" ] \
+                && [ "$(/usr/bin/stat -f '%Su:%Sg:%HT:%Lp:%l' "$entry")" \
+                    = "root:wheel:Regular File:600:1" ] \
+                || return 1
+            rm -f -- "$entry" || return 1
+        done \
+        || return 1
+    rmdir "$ACCOUNT_PROVISIONING_DIR" 2>/dev/null
+}
+
+retire_account_provisioning_marker() {
+    rm -f -- "$ACCOUNT_PROVISIONING_MARKER" || return 1
+    retire_account_provisioning_dir || return 1
+    /bin/sync
+}
+
+cleanup_interrupted_account_deprovisioning() {
+    local provisioned_id
+    if [ ! -e "$ACCOUNT_DEPROVISIONING_MARKER" ] \
+        && [ ! -L "$ACCOUNT_DEPROVISIONING_MARKER" ]
+    then
+        return 0
+    fi
+    [ ! -e "$ACCOUNT_PROVISIONING_MARKER" ] \
+        && [ ! -L "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || return 1
+    provisioned_id=$(read_account_deprovisioning_id) || return 1
+    if /usr/bin/dscl . -read "/Users/${STAGED_SENSOR_USER}" \
+            >/dev/null 2>&1 \
+        || /usr/bin/dscl . -read "/Groups/${STAGED_SENSOR_GROUP}" \
+            >/dev/null 2>&1 \
+        || ! deprovisioning_records_match_id "$provisioned_id"
+    then
+        return 1
+    fi
+
+    SENSOR_UID="$provisioned_id"
+    terminate_sensor_processes || return 1
+    /usr/bin/crontab -u "$SENSOR_USER" -r >/dev/null 2>&1 || true
+    if /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
+        /usr/bin/dscl . -delete "/Users/${SENSOR_USER}" || return 1
+    fi
+    if /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" >/dev/null 2>&1; then
+        /usr/bin/dscl . -delete "/Groups/${SENSOR_GROUP}" || return 1
+    fi
+    ! /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1 \
+        && ! /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" \
+            >/dev/null 2>&1 \
+        || return 1
+    rm -f -- "$ACCOUNT_DEPROVISIONING_MARKER" || return 1
+    retire_account_provisioning_dir || return 1
+    /bin/sync
+}
+
+cleanup_interrupted_account_provisioning() {
+    local provisioned_id="$1"
+    local conflicting_user
+    local conflicting_group
+
+    record_id_matches_or_is_unset \
+        "/Users/${STAGED_SENSOR_USER}" "UniqueID" "$provisioned_id" \
+        && record_id_matches_or_is_unset \
+            "/Users/${STAGED_SENSOR_USER}" "PrimaryGroupID" "$provisioned_id" \
+        && record_id_matches_or_is_unset \
+            "/Groups/${STAGED_SENSOR_GROUP}" "PrimaryGroupID" "$provisioned_id" \
+        && record_id_matches_or_is_unset \
+            "/Groups/${SENSOR_GROUP}" "PrimaryGroupID" "$provisioned_id" \
+        || return 1
+    conflicting_user=$(
+        /usr/bin/dscl . -list /Users UniqueID 2>/dev/null \
+            | /usr/bin/awk \
+                -v id="$provisioned_id" \
+                -v staged="$STAGED_SENSOR_USER" \
+                '$2 == id && $1 != staged { print $1 }'
+    ) || return 1
+    conflicting_group=$(
+        /usr/bin/dscl . -list /Groups PrimaryGroupID 2>/dev/null \
+            | /usr/bin/awk \
+                -v id="$provisioned_id" \
+                -v staged="$STAGED_SENSOR_GROUP" \
+                -v final="$SENSOR_GROUP" \
+                '$2 == id && $1 != staged && $1 != final { print $1 }'
+    ) || return 1
+    [ -z "$conflicting_user" ] && [ -z "$conflicting_group" ] \
+        || return 1
+
+    SENSOR_UID="$provisioned_id"
+    terminate_sensor_processes || return 1
+    /usr/bin/crontab -u "$STAGED_SENSOR_USER" -r >/dev/null 2>&1 || true
+    for record in \
+        "/Users/${STAGED_SENSOR_USER}" \
+        "/Groups/${STAGED_SENSOR_GROUP}" \
+        "/Groups/${SENSOR_GROUP}"
+    do
+        if /usr/bin/dscl . -read "$record" >/dev/null 2>&1; then
+            /usr/bin/dscl . -delete "$record" || return 1
+        fi
+    done
+}
+
+create_service_account() {
+    local new_id=""
+    local user_ids
+    local group_ids
+    if ! cleanup_interrupted_account_deprovisioning; then
+        echo "[postinstall] Interrupted service-account removal is unsafe." >&2
+        return 1
+    fi
+    if /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
+        if ! validate_service_identity; then
+            echo "[postinstall] Existing service account identity is unsafe." >&2
+            return 1
+        fi
+        if /usr/bin/dscl . -read "/Users/${STAGED_SENSOR_USER}" \
+                >/dev/null 2>&1 \
+            || /usr/bin/dscl . -read "/Groups/${STAGED_SENSOR_GROUP}" \
+                >/dev/null 2>&1
+        then
+            echo "[postinstall] Unexpected staged service-account records remain." >&2
+            return 1
+        fi
+        if [ -e "$ACCOUNT_PROVISIONING_MARKER" ] \
+            || [ -L "$ACCOUNT_PROVISIONING_MARKER" ]
+        then
+            [ "$(read_account_provisioning_id)" = "$SENSOR_UID" ] \
+                || return 1
+            retire_account_provisioning_marker || return 1
+        fi
+        echo "[postinstall] Service account ${SENSOR_USER} already exists (uid/gid ${SENSOR_UID})."
+        return
+    fi
+
+    if [ -e "$ACCOUNT_PROVISIONING_MARKER" ] \
+        || [ -L "$ACCOUNT_PROVISIONING_MARKER" ]
+    then
+        new_id=$(read_account_provisioning_id) || return 1
+        cleanup_interrupted_account_provisioning "$new_id" || return 1
+    else
+        if /usr/bin/dscl . -read "/Groups/${SENSOR_GROUP}" \
+            >/dev/null 2>&1 \
+            || /usr/bin/dscl . -read "/Users/${STAGED_SENSOR_USER}" \
+                >/dev/null 2>&1 \
+            || /usr/bin/dscl . -read "/Groups/${STAGED_SENSOR_GROUP}" \
+                >/dev/null 2>&1
+        then
+            echo "[postinstall] Refusing untrusted partial service-account records." >&2
+            return 1
+        fi
+        user_ids=$(
+            /usr/bin/dscl . -list /Users UniqueID 2>/dev/null \
+                | /usr/bin/awk 'NF == 2 { print $2 }'
+        ) || return 1
+        group_ids=$(
+            /usr/bin/dscl . -list /Groups PrimaryGroupID 2>/dev/null \
+                | /usr/bin/awk 'NF == 2 { print $2 }'
+        ) || return 1
+        for candidate in $(seq 300 499); do
+            if ! printf '%s\n' "$user_ids" \
+                    | /usr/bin/grep -qx "$candidate" \
+                && ! printf '%s\n' "$group_ids" \
+                    | /usr/bin/grep -qx "$candidate"
+            then
+                new_id="$candidate"
+                break
+            fi
+        done
+        if [ -z "$new_id" ] \
+            || ! write_account_provisioning_id "$new_id"
+        then
+            echo "[postinstall] No safe dedicated service UID/GID is available." >&2
+            return 1
+        fi
+    fi
+
+    echo "[postinstall] Creating staged service account ${SENSOR_USER}..."
+    /usr/bin/dscl . -create "/Groups/${STAGED_SENSOR_GROUP}"
+    /usr/bin/dscl . -create \
+        "/Groups/${STAGED_SENSOR_GROUP}" PrimaryGroupID "$new_id"
+    /usr/bin/dscl . -create "/Users/${STAGED_SENSOR_USER}"
+    /usr/bin/dscl . -create \
+        "/Users/${STAGED_SENSOR_USER}" RealName "SquirrelOps Sensor"
+    /usr/bin/dscl . -create \
+        "/Users/${STAGED_SENSOR_USER}" UserShell /usr/bin/false
+    /usr/bin/dscl . -create \
+        "/Users/${STAGED_SENSOR_USER}" UniqueID "$new_id"
+    /usr/bin/dscl . -create \
+        "/Users/${STAGED_SENSOR_USER}" PrimaryGroupID "$new_id"
+    /usr/bin/dscl . -create \
+        "/Users/${STAGED_SENSOR_USER}" NFSHomeDirectory /var/empty
+    /usr/bin/dscl . -create \
+        "/Users/${STAGED_SENSOR_USER}" IsHidden 1
+
+    # Commit the group name first and the user name last. Seeing the final user
+    # therefore implies every required identity field and matching group were
+    # already staged, even if installation is interrupted between commands.
+    /usr/bin/dscl . -change \
+        "/Groups/${STAGED_SENSOR_GROUP}" RecordName \
+        "$STAGED_SENSOR_GROUP" "$SENSOR_GROUP"
+    /usr/bin/dscl . -change \
+        "/Users/${STAGED_SENSOR_USER}" RecordName \
+        "$STAGED_SENSOR_USER" "$SENSOR_USER"
+    if ! validate_service_identity; then
+        echo "[postinstall] Created service account failed identity validation." >&2
+        return 1
+    fi
+    retire_account_provisioning_marker || return 1
+    echo "[postinstall] Created ${SENSOR_USER} (uid/gid ${SENSOR_UID})."
+}
+
+sensor_processes_are_running() {
+    /usr/bin/pgrep -u "$SENSOR_UID" '.*' >/dev/null 2>&1 \
+        || /usr/bin/pgrep -U "$SENSOR_UID" '.*' >/dev/null 2>&1
+}
+
+terminate_sensor_processes() {
+    local attempts=0
+    if ! sensor_processes_are_running; then
+        return 0
+    fi
+
+    /usr/bin/pkill -TERM -u "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    /usr/bin/pkill -TERM -U "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    while sensor_processes_are_running && [ "$attempts" -lt 5 ]; do
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    if sensor_processes_are_running; then
+        /usr/bin/pkill -KILL -u "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+        /usr/bin/pkill -KILL -U "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    fi
+    attempts=0
+    while sensor_processes_are_running && [ "$attempts" -lt 5 ]; do
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    ! sensor_processes_are_running
+}
+
+remove_sensor_crontab() {
+    if /usr/bin/crontab -u "$SENSOR_USER" -l >/dev/null 2>&1; then
+        /usr/bin/crontab -u "$SENSOR_USER" -r >/dev/null 2>&1 \
+            || return 1
+    fi
+    ! /usr/bin/crontab -u "$SENSOR_USER" -l >/dev/null 2>&1
 }
 
 if ! create_service_account; then
-    echo "[postinstall] Cannot provision the required non-root sensor account." >&2
+    echo "[postinstall] Cannot establish the dedicated sensor service account." >&2
     exit 1
 fi
 RUN_AS_SERVICE_ACCOUNT=1
+
+validate_mutable_tree() {
+    local root="$1"
+    [ -d "$root" ] && [ ! -L "$root" ] || return 1
+    path_has_no_extended_acl "$root" || return 1
+
+    /usr/bin/find "$root" -xdev -mindepth 1 -print0 \
+        | while IFS= read -r -d '' entry; do
+            local metadata
+            local owner
+            local group
+            local kind
+            local links
+
+            [ ! -L "$entry" ] || return 1
+            path_has_no_extended_acl "$entry" || return 1
+            metadata=$(
+                /usr/bin/stat -f '%Su|%Sg|%HT|%l' "$entry" 2>/dev/null
+            ) || return 1
+            IFS='|' read -r owner group kind links <<< "$metadata"
+            [ "$owner" = "$SENSOR_USER" ] \
+                && [ "$group" = "$SENSOR_GROUP" ] \
+                || return 1
+            case "$kind" in
+                Directory) ;;
+                "Regular File")
+                    [ "$links" = "1" ] || return 1
+                    ;;
+                *) return 1 ;;
+            esac
+        done
+}
+
+path_has_no_extended_acl() {
+    local path="$1"
+    /bin/ls -lde "$path" 2>/dev/null \
+        | /usr/bin/awk '
+            NR > 1 { extra = 1 }
+            END { exit !(NR == 1 && extra == 0) }
+        '
+}
+
+strip_validated_mutable_tree_acls() {
+    local root="$1"
+    /usr/bin/find "$root" -xdev -mindepth 1 -print0 \
+        | while IFS= read -r -d '' entry; do
+            local metadata
+            local owner
+            local group
+            local kind
+            local links
+
+            [ ! -L "$entry" ] || return 1
+            metadata=$(
+                /usr/bin/stat -f '%Su|%Sg|%HT|%l' "$entry" 2>/dev/null
+            ) || return 1
+            IFS='|' read -r owner group kind links <<< "$metadata"
+            [ "$owner" = "$SENSOR_USER" ] \
+                && [ "$group" = "$SENSOR_GROUP" ] \
+                || return 1
+            case "$kind" in
+                Directory) ;;
+                "Regular File")
+                    [ "$links" = "1" ] || return 1
+                    ;;
+                *) return 1 ;;
+            esac
+            /bin/chmod -N "$entry" || return 1
+            path_has_no_extended_acl "$entry" || return 1
+        done
+}
+
+quarantine_mutable_root() {
+    local root="$1"
+    if [ -L "$root" ] \
+        || { [ -e "$root" ] && [ ! -d "$root" ]; }
+    then
+        return 1
+    fi
+    if [ ! -e "$root" ] \
+        && ! /usr/bin/install -d -o root -g wheel -m 700 "$root"
+    then
+        return 1
+    fi
+    if ! /usr/sbin/chown root:wheel "$root" \
+        || ! /bin/chmod -N "$root" \
+        || ! /bin/chmod 700 "$root"
+    then
+        return 1
+    fi
+    [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' "$root")" = "root:wheel:700" ] \
+        && path_has_no_extended_acl "$root" \
+        && strip_validated_mutable_tree_acls "$root"
+}
 
 # ---------------------------------------------------------------------------
 # Step 1: Create data directories
 # ---------------------------------------------------------------------------
 echo "[postinstall] Creating data directories..."
-mkdir -p "$DATA_DIR"
-mkdir -p "$LOG_DIR"
-mkdir -p "$INSTALL_DIR/run"
+if ! terminate_sensor_processes; then
+    echo "[postinstall] Processes remain under the sensor service UID." >&2
+    exit 1
+fi
+if ! quarantine_mutable_root "$DATA_DIR" \
+    || ! quarantine_mutable_root "$LOG_DIR"
+then
+    echo "[postinstall] Cannot quarantine mutable sensor storage." >&2
+    exit 1
+fi
+if ! remove_sensor_crontab || ! terminate_sensor_processes; then
+    echo "[postinstall] Sensor UID persistence could not be quiesced." >&2
+    exit 1
+fi
+if ! validate_mutable_tree "$DATA_DIR" \
+    || ! validate_mutable_tree "$LOG_DIR"
+then
+    echo "[postinstall] Mutable sensor storage contains unsafe ownership, links, or file types." >&2
+    exit 1
+fi
+if [ -L "$INSTALL_DIR/run" ]; then
+    echo "[postinstall] Sensor runtime directory has an unsafe file type." >&2
+    exit 1
+fi
+rm -rf -- "$INSTALL_DIR/run"
+if ! /usr/bin/install -d -o root -g wheel -m 755 "$INSTALL_DIR/run"; then
+    echo "[postinstall] Cannot create the sensor runtime directory." >&2
+    exit 1
+fi
+
+validate_known_regular_file() {
+    local path="$1"
+    local metadata
+    local owner
+    local group
+    local kind
+    local links
+
+    [ -e "$path" ] || { [ ! -L "$path" ] && return 0; }
+    [ ! -L "$path" ] || return 1
+    metadata=$(
+        /usr/bin/stat -f '%Su|%Sg|%HT|%l' "$path" 2>/dev/null
+    ) || return 1
+    IFS='|' read -r owner group kind links <<< "$metadata"
+    [ "$kind" = "Regular File" ] && [ "$links" = "1" ] || return 1
+    { [ "$owner" = "root" ] && [ "$group" = "wheel" ]; } \
+        || { [ "$owner" = "$SENSOR_USER" ] \
+            && [ "$group" = "$SENSOR_GROUP" ]; }
+}
 
 # ---------------------------------------------------------------------------
 # Step 2: Handle config file
 # ---------------------------------------------------------------------------
+if ! validate_known_regular_file "$CONFIG_FILE" \
+    || ! validate_known_regular_file "$CONFIG_BACKUP"
+then
+    echo "[postinstall] Sensor configuration path has unsafe ownership, links, or file type." >&2
+    exit 1
+fi
 if [ -f "$CONFIG_BACKUP" ]; then
     # Upgrade path: restore backed-up config
     echo "[postinstall] Restoring config from backup..."
-    mv "$CONFIG_BACKUP" "$CONFIG_FILE"
+    if ! /bin/mv -fh "$CONFIG_BACKUP" "$CONFIG_FILE"; then
+        echo "[postinstall] Cannot restore the verified configuration backup." >&2
+        exit 1
+    fi
 elif [ ! -f "$CONFIG_FILE" ]; then
     # Fresh install: generate default config
     echo "[postinstall] Generating default config.yaml..."
@@ -157,16 +903,37 @@ fi
 # ---------------------------------------------------------------------------
 echo "[postinstall] Installing launchd plist..."
 
-if [ -f "$PLIST_TEMPLATE" ]; then
-    sed \
+if [ -L "$PLIST_TEMPLATE" ] || [ ! -f "$PLIST_TEMPLATE" ] \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%HT:%l' "$PLIST_TEMPLATE")" \
+        != "root:wheel:Regular File:1" ]
+then
+    echo "[postinstall] Plist template is missing or unsafe at $PLIST_TEMPLATE." >&2
+    exit 1
+fi
+if [ -L "/Library/LaunchDaemons" ] \
+    || [ ! -d "/Library/LaunchDaemons" ] \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' /Library/LaunchDaemons)" \
+        != "root:wheel:755" ]
+then
+    echo "[postinstall] LaunchDaemon directory is unsafe." >&2
+    exit 1
+fi
+if ! PLIST_TEMP=$(
+    /usr/bin/mktemp \
+        "/Library/LaunchDaemons/.${PLIST_NAME}.plist.XXXXXXXX"
+); then
+    echo "[postinstall] Cannot stage the sensor launchd plist." >&2
+    exit 1
+fi
+if ! sed \
         -e "s|__PYTHON_PATH__|${PYTHON_PATH}|g" \
         -e "s|__CONFIG_PATH__|${CONFIG_FILE}|g" \
         -e "s|__INSTALL_DIR__|${INSTALL_DIR}|g" \
         -e "s|__DATA_DIR__|${DATA_DIR}|g" \
         -e "s|__LOG_DIR__|${LOG_DIR}|g" \
-        "$PLIST_TEMPLATE" > "$PLIST_DEST"
-else
-    echo "[postinstall] Plist template not found at $PLIST_TEMPLATE." >&2
+        "$PLIST_TEMPLATE" > "$PLIST_TEMP"
+then
+    echo "[postinstall] Cannot render the sensor launchd plist." >&2
     exit 1
 fi
 
@@ -182,10 +949,10 @@ set_launchd_identity() {
     local actual_value
 
     if ! /usr/libexec/PlistBuddy \
-        -c "Add :${key} string ${expected_value}" "$PLIST_DEST" 2>/dev/null
+        -c "Add :${key} string ${expected_value}" "$PLIST_TEMP" 2>/dev/null
     then
         if ! /usr/libexec/PlistBuddy \
-            -c "Set :${key} ${expected_value}" "$PLIST_DEST" 2>/dev/null
+            -c "Set :${key} ${expected_value}" "$PLIST_TEMP" 2>/dev/null
         then
             echo "[postinstall] Cannot set launchd ${key} to ${expected_value}." >&2
             return 1
@@ -193,7 +960,7 @@ set_launchd_identity() {
     fi
 
     if ! actual_value=$(
-        /usr/libexec/PlistBuddy -c "Print :${key}" "$PLIST_DEST" 2>/dev/null
+        /usr/libexec/PlistBuddy -c "Print :${key}" "$PLIST_TEMP" 2>/dev/null
     ); then
         echo "[postinstall] Cannot verify launchd ${key}." >&2
         return 1
@@ -239,26 +1006,34 @@ verify_existing_log_permissions() {
 
 configure_sensor_permissions() {
     # The sensor writes the DB, certs, secret store, and logs; the standalone
-    # Python runtime stays root-owned and read+execute only.
-    if ! chown -R "${SENSOR_USER}:${SENSOR_GROUP}" "$DATA_DIR" "$LOG_DIR"; then
+    # Python runtime stays root-owned and read+execute only. Mutable trees were
+    # quarantined and validated before these top-level ownership transitions;
+    # never recursively chown attacker-controlled entries.
+    if ! /usr/sbin/chown "${SENSOR_USER}:${SENSOR_GROUP}" \
+        "$DATA_DIR" "$INSTALL_DIR/run" "$CONFIG_FILE"
+    then
         return 1
     fi
-    if ! chown "${SENSOR_USER}:${SENSOR_GROUP}" "$INSTALL_DIR/run" "$CONFIG_FILE"; then
+    if ! /bin/chmod 700 "$DATA_DIR"; then
         return 1
     fi
-    if ! chmod 700 "$DATA_DIR"; then
+    if ! /bin/chmod 700 "$LOG_DIR"; then
         return 1
     fi
-    if ! chmod 700 "$LOG_DIR"; then
+    if ! /bin/chmod 755 "$INSTALL_DIR/run"; then
         return 1
     fi
-    if ! chmod 755 "$INSTALL_DIR/run"; then
+    if ! /bin/chmod 600 "$CONFIG_FILE"; then
         return 1
     fi
-    if ! chmod 600 "$CONFIG_FILE"; then
+    # The top-level directory remains root-owned and mode 700 while this walk
+    # runs, so the validated paths cannot be replaced by the service account.
+    if ! /usr/bin/find "$LOG_DIR" -xdev -maxdepth 1 -type f \
+        -exec /bin/chmod 600 {} \;
+    then
         return 1
     fi
-    if ! find "$LOG_DIR" -maxdepth 1 -type f -exec chmod 600 {} \;; then
+    if ! /usr/sbin/chown "${SENSOR_USER}:${SENSOR_GROUP}" "$LOG_DIR"; then
         return 1
     fi
 
@@ -285,14 +1060,33 @@ if [ "$RUN_AS_SERVICE_ACCOUNT" = "1" ]; then
     fi
 fi
 
+if ! /usr/bin/plutil -lint "$PLIST_TEMP" >/dev/null \
+    || ! /usr/sbin/chown root:wheel "$PLIST_TEMP" \
+    || ! /bin/chmod 644 "$PLIST_TEMP" \
+    || ! /bin/mv -fh "$PLIST_TEMP" "$PLIST_DEST"
+then
+    echo "[postinstall] Cannot install the verified sensor launchd plist." >&2
+    exit 1
+fi
+PLIST_TEMP=""
+if [ -L "$PLIST_DEST" ] || [ ! -f "$PLIST_DEST" ] \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l' "$PLIST_DEST")" \
+        != "root:wheel:644:1" ]
+then
+    echo "[postinstall] Installed sensor launchd plist is unsafe." >&2
+    exit 1
+fi
+
 # The app package starts the helper before the service account exists. Restart
 # it now, then prove the actual sensor account can connect to the RPC socket.
 verify_helper_for_sensor_account() {
     [ -x "$HELPER_BINARY" ] \
         && [ -f "$HELPER_PLIST" ] \
         && [ -S "$HELPER_SOCKET" ] \
-        && /usr/bin/sudo -n -u "$SENSOR_USER" "$PYTHON_PATH" \
-            - "$HELPER_SOCKET" >/dev/null 2>&1 <<'PY'
+        && /usr/bin/sudo -n -u "$SENSOR_USER" /usr/bin/env -i \
+            PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            LC_ALL=C \
+            "$PYTHON_PATH" -I - "$HELPER_SOCKET" >/dev/null 2>&1 <<'PY'
 import json
 import socket
 import sys
@@ -335,6 +1129,10 @@ if [ ! -x "$HELPER_BINARY" ] || [ ! -f "$HELPER_PLIST" ]; then
     echo "[postinstall] Privileged helper installation is incomplete." >&2
     exit 1
 fi
+if ! terminate_sensor_processes; then
+    echo "[postinstall] Sensor UID process reappeared before helper restart." >&2
+    exit 1
+fi
 if ! launchctl kickstart -k "system/${HELPER_LABEL}" 2>/dev/null; then
     echo "[postinstall] Failed to restart privileged helper." >&2
     exit 1
@@ -352,12 +1150,6 @@ done
 echo "[postinstall] Privileged helper is available to ${SENSOR_USER}."
 
 # ---------------------------------------------------------------------------
-# Step 4: Set permissions on plist
-# ---------------------------------------------------------------------------
-chown root:wheel "$PLIST_DEST"
-chmod 644 "$PLIST_DEST"
-
-# ---------------------------------------------------------------------------
 # Step 5: Load the sensor service
 # ---------------------------------------------------------------------------
 echo "[postinstall] Loading sensor service..."
@@ -372,7 +1164,11 @@ fi
 echo "[postinstall] Waiting for sensor to start..."
 
 HEALTH_URL="https://localhost:8443/system/health"
-HEALTH_TIMEOUT_SECONDS=180
+# A Full profile can restore up to 10 persisted fake hosts before uvicorn binds.
+# Real upgrade timing is dominated by the sequential, conflict-safe alias and
+# port-forward checks; allow the supported maximum to finish while retaining a
+# hard upper bound and the immediate launchd/process liveness failures below.
+HEALTH_TIMEOUT_SECONDS=1200
 HEALTH_PROBE_TIMEOUT_SECONDS=3
 HEALTH_INTERVAL_SECONDS=2
 HEALTH_REQUIRED_SUCCESSES=2
@@ -414,7 +1210,7 @@ sensor_health_is_ready() {
         return 1
     fi
 
-    printf '%s' "$health_response" | "$PYTHON_PATH" -c '
+    printf '%s' "$health_response" | isolated_python -c '
 import json
 import sys
 

@@ -53,6 +53,201 @@ class SecurityInsightAnalyzer:
         self._db = db
         self._bus = event_bus
 
+    async def record_arp_conflicts(
+        self,
+        conflicts: list[dict[str, Any]],
+    ) -> None:
+        """Create, update, or resolve the grouped ARP-identity alert."""
+        issue_key = "arp:identity-conflict"
+        normalized = sorted(
+            conflicts,
+            key=lambda conflict: (
+                str(conflict.get("kind", "")),
+                tuple(str(ip) for ip in conflict.get("ip_addresses", [])),
+                tuple(str(mac) for mac in conflict.get("mac_addresses", [])),
+            ),
+        )
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        pending_event: tuple[str, dict[str, Any]] | None = None
+
+        async with self._bus.serialized():
+            cursor = await self._db.execute(
+                """SELECT *
+                   FROM home_alerts
+                   WHERE alert_type = ?
+                     AND issue_key = ?
+                     AND device_count > 0
+                   ORDER BY created_at DESC
+                   LIMIT 1""",
+                (AlertType.SECURITY_ARP_CONFLICT.value, issue_key),
+            )
+            existing = await cursor.fetchone()
+
+            try:
+                if not normalized:
+                    if existing is None:
+                        return
+                    detail = _load_persisted_json(existing["detail"])
+                    if not isinstance(detail, dict):
+                        detail = {}
+                    detail["conflicts"] = []
+                    detail["conflict_count"] = 0
+                    detail["resolved_at"] = now
+                    title = "Resolved: ARP identity claims are no longer ambiguous"
+                    await self._db.execute(
+                        """UPDATE home_alerts
+                           SET title = ?,
+                               detail = ?,
+                               device_count = 0,
+                               read_at = COALESCE(read_at, ?),
+                               actioned_at = COALESCE(actioned_at, ?),
+                               action_note = COALESCE(
+                                   action_note,
+                                   'Automatically resolved by a clean ARP scan'
+                               )
+                           WHERE id = ?""",
+                        (
+                            title,
+                            json.dumps(detail, sort_keys=True),
+                            now,
+                            now,
+                            existing["id"],
+                        ),
+                    )
+                    pending_event = (
+                        "alert.updated",
+                        {
+                            "id": existing["id"],
+                            "alert_type": AlertType.SECURITY_ARP_CONFLICT.value,
+                            "severity": existing["severity"],
+                            "title": title,
+                            "source_ip": None,
+                            "created_at": existing["created_at"],
+                            "incident_id": existing["incident_id"],
+                            "read_at": existing["read_at"] or now,
+                            "actioned_at": existing["actioned_at"] or now,
+                            "detail": detail,
+                            "affected_devices": None,
+                            "alert_count": None,
+                            "device_count": 0,
+                            "issue_key": issue_key,
+                        },
+                    )
+                else:
+                    detail = {
+                        "issue_key": issue_key,
+                        "conflict_count": len(normalized),
+                        "conflicts": normalized,
+                    }
+                    title = (
+                        "Conflicting ARP identity claims detected"
+                        if len(normalized) == 1
+                        else (
+                            f"{len(normalized)} conflicting ARP identity "
+                            "claims detected"
+                        )
+                    )
+                    if existing is None:
+                        cursor = await self._db.execute(
+                            """INSERT INTO home_alerts
+                               (alert_type, severity, title, detail, issue_key,
+                                device_count, risk_description, remediation,
+                                created_at)
+                               VALUES (?, 'high', ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                AlertType.SECURITY_ARP_CONFLICT.value,
+                                title,
+                                json.dumps(detail, sort_keys=True),
+                                issue_key,
+                                len(normalized),
+                                (
+                                    "One IP is claimed by several MAC addresses, "
+                                    "or one MAC is answering at several IPs. This "
+                                    "may indicate ARP spoofing."
+                                ),
+                                (
+                                    "Inspect switch and ARP tables, isolate the "
+                                    "conflicting host, and rescan before trusting "
+                                    "device identity or port results."
+                                ),
+                                now,
+                            ),
+                        )
+                        alert_id = cursor.lastrowid
+                        if alert_id is None:
+                            raise RuntimeError(
+                                "ARP conflict alert insert did not return an id"
+                            )
+                        pending_event = (
+                            "alert.new",
+                            {
+                                "id": alert_id,
+                                "alert_type": (
+                                    AlertType.SECURITY_ARP_CONFLICT.value
+                                ),
+                                "severity": "high",
+                                "title": title,
+                                "source_ip": None,
+                                "created_at": now,
+                                "incident_id": None,
+                                "read_at": None,
+                                "actioned_at": None,
+                                "detail": detail,
+                                "affected_devices": None,
+                                "alert_count": None,
+                                "device_count": len(normalized),
+                                "issue_key": issue_key,
+                            },
+                        )
+                    else:
+                        previous_detail = _load_persisted_json(existing["detail"])
+                        if previous_detail == detail:
+                            return
+                        await self._db.execute(
+                            """UPDATE home_alerts
+                               SET title = ?, detail = ?, device_count = ?
+                               WHERE id = ?""",
+                            (
+                                title,
+                                json.dumps(detail, sort_keys=True),
+                                len(normalized),
+                                existing["id"],
+                            ),
+                        )
+                        pending_event = (
+                            "alert.updated",
+                            {
+                                "id": existing["id"],
+                                "alert_type": (
+                                    AlertType.SECURITY_ARP_CONFLICT.value
+                                ),
+                                "severity": existing["severity"],
+                                "title": title,
+                                "source_ip": None,
+                                "created_at": existing["created_at"],
+                                "incident_id": existing["incident_id"],
+                                "read_at": existing["read_at"],
+                                "actioned_at": existing["actioned_at"],
+                                "detail": detail,
+                                "affected_devices": None,
+                                "alert_count": None,
+                                "device_count": len(normalized),
+                                "issue_key": issue_key,
+                            },
+                        )
+                await self._db.commit()
+            except Exception:
+                await self._db.rollback()
+                raise
+
+        if pending_event is not None:
+            event_type, payload = pending_event
+            await self._bus.publish(
+                event_type,
+                payload,
+                source_id=f"issue:{issue_key}",
+            )
+
     async def analyze_all_devices(
         self,
         devices: list[dict[str, Any]],
@@ -222,8 +417,11 @@ class SecurityInsightAnalyzer:
         """Find the active grouped alert for an issue key."""
         cursor = await self._db.execute(
             "SELECT * FROM home_alerts "
-            "WHERE issue_key = ? ORDER BY created_at DESC LIMIT 1",
-            (issue_key,),
+            "WHERE issue_key = ? "
+            "AND alert_type = ? "
+            "AND device_count > 0 "
+            "ORDER BY created_at DESC LIMIT 1",
+            (issue_key, AlertType.SECURITY_PORT_RISK.value),
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
@@ -385,7 +583,9 @@ class SecurityInsightAnalyzer:
         """Remove devices from grouped alerts when their port closes."""
         cursor = await self._db.execute(
             "SELECT * FROM home_alerts "
-            "WHERE issue_key IS NOT NULL AND device_count > 0"
+            "WHERE alert_type = ? "
+            "AND issue_key IS NOT NULL AND device_count > 0",
+            (AlertType.SECURITY_PORT_RISK.value,),
         )
         rows = await cursor.fetchall()
 
@@ -413,19 +613,50 @@ class SecurityInsightAnalyzer:
                 title = (
                     f"{svc} open on {n} device{'s' if n > 1 else ''}"
                     if n > 0
-                    else row["title"]
+                    else f"Resolved: {svc} is no longer exposed"
                 )
                 detail["device_count"] = n
                 detail["affected_devices"] = pruned
                 detail["affected_summary"] = self._format_affected_devices(pruned)
+                if n == 0:
+                    detail["resolved_at"] = datetime.now(UTC).strftime(
+                        "%Y-%m-%dT%H:%M:%S.%fZ"
+                    )
                 detail_json = json.dumps(detail)
 
-                await self._db.execute(
-                    "UPDATE home_alerts SET "
-                    "detail = ?, affected_devices = ?, device_count = ?, title = ? "
-                    "WHERE id = ?",
-                    (detail_json, json.dumps(pruned), n, title, row["id"]),
-                )
+                if n == 0:
+                    resolved_at = detail["resolved_at"]
+                    await self._db.execute(
+                        "UPDATE home_alerts SET "
+                        "detail = ?, affected_devices = ?, device_count = ?, "
+                        "title = ?, read_at = COALESCE(read_at, ?), "
+                        "actioned_at = COALESCE(actioned_at, ?), "
+                        "action_note = COALESCE("
+                        "action_note, 'Automatically resolved after a clean scan'"
+                        ") WHERE id = ?",
+                        (
+                            detail_json,
+                            json.dumps(pruned),
+                            n,
+                            title,
+                            resolved_at,
+                            resolved_at,
+                            row["id"],
+                        ),
+                    )
+                else:
+                    await self._db.execute(
+                        "UPDATE home_alerts SET "
+                        "detail = ?, affected_devices = ?, device_count = ?, "
+                        "title = ? WHERE id = ?",
+                        (
+                            detail_json,
+                            json.dumps(pruned),
+                            n,
+                            title,
+                            row["id"],
+                        ),
+                    )
 
     async def _upsert_insight_state(
         self,

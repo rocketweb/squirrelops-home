@@ -1,0 +1,26 @@
+{
+  "schema_version": 3,
+  "linux_release": {
+    "mode": "blocked",
+    "reviewed_at": null
+  },
+  "tag_bypass_user_id": 247222255,
+  "release_environment": {
+    "id": 18780758237,
+    "name": "release",
+    "updated_at": "2026-07-26T19:39:02Z",
+    "reviewer": {
+      "type": "User",
+      "id": 29927193
+    }
+  },
+  "main_ruleset": {
+    "id": 19759625,
+    "updated_at": "2026-07-26T08:01:54.878Z",
+    "required_check_integration_id": 15368
+  },
+  "tag_ruleset": {
+    "id": 19759637,
+    "updated_at": "2026-07-26T08:02:29.671Z"
+  }
+}

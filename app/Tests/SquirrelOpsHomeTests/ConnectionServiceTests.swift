@@ -19,6 +19,12 @@ final class MockSensorClient: SensorClientProtocol, @unchecked Sendable {
         set { lock.withLock { _statusEventSeq = newValue } }
     }
 
+    private var _statusAPIProtocolVersion: Int? = 2
+    var statusAPIProtocolVersion: Int? {
+        get { lock.withLock { _statusAPIProtocolVersion } }
+        set { lock.withLock { _statusAPIProtocolVersion = newValue } }
+    }
+
     private var _shouldFail = false
     var shouldFail: Bool {
         get { lock.withLock { _shouldFail } }
@@ -46,10 +52,14 @@ final class MockSensorClient: SensorClientProtocol, @unchecked Sendable {
         }
         if T.self == StatusResponse.self {
             let eventSeq = statusEventSeq
+            let protocolField = statusAPIProtocolVersion.map {
+                "\"api_protocol_version\": \($0),"
+            } ?? ""
             let data = Data(
                 """
                 {
                   "version": "1.1.4",
+                  \(protocolField)
                   "profile": "standard",
                   "learning_mode": false,
                   "device_count": 5,
@@ -185,6 +195,46 @@ struct ConnectionServiceTests {
         #expect(client.requestedEndpoints.contains("/decoys"))
         #expect(wsManager.authSent == true)
         #expect(wsManager.replaySent == true)
+    }
+
+    @Test("Protocol mismatch is terminal and never starts WebSocket")
+    func protocolMismatchIsRejected() async {
+        let client = MockSensorClient()
+        client.statusAPIProtocolVersion = 1
+        let wsManager = MockWSManager()
+        let service = SensorConnectionService(
+            sensorClient: client,
+            webSocketManager: wsManager,
+            onEvent: { _ in }
+        )
+
+        await service.connect(
+            baseURL: URL(string: "https://192.168.1.50:8443")!,
+            certFingerprint: "sha256:test"
+        )
+
+        #expect(service.state == .incompatible)
+        #expect(service.lastError?.contains("protocol 1") == true)
+        #expect(wsManager.isConnected == false)
+    }
+
+    @Test("Missing protocol contract is rejected as a pre-2 sensor")
+    func missingProtocolIsRejected() async {
+        let client = MockSensorClient()
+        client.statusAPIProtocolVersion = nil
+        let service = SensorConnectionService(
+            sensorClient: client,
+            webSocketManager: MockWSManager(),
+            onEvent: { _ in }
+        )
+
+        await service.connect(
+            baseURL: URL(string: "https://192.168.1.50:8443")!,
+            certFingerprint: "sha256:test"
+        )
+
+        #expect(service.state == .incompatible)
+        #expect(service.lastError?.contains("predates") == true)
     }
 
     @Test("Initial REST snapshot replays only events after its server cursor")

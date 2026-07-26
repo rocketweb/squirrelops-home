@@ -59,6 +59,46 @@ class TestWebSocketAuth:
             msg = ws.receive_json()
             assert msg["type"] == "auth_error"
 
+    @pytest.mark.asyncio
+    async def test_tls_transport_rejects_loopback_token_after_scheme_downgrade(
+        self,
+        db,
+    ) -> None:
+        """Forwarded scheme data cannot turn a TLS socket into the dev path."""
+        from squirrelops_home_sensor.api.ws import _authenticate
+
+        await db.execute(
+            """INSERT INTO pairing
+               (client_name, client_cert_fingerprint, is_local, paired_at)
+               VALUES ('local-client', 'local-token', 1, '2026-02-22T00:00:00Z')"""
+        )
+        await db.commit()
+
+        class FakeWebSocket:
+            def __init__(self) -> None:
+                self.scope = {
+                    "scheme": "ws",
+                    "client": ("127.0.0.1", 50000),
+                    "extensions": {"tls": {}},
+                }
+                self.sent: list[dict] = []
+
+            async def receive_json(self) -> dict:
+                return {"type": "auth", "token": "local-token"}
+
+            async def send_json(self, message: dict) -> None:
+                self.sent.append(message)
+
+        ws = FakeWebSocket()
+
+        result = await _authenticate(ws, db)  # type: ignore[arg-type]
+
+        assert result is None
+        assert ws.sent == [{
+            "type": "auth_error",
+            "reason": "Valid TLS client certificate required.",
+        }]
+
 
 class TestWebSocketReplay:
     """Replay missed events from the events table."""

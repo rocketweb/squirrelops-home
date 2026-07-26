@@ -10,7 +10,10 @@ from fastapi import APIRouter
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from squirrelops_home_sensor.api.deps import is_loopback_client
-from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
+from squirrelops_home_sensor.tls_client_auth import (
+    client_cert_fingerprint_from_scope,
+    is_tls_transport,
+)
 
 router = APIRouter(tags=["websocket"])
 
@@ -87,7 +90,7 @@ async def _authenticate(
         if row:
             return row[0], tls_fingerprint
 
-    if ws.scope.get("scheme") == "wss":
+    if is_tls_transport(ws.scope) or ws.scope.get("scheme") == "wss":
         await ws.send_json({
             "type": "auth_error",
             "reason": "Valid TLS client certificate required.",

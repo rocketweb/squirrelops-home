@@ -75,6 +75,24 @@ struct SquirrelScoutsRefreshTests {
         #expect(!shouldPoll)
     }
 
+    @Test("Lifecycle work keeps status polling even at full capacity")
+    func lifecycleBusyKeepsPolling() {
+        var state = ScoutRefreshPollState(
+            maximumPolls: 20,
+            requiredStableIdleSamples: 2
+        )
+        let updating = ScoutRefreshSnapshot(
+            isRunning: false,
+            lifecycleBusy: true,
+            activeMimics: 30,
+            maxMimics: 30,
+            mimicRevision: makeMimicRevisions(count: 30)
+        )
+
+        let shouldPoll = state.shouldPoll(after: updating)
+        #expect(shouldPoll)
+    }
+
     @Test("A full status count still polls when the mimic list is stale")
     func fullStatusWithStaleRowsPolls() {
         var state = ScoutRefreshPollState(
@@ -129,6 +147,34 @@ struct SquirrelScoutsRefreshTests {
         let updated = ScoutRefreshPolicy.applying([revision], to: [mimic])
 
         #expect(updated[0].connectionCount == 7)
+    }
+
+    @Test("An in-flight fake-host action presents and disables lifecycle work")
+    func localLifecycleActionIsImmediatelyVisible() {
+        #expect(
+            ScoutLifecyclePresentation.activityLabel(
+                serverLabel: "Idle",
+                actionInFlight: true
+            ) == "Updating"
+        )
+        #expect(
+            ScoutLifecyclePresentation.controlsDisabled(
+                serverBusy: false,
+                actionInFlight: true
+            )
+        )
+        #expect(
+            ScoutLifecyclePresentation.controlsDisabled(
+                serverBusy: true,
+                actionInFlight: false
+            )
+        )
+        #expect(
+            !ScoutLifecyclePresentation.controlsDisabled(
+                serverBusy: false,
+                actionInFlight: false
+            )
+        )
     }
 
     private func makeDecoy(id: Int, type: String, status: String) -> DecoySummary {

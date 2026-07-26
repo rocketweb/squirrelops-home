@@ -1,27 +1,92 @@
-# SquirrelOps Home Sensor -- Docker Compose deployment
+# SquirrelOps Home -- constrained Linux deployment
 #
-# Usage:
-#   docker compose up -d          # start sensor
-#   docker compose logs -f        # view logs (setup key is here)
-#   docker compose down           # stop sensor
-#
-# The sensor needs host networking for ARP discovery and virtual-IP decoys.
-# NET_RAW and NET_ADMIN capabilities are required for raw socket and network
-# configuration operations.
+# The sensor stays on a private bridge as an unprivileged UID with every
+# capability dropped. Only network-helper enters the host network namespace
+# and receives the two network capabilities needed for ARP, virtual addresses,
+# and SquirrelOps-owned packet-filter rules.
 
 services:
-  sensor:
+  network-helper:
     image: ghcr.io/rocketweb/squirrelops-sensor:latest
-    build: .
+    build:
+      context: .
+      target: network-helper
+    user: "0:0"
+    command:
+      - /app/.venv/bin/python
+      - -m
+      - squirrelops_home_sensor.privileged.linux_sidecar
     network_mode: host
+    cap_drop:
+      - ALL
     cap_add:
       - NET_RAW
       - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    volumes:
+      - helper_socket:/run/squirrelops
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    environment:
+      SQUIRRELOPS_NETWORK_HELPER_SOCKET: /run/squirrelops/network-helper.sock
+      SQUIRRELOPS_SENSOR_UID: "10001"
+      SQUIRRELOPS_SENSOR_BRIDGE_IP: 172.30.0.2
+      SQUIRRELOPS_LAN_SUBNET: ${SQUIRRELOPS_SUBNET:?Set SQUIRRELOPS_SUBNET to the directly connected private CIDR}
+      SQUIRRELOPS_NETWORK_INTERFACE: ${SQUIRRELOPS_NETWORK_INTERFACE:-auto}
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -m
+        - squirrelops_home_sensor.privileged.linux_sidecar
+        - --healthcheck
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 192M
+
+  sensor:
+    image: ghcr.io/rocketweb/squirrelops-sensor:latest
+    build:
+      context: .
+      target: sensor
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    ports:
+      - "8443:8443"
     volumes:
       - sensor_data:/app/data
+      - helper_socket:/run/squirrelops:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     environment:
       SQUIRRELOPS_DATA_DIR: /app/data
       SQUIRRELOPS_PORT: "8443"
+      SQUIRRELOPS_SUBNET: ${SQUIRRELOPS_SUBNET:?Set SQUIRRELOPS_SUBNET to the directly connected private CIDR}
+      SQUIRRELOPS_NETWORK_HELPER_SOCKET: /run/squirrelops/network-helper.sock
+      SQUIRRELOPS_SENSOR_BRIDGE_IP: 172.30.0.2
+    depends_on:
+      network-helper:
+        condition: service_healthy
+    networks:
+      sensor_private:
+        ipv4_address: 172.30.0.2
     restart: unless-stopped
     logging:
       driver: json-file
@@ -33,5 +98,13 @@ services:
         limits:
           memory: 512M
 
+networks:
+  sensor_private:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/28
+
 volumes:
   sensor_data:
+  helper_socket:

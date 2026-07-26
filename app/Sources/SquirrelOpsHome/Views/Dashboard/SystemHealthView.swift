@@ -20,6 +20,8 @@ struct SystemHealthView: View {
             return Theme.textTertiary(colorScheme)
         case .authFailed:
             return Theme.statusWarning(colorScheme)
+        case .incompatible:
+            return Theme.statusWarning(colorScheme)
         }
     }
 
@@ -31,6 +33,7 @@ struct SystemHealthView: View {
         case .connecting: return "Connecting"
         case .disconnected: return "Disconnected"
         case .authFailed: return "Auth Failed"
+        case .incompatible: return "Update Required"
         }
     }
 
@@ -42,17 +45,15 @@ struct SystemHealthView: View {
         appState.alerts.filter { $0.readAt == nil }.count
     }
 
+    private var deploymentSummary: DecoyDeploymentSummary {
+        DecoyDeploymentSummary.active(in: appState.decoys)
+    }
+
     private var decoyMetricValue: String {
-        let listedActiveCount = AppState.activeDecoyDeploymentCount(
-            in: appState.decoys
-        )
         let activeCount = appState.decoys.isEmpty
             ? (appState.systemStatus?.decoyCount ?? 0)
-            : listedActiveCount
-        guard let capacity = appState.resourceProfile?.totalDecoyCapacity else {
-            return "\(activeCount)"
-        }
-        return "\(activeCount)/\(capacity)"
+            : deploymentSummary.deploymentCount
+        return "\(activeCount)"
     }
 
     private var formattedUptime: String {
@@ -94,7 +95,7 @@ struct SystemHealthView: View {
                     icon: "desktopcomputer"
                 )
                 MetricCard(
-                    title: "Decoys Deployed",
+                    title: "Active Decoy Deployments",
                     value: decoyMetricValue,
                     icon: "ant"
                 )
@@ -105,11 +106,18 @@ struct SystemHealthView: View {
                 )
             }
 
+            if !appState.decoys.isEmpty {
+                Text(deploymentSummary.breakdownLabel)
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+            }
+
             if let profile = appState.resourceProfile {
                 Text(
-                    "Profile capacity is a ceiling: up to \(profile.maxDecoys) classic + "
-                    + "\(profile.maxMimicDecoys) fake hosts. Each fake host may "
-                    + "contain several per-port service decoys."
+                    "\(profile.profile.capitalized) profile ceiling: up to "
+                    + "\(profile.maxMimicDecoys) fake hosts and "
+                    + "\(profile.maxDecoys) host listeners. Eligible discovered "
+                    + "services determine how many fake hosts can deploy."
                 )
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))

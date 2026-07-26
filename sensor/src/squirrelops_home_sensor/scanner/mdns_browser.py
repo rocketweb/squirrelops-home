@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 
 from zeroconf import IPVersion, ServiceStateChange, Zeroconf
@@ -95,12 +96,40 @@ class MDNSBrowser:
         self,
         browse_timeout: float = 3.0,
         service_types: list[str] | None = None,
+        *,
+        delegate_to_helper: bool = True,
     ) -> None:
         self._browse_timeout = browse_timeout
         self._service_types = service_types or BROWSE_SERVICE_TYPES
+        self._delegate_to_helper = delegate_to_helper
 
     async def browse(self) -> list[MDNSResult]:
         """Browse for mDNS services and return results."""
+        helper_socket = os.environ.get("SQUIRRELOPS_NETWORK_HELPER_SOCKET", "")
+        if self._delegate_to_helper and helper_socket:
+            from squirrelops_home_sensor.privileged.linux_sidecar import (
+                LinuxNetworkHelperClient,
+            )
+
+            delegated = await LinuxNetworkHelperClient(helper_socket).mdns_browse(
+                self._service_types,
+                self._browse_timeout,
+            )
+            return [
+                MDNSResult(
+                    ip=str(item["ip"]),
+                    hostname=(
+                        str(item["hostname"])
+                        if item.get("hostname") is not None
+                        else None
+                    ),
+                    service_types=frozenset(
+                        str(value) for value in item.get("service_types", [])
+                    ),
+                )
+                for item in delegated
+            ]
+
         collector = MDNSBrowseCollector()
         pending: set[asyncio.Task[None]] = set()
 

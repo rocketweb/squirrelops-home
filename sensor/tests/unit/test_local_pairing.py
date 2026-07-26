@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import socket
 import stat
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -11,22 +14,51 @@ import pytest
 from squirrelops_home_sensor.api.local_pairing import (
     LocalPairingServer,
     authorize_peer,
+    get_peer_audit_token,
     verify_peer_application,
 )
+from squirrelops_home_sensor.config import PairingConfig
 
-_REQUIREMENT = 'identifier "com.squirrelops.home" and anchor apple generic'
-_ALLOW_APP = lambda pid, path, requirement: True  # noqa: E731
-_DENY_APP = lambda pid, path, requirement: False  # noqa: E731
+_REQUIREMENT = (
+    'identifier "com.squirrelops.home" and anchor apple generic and '
+    'certificate leaf[subject.OU] = "PSQ5HK5U65"'
+)
+_TOKEN = bytes(range(32))
+_ALLOW_APP = lambda token, requirement: True  # noqa: E731
+_DENY_APP = lambda token, requirement: False  # noqa: E731
+
+
+def test_production_app_requirement_pins_rocket_web_team():
+    requirement = PairingConfig().allowed_app_requirement
+    assert 'identifier "com.squirrelops.home"' in requirement
+    assert 'certificate leaf[subject.OU] = "PSQ5HK5U65"' in requirement
 
 
 class TestAuthorizePeer:
+    def test_console_user_authorizes_captured_audit_token(self):
+        audit_token = bytes(range(32))
+        captured: list[tuple[bytes, str]] = []
+
+        def verify(token: bytes, requirement: str) -> bool:
+            captured.append((token, requirement))
+            return True
+
+        assert authorize_peer(
+            501,
+            audit_token,
+            console_uid=501,
+            allow_unsigned_local=False,
+            allowed_app_requirement=_REQUIREMENT,
+            verify_application=verify,
+        )
+        assert captured == [(audit_token, _REQUIREMENT)]
+
     def test_root_is_allowed(self):
         assert authorize_peer(
             0,
-            123,
+            None,
             console_uid=501,
             allow_unsigned_local=False,
-            allowed_app_path="/Applications/SquirrelOps Home.app/Contents/MacOS/SquirrelOpsHome",
             allowed_app_requirement=_REQUIREMENT,
             verify_application=_DENY_APP,
         )
@@ -34,30 +66,27 @@ class TestAuthorizePeer:
     def test_console_user_requires_verified_installed_app(self):
         assert authorize_peer(
             501,
-            123,
+            _TOKEN,
             console_uid=501,
             allow_unsigned_local=False,
-            allowed_app_path="/Applications/SquirrelOps Home.app/Contents/MacOS/SquirrelOpsHome",
             allowed_app_requirement=_REQUIREMENT,
             verify_application=_ALLOW_APP,
         )
         assert not authorize_peer(
             501,
-            123,
+            _TOKEN,
             console_uid=501,
             allow_unsigned_local=False,
-            allowed_app_path="/Applications/SquirrelOps Home.app/Contents/MacOS/SquirrelOpsHome",
             allowed_app_requirement=_REQUIREMENT,
             verify_application=_DENY_APP,
         )
 
-    def test_same_uid_process_is_rejected_without_app_identity(self):
+    def test_same_uid_process_is_rejected_without_audit_token(self):
         assert not authorize_peer(
             501,
-            123,
+            None,
             console_uid=501,
             allow_unsigned_local=False,
-            allowed_app_path=None,
             allowed_app_requirement=_REQUIREMENT,
             verify_application=_ALLOW_APP,
         )
@@ -66,10 +95,9 @@ class TestAuthorizePeer:
         for uid in (None, 502):
             assert not authorize_peer(
                 uid,
-                123,
+                _TOKEN,
                 console_uid=501,
                 allow_unsigned_local=False,
-                allowed_app_path="/app",
                 allowed_app_requirement=_REQUIREMENT,
                 verify_application=_ALLOW_APP,
             )
@@ -77,10 +105,9 @@ class TestAuthorizePeer:
     def test_unsigned_console_mode_must_be_explicit(self):
         assert authorize_peer(
             501,
-            123,
+            _TOKEN,
             console_uid=501,
             allow_unsigned_local=True,
-            allowed_app_path=None,
             allowed_app_requirement=None,
             verify_application=_DENY_APP,
         )
@@ -88,59 +115,82 @@ class TestAuthorizePeer:
     def test_signature_requirement_is_mandatory(self):
         assert not authorize_peer(
             501,
-            123,
+            _TOKEN,
             console_uid=501,
             allow_unsigned_local=False,
-            allowed_app_path="/app",
             allowed_app_requirement=None,
             verify_application=_ALLOW_APP,
         )
 
 
-def test_verify_application_enforces_designated_requirement(monkeypatch, tmp_path):
-    import squirrelops_home_sensor.api.local_pairing as local_pairing
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS Security.framework required")
+def test_verify_application_binds_requirement_to_socket_audit_token():
+    local, peer = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        audit_token = get_peer_audit_token(local)
+        assert audit_token is not None
 
-    executable = tmp_path / "SquirrelOpsHome"
-    executable.write_bytes(b"binary")
-    captured: list[str] = []
+        requirement_result = subprocess.run(
+            ["/usr/bin/codesign", "-d", "-r-", "--", sys.executable],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert requirement_result.returncode == 0
+        marker = "designated => "
+        requirement_output = (
+            requirement_result.stdout + "\n" + requirement_result.stderr
+        )
+        requirement_line = next(
+            line
+            for line in requirement_output.splitlines()
+            if marker in line
+        )
+        requirement = requirement_line.split(marker, 1)[1]
 
-    class _Result:
-        returncode = 0
-
-    monkeypatch.setattr(local_pairing, "_exe_path_for_pid", lambda pid: str(executable))
-
-    def fake_run(args, **kwargs):
-        del kwargs
-        captured.extend(args)
-        return _Result()
-
-    monkeypatch.setattr(local_pairing.subprocess, "run", fake_run)
-    assert verify_peer_application(123, str(executable), _REQUIREMENT)
-    assert f"-R={_REQUIREMENT}" in captured
-    assert "-R" not in captured
+        assert verify_peer_application(audit_token, requirement)
+        assert not verify_peer_application(
+            audit_token,
+            'identifier "invalid.squirrelops.test"',
+        )
+    finally:
+        local.close()
+        peer.close()
 
 
 class _FakeSock:
-    def __init__(self, uid, pid):
+    def __init__(self, uid, audit_token):
         self.uid = uid
-        self.pid = pid
+        self.audit_token = audit_token
 
 
 def test_server_uses_peer_credentials(monkeypatch, tmp_path):
     import squirrelops_home_sensor.api.local_pairing as local_pairing
 
     monkeypatch.setattr(local_pairing, "get_peer_uid", lambda sock: sock.uid)
-    monkeypatch.setattr(local_pairing, "get_peer_pid", lambda sock: sock.pid)
+    monkeypatch.setattr(
+        local_pairing,
+        "get_peer_audit_token",
+        lambda sock: sock.audit_token,
+        raising=False,
+    )
+    captured: list[tuple[bytes, str]] = []
+
+    def verify(token: bytes, requirement: str) -> bool:
+        captured.append((token, requirement))
+        return True
+
     server = LocalPairingServer(
         str(tmp_path / "pairing.sock"),
         lambda: "ABCD-EFGH-JKMP-QRST-VWXY",
-        allowed_app_path="/Applications/SquirrelOps Home.app/Contents/MacOS/SquirrelOpsHome",
         allowed_app_requirement=_REQUIREMENT,
         console_uid_provider=lambda: 501,
-        verify_application=_ALLOW_APP,
+        verify_application=verify,
     )
-    assert server.is_authorized(_FakeSock(501, 999))
-    assert not server.is_authorized(_FakeSock(777, 999))
+    token = bytes(range(32))
+    assert server.is_authorized(_FakeSock(501, token))
+    assert captured == [(token, _REQUIREMENT)]
+    assert not server.is_authorized(_FakeSock(777, token))
 
 
 @pytest.mark.asyncio
@@ -151,7 +201,6 @@ async def test_server_refuses_to_replace_non_socket(tmp_path):
     server = LocalPairingServer(
         str(socket_path),
         lambda: "ABCD-EFGH-JKMP-QRST-VWXY",
-        allowed_app_path="/app",
         allowed_app_requirement=_REQUIREMENT,
     )
     with pytest.raises(RuntimeError, match="non-socket"):
@@ -166,7 +215,6 @@ async def test_server_creates_expected_filesystem_modes():
         server = LocalPairingServer(
             str(socket_path),
             lambda: "ABCD-EFGH-JKMP-QRST-VWXY",
-            allowed_app_path="/app",
             allowed_app_requirement=_REQUIREMENT,
         )
         await server.start()

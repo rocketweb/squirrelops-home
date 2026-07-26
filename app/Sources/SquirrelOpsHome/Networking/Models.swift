@@ -39,6 +39,7 @@ public enum AlertType: String, Codable, Sendable {
     case learningComplete = "system.learning_complete"
     case reviewReminder = "device.review_reminder"
     case behavioralAnomaly = "behavioral.anomaly"
+    case securityARPConflict = "security.arp_conflict"
     case securityPortRisk = "security.port_risk"
     case securityVendorAdvisory = "security.vendor_advisory"
 
@@ -839,6 +840,10 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
         status == "active"
     }
 
+    public var isOperationalDeployment: Bool {
+        status == "active" || status == "degraded"
+    }
+
     public var isVirtualMimic: Bool {
         decoyType == "mimic"
     }
@@ -931,6 +936,46 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
     }
 }
 
+public struct DecoyDeploymentSummary: Sendable, Equatable {
+    public let fakeHostCount: Int
+    public let serviceDecoyCount: Int
+    public let hostListenerCount: Int
+
+    public var deploymentCount: Int {
+        fakeHostCount + hostListenerCount
+    }
+
+    public var breakdownLabel: String {
+        "\(fakeHostCount) \(Self.pluralized(fakeHostCount, singular: "fake host")) · "
+            + "\(serviceDecoyCount) \(Self.pluralized(serviceDecoyCount, singular: "service decoy")) · "
+            + "\(hostListenerCount) \(Self.pluralized(hostListenerCount, singular: "host listener"))"
+    }
+
+    public static func active(in decoys: [DecoySummary]) -> DecoyDeploymentSummary {
+        let active = decoys.filter(\.isActiveDeployment)
+        let mimicServices = active.filter(\.isVirtualMimic)
+        return DecoyDeploymentSummary(
+            fakeHostCount: DecoyHostGroup.grouping(mimicServices).count,
+            serviceDecoyCount: mimicServices.count,
+            hostListenerCount: active.filter(\.isHostListener).count
+        )
+    }
+
+    public static func operational(in decoys: [DecoySummary]) -> DecoyDeploymentSummary {
+        let operational = decoys.filter(\.isOperationalDeployment)
+        let mimicServices = operational.filter(\.isVirtualMimic)
+        return DecoyDeploymentSummary(
+            fakeHostCount: DecoyHostGroup.grouping(mimicServices).count,
+            serviceDecoyCount: mimicServices.count,
+            hostListenerCount: operational.filter(\.isHostListener).count
+        )
+    }
+
+    private static func pluralized(_ count: Int, singular: String) -> String {
+        count == 1 ? singular : "\(singular)s"
+    }
+}
+
 public struct DecoyHostGroup: Sendable, Identifiable, Equatable, Hashable {
     public let id: String
     public let hostId: Int?
@@ -973,6 +1018,26 @@ public struct DecoyHostGroup: Sendable, Identifiable, Equatable, Hashable {
 
     private static func serviceSort(_ lhs: DecoySummary, _ rhs: DecoySummary) -> Bool {
         lhs.port == rhs.port ? lhs.id < rhs.id : lhs.port < rhs.port
+    }
+}
+
+public struct OperationalDecoyInventory: Sendable, Equatable {
+    public let decoys: [DecoySummary]
+
+    public init(_ decoys: [DecoySummary]) {
+        self.decoys = decoys.filter(\.isOperationalDeployment)
+    }
+
+    public var mimicGroups: [DecoyHostGroup] {
+        DecoyHostGroup.grouping(decoys.filter(\.isVirtualMimic))
+    }
+
+    public var hostListeners: [DecoySummary] {
+        decoys.filter(\.isHostListener)
+    }
+
+    public var summary: DecoyDeploymentSummary {
+        DecoyDeploymentSummary.operational(in: decoys)
     }
 }
 
@@ -1183,6 +1248,7 @@ public struct HealthResponse: Codable, Sendable {
 
 public struct StatusResponse: Codable, Sendable {
     public let version: String?
+    public let apiProtocolVersion: Int?
     public let profile: String
     public let learningMode: Bool
     public let deviceCount: Int
@@ -1197,9 +1263,11 @@ public struct StatusResponse: Codable, Sendable {
         decoyCount: Int,
         alertCount: Int,
         version: String? = nil,
+        apiProtocolVersion: Int? = nil,
         eventSeq: Int? = nil
     ) {
         self.version = version
+        self.apiProtocolVersion = apiProtocolVersion
         self.profile = profile
         self.learningMode = learningMode
         self.deviceCount = deviceCount
@@ -1210,6 +1278,7 @@ public struct StatusResponse: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case version
+        case apiProtocolVersion = "api_protocol_version"
         case profile
         case learningMode = "learning_mode"
         case deviceCount = "device_count"
@@ -1254,9 +1323,9 @@ public struct ResourceProfileResponse: Codable, Sendable, Equatable {
         let classification: String
         switch llmClassification {
         case "cloud_llm":
-            classification = "Cloud LLM"
+            classification = "Cloud AI"
         case "local_llm":
-            classification = "Local LLM"
+            classification = "Local AI"
         case "local_signatures", "none":
             classification = "Local signature"
         default:
@@ -1266,11 +1335,11 @@ public struct ResourceProfileResponse: Codable, Sendable, Equatable {
         }
 
         if maxMimicDecoys == 0 || scoutIntervalMinutes == 0 {
-            return "Network scan every \(scan). Up to \(maxDecoys) classic decoys. Scouts and virtual mimics disabled. \(classification) classification."
+            return "Network scan every \(scan). Up to \(maxDecoys) host listeners. Fake hosts and Scouts disabled. \(classification) classification."
         }
 
         let scout = Self.durationLabel(seconds: scoutIntervalMinutes * 60)
-        return "Network scan every \(scan). Up to \(maxDecoys) classic decoys + \(maxMimicDecoys) fake hosts (\(totalDecoyCapacity) deployed identities). Each fake host can expose multiple per-port service decoys. Scouts every \(scout). \(classification) classification."
+        return "Network scan every \(scan). Up to \(maxMimicDecoys) fake hosts and \(maxDecoys) host listeners. Each fake host can expose multiple service decoys. Actual deployment depends on eligible discovered services. Scouts every \(scout). \(classification) classification."
     }
 
     private static func durationLabel(seconds: Int) -> String {
@@ -1455,6 +1524,7 @@ public struct UpdateCheckResponse: Codable, Sendable {
 public struct ScoutStatusResponse: Codable, Sendable {
     public let enabled: Bool
     public let isRunning: Bool
+    public let lifecycleBusy: Bool?
     public let lastScoutAt: String?
     public let lastScoutDurationMs: Int?
     public let totalProfiles: Int
@@ -1467,6 +1537,7 @@ public struct ScoutStatusResponse: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case enabled
         case isRunning = "is_running"
+        case lifecycleBusy = "lifecycle_busy"
         case lastScoutAt = "last_scout_at"
         case lastScoutDurationMs = "last_scout_duration_ms"
         case totalProfiles = "total_profiles"
@@ -1475,6 +1546,16 @@ public struct ScoutStatusResponse: Codable, Sendable {
         case maxMimics = "max_mimics"
         case fakeHostCount = "fake_host_count"
         case serviceDecoyCount = "service_decoy_count"
+    }
+
+    public var activityLabel: String {
+        if isRunning {
+            return "Scouting"
+        }
+        if lifecycleBusy == true {
+            return "Updating"
+        }
+        return "Idle"
     }
 }
 
@@ -1555,12 +1636,20 @@ public struct MimicDecoySummary: Codable, Sendable, Identifiable, Equatable, Has
     }
 
     public var displayHostname: String? {
-        guard let raw = [hostname, mdnsHostname]
-            .compactMap({ $0?.trimmingCharacters(in: .whitespacesAndNewlines) })
-            .first(where: { !$0.isEmpty }) else {
+        if let durable = hostname?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ), !durable.isEmpty {
+            return durable.hasSuffix(".") ? String(durable.dropLast()) : durable
+        }
+
+        guard let mdns = mdnsHostname?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ), !mdns.isEmpty else {
             return nil
         }
-        let withoutTrailingDot = raw.hasSuffix(".") ? String(raw.dropLast()) : raw
+        let withoutTrailingDot = mdns.hasSuffix(".")
+            ? String(mdns.dropLast())
+            : mdns
         if withoutTrailingDot.lowercased().hasSuffix(".local") {
             return withoutTrailingDot
         }
@@ -1664,6 +1753,16 @@ public struct MimicHostGroup: Sendable, Identifiable, Equatable, Hashable {
         }
     }
 
+    public static func operationalGrouping(
+        _ mimics: [MimicDecoySummary]
+    ) -> [MimicHostGroup] {
+        grouping(
+            mimics.filter {
+                $0.status == "active" || $0.status == "degraded"
+            }
+        )
+    }
+
     private static func groupingKey(_ mimic: MimicDecoySummary) -> String {
         return "address:\(mimic.bindAddress.lowercased())"
     }
@@ -1673,6 +1772,47 @@ public struct MimicHostGroup: Sendable, Identifiable, Equatable, Hashable {
         _ rhs: MimicDecoySummary
     ) -> Bool {
         lhs.port == rhs.port ? lhs.id < rhs.id : lhs.port < rhs.port
+    }
+}
+
+public struct MimicDeploymentBreakdown: Sendable, Equatable {
+    public let activeHostCount: Int
+    public let activeServiceCount: Int
+    public let stoppedHostCount: Int
+    public let stoppedServiceCount: Int
+
+    public init(_ mimics: [MimicDecoySummary]) {
+        let groups = MimicHostGroup.grouping(mimics)
+        activeHostCount = groups.lazy.filter {
+            $0.services.allSatisfy { $0.status == "active" }
+        }.count
+        stoppedHostCount = groups.lazy.filter {
+            $0.services.allSatisfy { $0.status == "stopped" }
+        }.count
+        activeServiceCount = mimics.lazy.filter {
+            $0.status == "active"
+        }.count
+        stoppedServiceCount = mimics.lazy.filter {
+            $0.status == "stopped"
+        }.count
+    }
+
+    public var activeLabel: String {
+        "\(activeHostCount) active "
+            + (activeHostCount == 1 ? "fake host" : "fake hosts")
+            + " · \(activeServiceCount) active "
+            + (activeServiceCount == 1
+                ? "service decoy"
+                : "service decoys")
+    }
+
+    public var stoppedLabel: String {
+        "\(stoppedHostCount) stopped "
+            + (stoppedHostCount == 1 ? "fake host" : "fake hosts")
+            + " · \(stoppedServiceCount) stopped "
+            + (stoppedServiceCount == 1
+                ? "service decoy"
+                : "service decoys")
     }
 }
 

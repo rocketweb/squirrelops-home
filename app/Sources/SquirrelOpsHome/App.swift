@@ -1,4 +1,5 @@
 import AppKit
+import Security
 import SwiftUI
 
 @main
@@ -6,9 +7,12 @@ struct SquirrelOpsHomeApp: App {
     @State private var appState = AppState()
     @State private var connectionService: SensorConnectionService?
     @State private var pairingManager = PairingManager(
-        client: SensorClient(baseURL: URL(string: "https://localhost")!, certFingerprint: "", caCertData: nil)
+        client: SensorClient(
+            pairingBaseURL: URL(string: "https://localhost")!
+        )
     )
     @AppStorage("appearanceMode") private var appearanceMode: String = "system"
+    private let notificationService = MacNotificationService.shared
 
     init() {
         FontRegistration.registerAllFonts()
@@ -37,6 +41,21 @@ struct SquirrelOpsHomeApp: App {
                 NSApp.activate(ignoringOtherApps: true)
             }
             .task {
+                notificationService.onOpenAlerts = { [appState] in
+                    appState.selectedDashboardSection = .alerts
+                    WindowActivationController.present(.dashboard) {}
+                }
+                appState.onAlertNotificationsRequested = {
+                    [notificationService, appState] alerts in
+                    Task { @MainActor in
+                        await notificationService.deliver(
+                            alerts,
+                            isSilenced: appState.isSilenced
+                        )
+                    }
+                }
+                await notificationService.start()
+
                 // Wire up repair action for auth-failed banner
                 appState.onRepairRequested = { [weak appState] in
                     guard let appState else { return }
@@ -64,13 +83,35 @@ struct SquirrelOpsHomeApp: App {
             }
         }
         .defaultSize(width: 1080, height: 720)
+        .commands {
+            SquirrelOpsHelpCommands()
+        }
+
+        Window("SquirrelOps Home Help", id: AppWindow.help.rawValue) {
+            HelpGuideView()
+                .onAppear {
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+        }
+        .defaultSize(width: 980, height: 720)
     }
 
     private func connectToSensor(_ sensor: PairingManager.PairedSensor) {
         appState.pairedSensor = sensor
 
-        let caCertData = PairingManager.loadCACertificateData(for: sensor)
-        let clientIdentity = PairingManager.loadClientIdentity(for: sensor)
+        let caCertData: Data
+        let clientIdentity: SecIdentity
+        do {
+            caCertData = try PairingManager.loadCACertificateData(for: sensor)
+            clientIdentity = try PairingManager.loadClientIdentity(for: sensor)
+        } catch {
+            // Missing or unreadable paired credentials are an authentication
+            // failure. Never reinterpret them as pairing-time TOFU.
+            appState.sensorClient = nil
+            appState.connectionState = .authFailed
+            return
+        }
 
         let client = SensorClient(
             baseURL: sensor.baseURL,
@@ -83,7 +124,10 @@ struct SquirrelOpsHomeApp: App {
         var wsComponents = URLComponents(url: sensor.baseURL.appendingPathComponent("ws/events"), resolvingAgainstBaseURL: false)!
         wsComponents.scheme = "wss"
         let wsURL = wsComponents.url!
-        let wsDelegate = TLSPinningDelegate(caCertData: caCertData, clientIdentity: clientIdentity)
+        let wsDelegate = TLSPinningDelegate(
+            serverTrustMode: .pinnedCA(caCertData),
+            clientIdentity: clientIdentity
+        )
         let wsSession = URLSession(configuration: .default, delegate: wsDelegate, delegateQueue: nil)
         let wsManager = WebSocketManager(url: wsURL, session: wsSession)
 

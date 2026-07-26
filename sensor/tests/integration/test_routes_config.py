@@ -1,7 +1,8 @@
 """Integration tests for config routes: get/set config, alert methods, ha-status."""
 import stat
+from copy import deepcopy
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestGetConfig:
@@ -89,10 +90,19 @@ class TestUpdateConfig:
     def test_update_rejects_protected_fields(self, client, sensor_config):
         """sensor_id and version should not be overwritable via config update."""
         original_id = sensor_config["sensor_id"]
-        client.put("/config", json={"sensor_id": "hacked-id"})
-        # The update should either reject or silently ignore the protected field
+        response = client.put("/config", json={"sensor_id": "hacked-id"})
+        assert response.status_code == 422
         get_response = client.get("/config")
         assert get_response.json()["sensor_id"] == original_id
+
+    def test_update_rejects_profile_bypass(self, client, sensor_config):
+        """Resource profiles change through the transactional system endpoint."""
+        original_profile = sensor_config["profile"]
+
+        response = client.put("/config", json={"profile": "full"})
+
+        assert response.status_code == 422
+        assert sensor_config["profile"] == original_profile
 
     def test_update_empty_body_returns_200(self, client):
         response = client.put("/config", json={})
@@ -102,12 +112,87 @@ class TestUpdateConfig:
         """data_dir governs where the DB, CA, and secret store live and must be
         immutable at runtime (otherwise a paired client redirects trust state)."""
         resp = client.put("/config", json={"sensor": {"data_dir": "/etc/evil"}})
-        assert resp.status_code == 200
+        assert resp.status_code == 422
         assert resp.json().get("sensor", {}).get("data_dir") != "/etc/evil"
 
-    def test_update_cannot_set_secret_passphrase(self, client):
+    def test_update_cannot_set_secret_passphrase(self, client, sensor_config):
+        original = deepcopy(sensor_config["sensor"])
         resp = client.put("/config", json={"sensor": {"secret_passphrase": "attacker"}})
-        assert "secret_passphrase" not in resp.json().get("sensor", {})
+        assert resp.status_code == 422
+        assert sensor_config["sensor"] == original
+
+    def test_update_cannot_disable_tls_or_persist_it(self, client, sensor_config):
+        """A paired request cannot make plaintext bearer auth sticky."""
+        original = deepcopy(sensor_config["sensor"])
+
+        response = client.put(
+            "/config",
+            json={"sensor": {"tls": {"enabled": False}}},
+        )
+
+        assert response.status_code == 422
+        assert sensor_config["sensor"] == original
+        path = Path(sensor_config["sensor"]["data_dir"]) / "config.yaml"
+        assert not path.exists()
+
+    def test_update_rejects_unknown_nested_field_atomically(
+        self, client, sensor_config
+    ):
+        original = deepcopy(sensor_config)
+
+        response = client.put(
+            "/config",
+            json={
+                "home_assistant": {
+                    "enabled": True,
+                    "url": "http://192.168.1.2:8123",
+                    "token": "secret-token",
+                    "tls": False,
+                }
+            },
+        )
+
+        assert response.status_code == 422
+        assert sensor_config == original
+        path = Path(sensor_config["sensor"]["data_dir"]) / "config.yaml"
+        assert not path.exists()
+
+    def test_update_rejects_invalid_type_and_range_atomically(
+        self, client, sensor_config
+    ):
+        original = deepcopy(sensor_config)
+
+        wrong_type = client.put(
+            "/config",
+            json={"network": {"scan_interval": "fast"}},
+        )
+        out_of_range = client.put(
+            "/config",
+            json={"scouts": {"max_concurrent_probes": 100000}},
+        )
+
+        assert wrong_type.status_code == 422
+        assert out_of_range.status_code == 422
+        assert sensor_config == original
+        path = Path(sensor_config["sensor"]["data_dir"]) / "config.yaml"
+        assert not path.exists()
+
+    def test_persistence_failure_does_not_mutate_live_config(
+        self, client, sensor_config
+    ):
+        original = deepcopy(sensor_config)
+
+        with patch(
+            "squirrelops_home_sensor.api.routes_config.atomic_write_private_text",
+            side_effect=OSError("disk full"),
+        ):
+            response = client.put(
+                "/config",
+                json={"home_assistant": {"enabled": True}},
+            )
+
+        assert response.status_code == 500
+        assert sensor_config == original
 
     def test_update_sanitizes_credential_filename_path_traversal(self, client):
         resp = client.put("/config", json={"credential_filename": "../../etc/passwd"})
@@ -158,6 +243,129 @@ class TestUpdateConfig:
         assert "secret-token" in saved
         assert "data_dir" not in saved
         assert "test-sensor-001" not in saved
+
+    def test_cloud_llm_provider_uses_canonical_endpoint_and_applies_live(
+        self,
+        app,
+        client,
+        sensor_config,
+    ):
+        from squirrelops_home_sensor.api.routes_system import get_scan_loop
+
+        scan_loop = MagicMock()
+        app.dependency_overrides[get_scan_loop] = lambda: scan_loop
+
+        response = client.put(
+            "/config",
+            json={
+                "classifier": {
+                    "llm_provider": "openrouter",
+                    "llm_endpoint": "https://attacker.invalid/v1",
+                    "llm_model": "provider/model",
+                    "llm_api_key": "secret",
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        classifier = response.json()["classifier"]
+        assert classifier["llm_endpoint"] == "https://openrouter.ai/api/v1"
+        scan_loop.set_classifier_config.assert_called_once_with(sensor_config)
+
+    def test_failed_live_classifier_swap_does_not_persist_or_mutate_config(
+        self,
+        app,
+        client,
+        sensor_config,
+    ):
+        from squirrelops_home_sensor.api.routes_system import get_scan_loop
+
+        original = deepcopy(sensor_config)
+        scan_loop = MagicMock()
+        scan_loop.set_classifier_config.side_effect = RuntimeError("swap failed")
+        app.dependency_overrides[get_scan_loop] = lambda: scan_loop
+
+        response = client.put(
+            "/config",
+            json={
+                "classifier": {
+                    "llm_provider": "fireworks",
+                    "llm_model": "accounts/account/models/model",
+                    "llm_api_key": "new-secret",
+                },
+            },
+        )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Classifier configuration was not applied."
+        )
+        assert sensor_config == original
+        assert not (
+            Path(sensor_config["sensor"]["data_dir"]) / "config.yaml"
+        ).exists()
+
+    def test_switching_to_local_provider_clears_cloud_key(
+        self,
+        client,
+        sensor_config,
+    ):
+        sensor_config["classifier"] = {
+            "mode": "cloud_llm",
+            "confidence_threshold": 0.70,
+            "llm_provider": "openrouter",
+            "llm_endpoint": "https://openrouter.ai/api/v1",
+            "llm_model": "provider/model",
+            "llm_api_key": "secret",
+        }
+
+        response = client.put(
+            "/config",
+            json={
+                "classifier": {
+                    "llm_provider": "ollama",
+                    "llm_endpoint": "",
+                    "llm_model": "qwen3",
+                    "llm_api_key": None,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        classifier = response.json()["classifier"]
+        assert classifier["llm_endpoint"] == "http://localhost:11434/v1"
+        assert classifier["llm_api_key"] is None
+
+    def test_provider_switch_without_key_does_not_reuse_previous_secret(
+        self,
+        client,
+        sensor_config,
+    ):
+        sensor_config["classifier"] = {
+            "mode": "cloud_llm",
+            "confidence_threshold": 0.70,
+            "llm_provider": "openrouter",
+            "llm_endpoint": "https://openrouter.ai/api/v1",
+            "llm_model": "provider/model",
+            "llm_api_key": "openrouter-secret",
+        }
+
+        response = client.put(
+            "/config",
+            json={
+                "classifier": {
+                    "llm_provider": "fireworks",
+                    "llm_model": "accounts/account/models/model",
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        classifier = response.json()["classifier"]
+        assert classifier["llm_endpoint"] == (
+            "https://api.fireworks.ai/inference/v1"
+        )
+        assert classifier["llm_api_key"] is None
 
 
 class TestGetAlertMethods:
@@ -274,7 +482,7 @@ class TestHAStatus:
         """When HA is configured and reachable, returns connected=true and device count."""
         sensor_config["home_assistant"] = {
             "enabled": True,
-            "url": "http://ha.local:8123",
+            "url": "http://192.168.1.20:8123",
             "token": "test-token",
         }
         mock_instance = AsyncMock()
@@ -309,7 +517,7 @@ class TestHAStatus:
         """When HA is configured but unreachable, returns connected=false."""
         sensor_config["home_assistant"] = {
             "enabled": True,
-            "url": "http://ha.local:8123",
+            "url": "http://192.168.1.20:8123",
             "token": "test-token",
         }
         mock_instance = AsyncMock()

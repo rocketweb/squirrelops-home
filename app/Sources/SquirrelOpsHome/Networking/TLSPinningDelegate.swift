@@ -7,13 +7,21 @@ import Security
 /// After pairing, validates the server certificate chain against the pinned CA.
 public final class TLSPinningDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
 
-    private let caCertData: Data?
+    public enum ServerTrustMode: Sendable {
+        case pairingTOFU
+        case pinnedCA(Data)
+    }
+
+    private let serverTrustMode: ServerTrustMode
     private let clientIdentity: SecIdentity?
 
-    /// Initialize with optional CA cert DER data for pinning.
-    /// Pass `nil` to accept any server cert (TOFU mode for pairing).
-    public init(caCertData: Data? = nil, clientIdentity: SecIdentity? = nil) {
-        self.caCertData = caCertData
+    /// Trust mode is explicit so a missing paired Keychain item cannot
+    /// accidentally downgrade an authenticated connection into TOFU.
+    public init(
+        serverTrustMode: ServerTrustMode,
+        clientIdentity: SecIdentity? = nil
+    ) {
+        self.serverTrustMode = serverTrustMode
         self.clientIdentity = clientIdentity
     }
 
@@ -56,8 +64,9 @@ public final class TLSPinningDelegate: NSObject, URLSessionDelegate, @unchecked 
             return
         }
 
-        guard let caCertData else {
-            // TOFU mode: accept any server cert during pairing
+        guard case .pinnedCA(let caCertData) = serverTrustMode else {
+            // Explicit TOFU mode is used only inside the authenticated pairing
+            // transcript, never as a fallback for missing paired credentials.
             completionHandler(.useCredential, URLCredential(trust: serverTrust))
             return
         }

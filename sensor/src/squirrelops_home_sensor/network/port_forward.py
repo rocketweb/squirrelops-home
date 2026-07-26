@@ -252,13 +252,16 @@ class PortForwardManager:
         all_rules: list[dict] = []
         for rules in self._rules.values():
             all_rules.extend(rules)
+        protected_by_ip: dict[str, dict] = {}
+        for endpoint in self._protected_endpoints.values():
+            protected_by_ip.setdefault(endpoint["ip"], endpoint)
 
         try:
             if not all_rules and not self._protected_endpoints:
                 return await self._priv_ops.clear_port_forwards()
             return await self._priv_ops.setup_port_forwards(
                 rules=all_rules,
-                protected_endpoints=list(self._protected_endpoints.values()),
+                protected_endpoints=list(protected_by_ip.values()),
                 interface=self._interface,
             )
         except Exception:
@@ -273,4 +276,7 @@ class PortForwardManager:
     @property
     def protected_endpoint_count(self) -> int:
         """Number of virtual IPs isolated from the host's listening surface."""
-        return len(self._protected_endpoints)
+        return len({
+            endpoint["ip"]
+            for endpoint in self._protected_endpoints.values()
+        })

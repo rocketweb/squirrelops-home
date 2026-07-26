@@ -7,7 +7,10 @@ from collections.abc import AsyncGenerator
 import aiosqlite
 from fastapi import HTTPException, Request, status
 
-from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
+from squirrelops_home_sensor.tls_client_auth import (
+    client_cert_fingerprint_from_scope,
+    is_tls_transport,
+)
 
 
 def is_loopback_client(host: str | None) -> bool:
@@ -86,7 +89,8 @@ async def verify_client_cert(request: Request) -> dict:
     # TLS client certificate, not a spoofable HTTP header.
     auth_header = request.headers.get("authorization", "")
     if (
-        request.url.scheme == "http"
+        not is_tls_transport(request.scope)
+        and request.url.scheme == "http"
         and is_loopback_client(request.client.host if request.client else None)
         and auth_header.startswith("Bearer ")
     ):

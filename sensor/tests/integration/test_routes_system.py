@@ -4,6 +4,9 @@ from datetime import UTC
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from squirrelops_home_sensor import __version__
+from squirrelops_home_sensor.compatibility import SENSOR_API_PROTOCOL_VERSION
+
 
 class TestHealthEndpoint:
     """GET /system/health -- unauthenticated liveness probe only."""
@@ -48,10 +51,9 @@ class TestStatusEndpoint:
         assert "alert_count" in data
 
     def test_status_exposes_version_only_after_authentication(self, client):
-        from squirrelops_home_sensor import __version__
-
         data = client.get("/system/status").json()
         assert data["version"] == __version__
+        assert data["api_protocol_version"] == SENSOR_API_PROTOCOL_VERSION
 
     def test_status_profile_matches_config(self, client, sensor_config):
         response = client.get("/system/status")
@@ -189,6 +191,28 @@ class TestProfileEndpoints:
         assert "scan_interval_seconds" in data
         assert "max_decoys" in data
 
+    def test_profile_uses_endpoint_location_for_editable_local_provider(
+        self,
+        client,
+        sensor_config,
+    ):
+        sensor_config["classifier"] = {
+            "mode": "cloud_llm",
+            "llm_provider": "lmstudio",
+            "llm_endpoint": "https://models.example.com/v1",
+            "llm_model": "model",
+        }
+        assert client.get("/system/profile").json()["llm_classification"] == (
+            "cloud_llm"
+        )
+
+        sensor_config["classifier"]["llm_endpoint"] = (
+            "http://models.home.localdomain:1234/v1"
+        )
+        assert client.get("/system/profile").json()["llm_classification"] == (
+            "local_llm"
+        )
+
     def test_put_profile_switches_profile(self, client, sensor_config):
         response = client.put(
             "/system/profile",
@@ -221,8 +245,8 @@ class TestProfileEndpoints:
         data = response.json()
         assert data["scan_interval_seconds"] == 60  # 1 min for full
         assert data["max_decoys"] == 3
-        assert data["max_mimic_decoys"] == 30
-        assert data["total_decoy_capacity"] == 33
+        assert data["max_mimic_decoys"] == 10
+        assert data["total_decoy_capacity"] == 13
 
     def test_put_profile_reconfigures_all_live_subsystems(
         self, client, app, sensor_config,
@@ -271,9 +295,10 @@ class TestProfileEndpoints:
         scan_loop.set_scan_interval.assert_called_once_with(60)
         scheduler.reconfigure.assert_awaited_once_with(30)
         decoys.reconfigure.assert_awaited_once_with(3)
-        mimics.reconfigure.assert_awaited_once_with(30)
+        mimics.reconfigure.assert_awaited_once_with(10)
         assert sensor_config["network"]["scan_interval"] == 60
-        assert sensor_config["scouts"]["max_mimic_decoys"] == 30
+        assert sensor_config["scouts"]["max_mimic_decoys"] == 10
+        assert sensor_config["scouts"]["max_virtual_ips"] == 10
 
     def test_failed_live_profile_change_is_not_persisted(
         self, client, app, sensor_config,
@@ -391,7 +416,7 @@ class TestProfileEndpoints:
             (8,),
         ]
         assert [call.args for call in mimics.reconfigure.await_args_list] == [
-            (30,),
+            (10,),
             (10,),
         ]
 

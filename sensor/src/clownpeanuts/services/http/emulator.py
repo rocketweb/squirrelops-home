@@ -7,7 +7,9 @@ for connection logging and credential detection.
 
 from __future__ import annotations
 
+import http.client
 import logging
+import socket
 import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +20,84 @@ logger = logging.getLogger(__name__)
 MAX_REQUEST_BODY_BYTES = 64 * 1024
 MAX_CONCURRENT_REQUESTS = 16
 REQUEST_TIMEOUT_SECONDS = 5
+MAX_REQUEST_HEADER_LINE_BYTES = 8 * 1024
+MAX_REQUEST_HEADER_SECTION_BYTES = 32 * 1024
+MAX_REQUEST_HEADER_FIELDS = 100
+MAX_ALERT_REQUEST_TARGET_CHARS = 2048
+
+
+def _append_alert_header(
+    headers: dict[str, str],
+    key: str,
+    value: str,
+) -> None:
+    """Retain duplicate header values without creating an unbounded list."""
+    if key in headers:
+        headers[key] = f"{headers[key]}\n{value}"
+    else:
+        headers[key] = value
+
+
+def _headers_for_alert(items) -> dict[str, str]:
+    """Copy already-bounded parsed headers while preserving duplicates."""
+    headers: dict[str, str] = {}
+    for key, value in items:
+        _append_alert_header(headers, str(key), str(value))
+    return headers
+
+
+def _bounded_request_target(raw_target: object) -> str:
+    """Return an alert-safe request target even when URL parsing rejects it."""
+    if not isinstance(raw_target, str):
+        return ""
+    return raw_target[:MAX_ALERT_REQUEST_TARGET_CHARS]
+
+
+def _safe_request_path(raw_target: object) -> tuple[str, bool]:
+    """Normalize a request target without letting urlparse suppress an alert."""
+    bounded_target = _bounded_request_target(raw_target)
+    if not bounded_target:
+        return "", True
+    try:
+        return urlparse(bounded_target).path, True
+    except ValueError:
+        return bounded_target, False
+
+
+class _BoundedHeaderReader:
+    """Bound stdlib header parsing while retaining safe alert metadata."""
+
+    def __init__(self, stream, fallback_headers: dict[str, str]) -> None:
+        self._stream = stream
+        self._fallback_headers = fallback_headers
+        self._total_bytes = 0
+        self._field_count = 0
+
+    def readline(self, limit: int = -1) -> bytes:
+        read_limit = MAX_REQUEST_HEADER_LINE_BYTES + 1
+        if limit >= 0:
+            read_limit = min(read_limit, limit)
+        line = self._stream.readline(read_limit)
+        if len(line) > MAX_REQUEST_HEADER_LINE_BYTES:
+            raise http.client.LineTooLong("request header line")
+
+        self._total_bytes += len(line)
+        if self._total_bytes > MAX_REQUEST_HEADER_SECTION_BYTES:
+            raise http.client.HTTPException("request header section too large")
+
+        if line not in (b"\r\n", b"\n", b""):
+            self._field_count += 1
+            if self._field_count > MAX_REQUEST_HEADER_FIELDS:
+                raise http.client.HTTPException("too many request headers")
+            decoded = line.decode("iso-8859-1", errors="replace").strip()
+            if ":" in decoded:
+                key, _, value = decoded.partition(":")
+                _append_alert_header(
+                    self._fallback_headers,
+                    key.strip(),
+                    value.strip(),
+                )
+        return line
 
 
 class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
@@ -35,6 +115,15 @@ class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
     def process_request(self, request, client_address):
         if not self._request_slots.acquire(blocking=False):
+            emulator: Emulator | None = getattr(self, "_emulator", None)
+            if emulator is not None:
+                emulator._notify_connection(
+                    client_address,
+                    method="UNKNOWN",
+                    path="",
+                    headers={},
+                    body=None,
+                )
             self.close_request(request)
             return
         try:
@@ -53,13 +142,168 @@ class _BoundedThreadingHTTPServer(ThreadingHTTPServer):
 class _EmulatorHandler(BaseHTTPRequestHandler):
     """HTTP request handler that serves routes from the emulator config."""
 
+    def setup(self) -> None:
+        self._recorded_valid_request = False
+        self._notification_lock = threading.Lock()
+        self._body_lock = threading.Lock()
+        self._body_prefix = bytearray()
+        self._fallback_headers: dict[str, str] = {}
+        super().setup()
+        self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
+        self._deadline_timer = threading.Timer(
+            REQUEST_TIMEOUT_SECONDS,
+            self._expire_request,
+        )
+        self._deadline_timer.daemon = True
+        self._deadline_timer.start()
+
+    def finish(self) -> None:
+        self._deadline_timer.cancel()
+        super().finish()
+
+    def _expire_request(self) -> None:
+        """End a slow-drip request on one absolute wall-clock deadline."""
+        method, path, headers = self._request_metadata()
+        self._notify_request(
+            method=method,
+            path=path,
+            headers=headers,
+            body=self._body_for_alert(),
+        )
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def handle(self) -> None:
+        """Record malformed or incomplete connections that bypass dispatch."""
+        try:
+            super().handle()
+        finally:
+            if not self._recorded_valid_request:
+                method, path, headers = self._request_metadata()
+                self._notify_request(
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=self._body_for_alert(),
+                )
+
+    def handle_one_request(self) -> None:
+        """Make every accepted request attempt observable, including EOF."""
+        try:
+            super().handle_one_request()
+        finally:
+            if not self._recorded_valid_request:
+                method, path, headers = self._request_metadata()
+                self._notify_request(
+                    method=method,
+                    path=path,
+                    headers=headers,
+                    body=self._body_for_alert(),
+                )
+
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        """Record stdlib parser and unsupported-method errors before replying."""
+        if not self._recorded_valid_request:
+            method, path, headers = self._request_metadata()
+            self._notify_request(
+                method=method,
+                path=path,
+                headers=headers,
+                body=self._body_for_alert(),
+            )
+        super().send_error(code, message, explain)
+
+    def parse_request(self) -> bool:
+        """Use stdlib syntax handling with stricter aggregate header bounds."""
+        original_rfile = self.rfile
+        self.rfile = _BoundedHeaderReader(  # type: ignore[assignment]
+            original_rfile,
+            self._fallback_headers,
+        )
+        try:
+            return super().parse_request()
+        finally:
+            self.rfile = original_rfile
+
     # Suppress default logging to stderr
     def log_message(self, format, *args):
         pass
 
-    def setup(self) -> None:
-        super().setup()
-        self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
+    def send_response(self, code, message=None):
+        """Send status and Date without BaseHTTPRequestHandler's Python banner."""
+        self.log_request(code)
+        self.send_response_only(code, message)
+        self.send_header("Date", self.date_time_string())
+
+    def _request_metadata(self) -> tuple[str, str, dict[str, str]]:
+        """Return the best bounded metadata available for an alert."""
+        method = getattr(self, "command", None) or "UNKNOWN"
+        raw_path = getattr(self, "path", None) or ""
+        path, _ = _safe_request_path(raw_path)
+        parsed_headers = getattr(self, "headers", None)
+        headers = (
+            _headers_for_alert(parsed_headers.items())
+            if parsed_headers is not None
+            else dict(self._fallback_headers)
+        )
+        return method, path, headers
+
+    def _notify_parsed_request(
+        self,
+        *,
+        method: str,
+        path: str,
+        body: str | None = None,
+    ) -> None:
+        """Record a request after headers parse, including rejected bodies."""
+        self._notify_request(
+            method=method,
+            path=path,
+            headers=_headers_for_alert(self.headers.items()),
+            body=body,
+        )
+
+    def _remember_body_prefix(self, body: bytes) -> None:
+        """Retain a bounded body prefix for timeout and malformed alerts."""
+        with self._body_lock:
+            self._body_prefix = bytearray(body[:MAX_REQUEST_BODY_BYTES])
+
+    def _body_for_alert(self) -> str | None:
+        """Return any bounded body bytes received before an incomplete request."""
+        with self._body_lock:
+            if not self._body_prefix:
+                return None
+            body = bytes(self._body_prefix)
+        return body.decode("utf-8", errors="replace")
+
+    def _notify_request(
+        self,
+        *,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: str | None,
+    ) -> None:
+        """Notify once per parsed request, or once for a malformed connection."""
+        with self._notification_lock:
+            if self._recorded_valid_request:
+                return
+            self._recorded_valid_request = True
+        emulator: Emulator = self.server._emulator  # type: ignore[attr-defined]
+        emulator._notify_connection(
+            self.client_address,
+            method=method,
+            path=path,
+            headers=headers,
+            body=body,
+        )
 
     def _reject(self, status_code: int, message: bytes) -> None:
         self.send_response(status_code)
@@ -74,50 +318,62 @@ class _EmulatorHandler(BaseHTTPRequestHandler):
     def _handle_request(self, method: str) -> None:
         """Match the request against configured routes and serve the response."""
         emulator: Emulator = self.server._emulator  # type: ignore[attr-defined]
-        path = urlparse(self.path).path
+        path, valid_path = _safe_request_path(self.path)
+        if not valid_path:
+            self._notify_parsed_request(method=method, path=path)
+            self._reject(400, b"Invalid request target")
+            return
 
         # Read body for POST/PUT
         if self.headers.get("Transfer-Encoding"):
+            self._notify_parsed_request(method=method, path=path)
             self._reject(400, b"Transfer-Encoding is not supported")
             return
         try:
             content_length = int(self.headers.get("Content-Length", 0))
         except ValueError:
+            self._notify_parsed_request(method=method, path=path)
             self._reject(400, b"Invalid Content-Length")
             return
         if content_length < 0:
+            self._notify_parsed_request(method=method, path=path)
             self._reject(400, b"Invalid Content-Length")
             return
         if content_length > MAX_REQUEST_BODY_BYTES:
+            self._notify_parsed_request(method=method, path=path)
             self._reject(413, b"Payload Too Large")
             return
         body: str | None = None
         if content_length > 0:
+            raw_body = bytearray()
             try:
-                raw_body = self.rfile.read(content_length)
+                while len(raw_body) < content_length:
+                    read_size = min(4096, content_length - len(raw_body))
+                    chunk = self.rfile.read1(read_size)
+                    if not chunk:
+                        break
+                    raw_body.extend(chunk)
+                    self._remember_body_prefix(bytes(raw_body))
             except OSError:
+                self._notify_parsed_request(
+                    method=method,
+                    path=path,
+                    body=self._body_for_alert(),
+                )
                 self._reject(408, b"Request Timeout")
                 return
             if len(raw_body) != content_length:
+                self._notify_parsed_request(
+                    method=method,
+                    path=path,
+                    body=self._body_for_alert(),
+                )
                 self._reject(400, b"Incomplete request body")
                 return
-            body = raw_body.decode("utf-8", errors="replace")
+            body = bytes(raw_body).decode("utf-8", errors="replace")
 
-        # Collect headers as dict
-        headers_dict = {k: v for k, v in self.headers.items()}
-
-        # Fire the request callback
-        if emulator._on_request is not None:
-            try:
-                emulator._on_request(
-                    self.client_address,
-                    method,
-                    path,
-                    headers_dict,
-                    body,
-                )
-            except Exception:
-                logger.exception("Error in request callback")
+        # Fire the request callback only after the bounded body has been read.
+        self._notify_parsed_request(method=method, path=path, body=body)
 
         # Find matching route
         route = None
@@ -203,6 +459,29 @@ class Emulator:
         self._server: _BoundedThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._alive = False
+
+    def _notify_connection(
+        self,
+        client_address: tuple[str, int],
+        *,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: str | None,
+    ) -> None:
+        """Record an accepted connection, including admission drops."""
+        if self._on_request is None:
+            return
+        try:
+            self._on_request(
+                client_address,
+                method,
+                path,
+                headers,
+                body,
+            )
+        except Exception:
+            logger.exception("Error in request callback")
 
     @property
     def port(self) -> int:

@@ -15,9 +15,12 @@ DNS on macOS.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import logging
+import os
 import re
 import socket
+from collections.abc import Iterable
 from contextlib import suppress
 
 from zeroconf import ServiceInfo
@@ -36,8 +39,54 @@ _HOSTNAME_CHOICES: dict[str, list[str]] = {
     "dev_server": ["dev", "staging", "build", "api"],
     "generic": ["files", "media", "business", "office", "docs", "backup"],
 }
+_GENERAL_HOSTNAME_CHOICES = [
+    "files",
+    "media",
+    "office",
+    "docs",
+    "backup",
+    "archive",
+    "storage",
+    "shared",
+    "library",
+    "photos",
+    "printer",
+    "scanner",
+    "home",
+    "hub",
+    "control",
+    "automation",
+    "gateway",
+    "network",
+    "admin",
+    "dev",
+    "staging",
+    "build",
+    "api",
+    "camera",
+    "security",
+    "records",
+    "vault",
+    "workroom",
+    "studio",
+    "business",
+]
+_COMPOUND_MODIFIERS = [
+    "main",
+    "central",
+    "shared",
+    "home",
+    "office",
+    "family",
+    "work",
+    "north",
+    "south",
+    "east",
+    "west",
+]
 _LEGACY_SUFFIX_RE = re.compile(r"-[0-9A-Fa-f]{4}$")
 _HOST_LABEL_SANITIZER = re.compile(r"[^a-z0-9-]+")
+_TERMINAL_IDENTIFIER_RE = re.compile(r"(?:^|-)(?:[a-z]{0,10})?\d{1,4}$")
 
 _PORT_SERVICE_TYPES: dict[int, str] = {
     21: "_ftp._tcp",
@@ -59,17 +108,23 @@ def generate_mimic_hostname(
     mdns_name: str | None,
     device_category: str,
     virtual_ip: str,
+    *,
+    existing_hostnames: Iterable[str] = (),
+    suggested_names: Iterable[str] = (),
+    allow_identifiers: bool | None = None,
 ) -> str:
-    """Generate a deterministic, plausible hostname for a virtual IP.
+    """Generate a deterministic, plausible, collision-free hostname.
 
-    Uses the virtual IP as seed for deterministic output — the same IP
-    always produces the same hostname across restarts.
+    AI suggestions are untrusted inputs and are accepted only after the same
+    local normalization and collision checks as deterministic candidates.
+    Address-derived identifiers are used only when the observed network already
+    follows a terminal-identifier convention.
 
     Parameters
     ----------
     mdns_name:
-        Original device hostname (from scout data).  If provided, the
-        generated name is a variation of it.
+        Original device hostname. It contributes to style detection but is
+        never cloned into a fake-host identity.
     device_category:
         Device type category for prefix selection.
     virtual_ip:
@@ -81,25 +136,101 @@ def generate_mimic_hostname(
         usedforsecurity=False,
     ).hexdigest()
     seed = int(stable_token, 16)
+    observed = [str(value) for value in existing_hostnames]
+    if mdns_name:
+        observed.append(str(mdns_name))
+    existing = {
+        label
+        for value in existing_hostnames
+        if (label := _normalize_hostname_label(value)) is not None
+    }
+    if allow_identifiers is None:
+        allow_identifiers = network_uses_host_identifiers(observed)
 
-    source_label = str(mdns_name or "").strip().rstrip(".").lower()
-    if source_label.endswith(".local"):
-        source_label = source_label[:-6].rstrip(".")
-    source_label = _HOST_LABEL_SANITIZER.sub("-", source_label).strip("-")
-    source_label = re.sub(r"-+", "-", source_label)
-    if source_label:
-        # Always vary the discovered hostname. Advertising the real source name
-        # would create an mDNS collision and make two IPs claim one identity.
-        suffix = f"-{stable_token}"
-        base = source_label[: 63 - len(suffix)].rstrip("-") or "decoy"
-        return f"{base}{suffix}"
+    category_choices = _HOSTNAME_CHOICES.get(
+        device_category,
+        _HOSTNAME_CHOICES["generic"],
+    )
+    category_offset = seed % len(category_choices)
+    ordered_category = (
+        category_choices[category_offset:] + category_choices[:category_offset]
+    )
+    deterministic = list(
+        dict.fromkeys(ordered_category + _GENERAL_HOSTNAME_CHOICES)
+    )
 
-    choices = _HOSTNAME_CHOICES.get(device_category, _HOSTNAME_CHOICES["generic"])
-    base = choices[seed % len(choices)]
-    # The category vocabulary is intentionally small, but the service
-    # instance and host labels must be unique across a Full profile. The
-    # address suffix is stable, readable, and unique within the /24 pool.
-    return f"{base}-{stable_token}"
+    compounds = [
+        f"{modifier}-{base}"
+        for modifier in _COMPOUND_MODIFIERS
+        for base in deterministic
+    ]
+    candidates = [*suggested_names, *deterministic, *compounds]
+    for candidate in candidates:
+        label = _normalize_hostname_label(candidate)
+        if label is None or label in existing:
+            continue
+        if _is_ip_address(label):
+            continue
+        if not allow_identifiers and (
+            _TERMINAL_IDENTIFIER_RE.search(label)
+            or _LEGACY_SUFFIX_RE.search(label)
+        ):
+            continue
+        return label
+
+    if allow_identifiers:
+        for candidate in deterministic:
+            label = _normalize_hostname_label(f"{candidate}-{seed % 100:02d}")
+            if label is not None and label not in existing:
+                return label
+
+    # The semantic candidate space is deliberately much larger than the
+    # supported fake-host ceiling. Reaching this means a caller supplied
+    # hundreds of collisions and there is no honest identifier-free name left.
+    raise ValueError("No collision-free fake-host name is available")
+
+
+def _normalize_hostname_label(value: object) -> str | None:
+    """Return one safe DNS label or ``None`` for an unusable suggestion."""
+    label = str(value or "").strip().rstrip(".").lower()
+    for suffix in (".localdomain", ".local"):
+        if label.endswith(suffix):
+            label = label[: -len(suffix)].rstrip(".")
+            break
+    label = _HOST_LABEL_SANITIZER.sub("-", label).strip("-")
+    label = re.sub(r"-+", "-", label)[:63].rstrip("-")
+    if not label or label in {"localhost", "local", "localdomain", "broadcasthost"}:
+        return None
+    return label
+
+
+def _is_ip_address(label: str) -> bool:
+    try:
+        ipaddress.ip_address(label)
+    except ValueError:
+        return False
+    return True
+
+
+def network_uses_host_identifiers(hostnames: Iterable[str]) -> bool:
+    """Detect a repeated terminal numeric identifier convention.
+
+    Requiring a repeated pattern avoids treating one product/model hostname,
+    such as ``iphone-15-pro``, as a network-wide naming convention.
+    """
+    labels = [
+        label
+        for value in hostnames
+        if (label := _normalize_hostname_label(value)) is not None
+    ]
+    matches = [
+        label
+        for label in labels
+        if _TERMINAL_IDENTIFIER_RE.search(label)
+    ]
+    if len(labels) <= 2:
+        return bool(matches)
+    return len(matches) >= 2
 
 
 def mdns_service_type_for(
@@ -158,9 +289,23 @@ class MimicMDNSAdvertiser:
     def __init__(self) -> None:
         self._zeroconf: AsyncZeroconf | None = None
         self._services: dict[int, list[ServiceInfo]] = {}
+        self._helper = None
 
     async def start(self) -> None:
         """Initialize the mDNS responder."""
+        helper_socket = os.environ.get("SQUIRRELOPS_NETWORK_HELPER_SOCKET", "")
+        if helper_socket:
+            from squirrelops_home_sensor.privileged.linux_sidecar import (
+                LinuxNetworkHelperClient,
+            )
+
+            helper = LinuxNetworkHelperClient(helper_socket)
+            if await helper.is_available():
+                self._helper = helper
+                logger.info("mDNS mimic advertiser delegated to Linux helper")
+                return
+            logger.warning("mDNS network helper is unavailable")
+            return
         try:
             self._zeroconf = AsyncZeroconf()
         except OSError:
@@ -197,6 +342,22 @@ class MimicMDNSAdvertiser:
         hostname:
             The hostname to advertise (without ``.local.``).
         """
+        if self._helper is not None:
+            if service_type is None:
+                return False
+            return await self._helper.register_mdns(
+                registration_id=f"mimic:{decoy_id}:{port}",
+                virtual_ip=virtual_ip,
+                port=port,
+                service_type=service_type,
+                hostname=hostname,
+                instance_name=instance_name or hostname,
+                properties=self._properties_for(
+                    service_type=service_type,
+                    hostname=hostname,
+                ),
+            )
+
         if self._zeroconf is None:
             return False
 
@@ -269,6 +430,9 @@ class MimicMDNSAdvertiser:
 
     async def unregister(self, decoy_id: int) -> None:
         """Unregister all mDNS services for a mimic decoy."""
+        if self._helper is not None:
+            await self._helper.unregister_mdns(f"mimic:{decoy_id}")
+            return
         services = self._services.pop(decoy_id, [])
         if not services or self._zeroconf is None:
             return
@@ -284,6 +448,10 @@ class MimicMDNSAdvertiser:
 
     async def stop(self) -> None:
         """Unregister all services and shut down."""
+        if self._helper is not None:
+            await self._helper.unregister_mdns("mimic")
+            self._helper = None
+            return
         if self._zeroconf is None:
             return
 

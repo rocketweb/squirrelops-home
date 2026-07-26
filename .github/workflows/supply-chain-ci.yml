@@ -1,0 +1,106 @@
+name: Supply Chain CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify release and package controls
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Reject vulnerable dependency changes
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          fail-on-scopes: runtime, development
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.10.2"
+          enable-cache: false
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Require the checked-in dependency lock
+        run: |
+          cd sensor
+          uv lock --check
+          uv sync --frozen
+
+      - name: Run release and package security tests
+        run: |
+          cd sensor
+          uv run pytest \
+            tests/unit/test_supply_chain_security.py \
+            tests/unit/test_package_security.py \
+            tests/unit/test_pkg_network_lifecycle.py \
+            -q
+
+      - name: Lint release security code
+        run: |
+          cd sensor
+          uv run ruff check \
+            tests/unit/test_supply_chain_security.py \
+            tests/unit/test_package_security.py \
+            tests/unit/test_pkg_network_lifecycle.py \
+            ../scripts/check-linux-release-boundary.py \
+            ../scripts/prepare-release-assets.py
+
+      - name: Validate scripts and static configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            bash -n "$script"
+          done < <(find scripts -type f -name '*.sh' -print0)
+          python3 -m py_compile \
+            scripts/check-linux-release-boundary.py \
+            scripts/prepare-release-assets.py
+          python3 -m json.tool .github/release-policy.json >/dev/null
+          python3 -m json.tool site/vercel.json >/dev/null
+
+  macos-package-lifecycle:
+    name: Verify macOS package lifecycle controls
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.10.2"
+          enable-cache: false
+
+      - name: Install Python
+        run: uv python install 3.11
+
+      - name: Require the checked-in dependency lock
+        run: |
+          cd sensor
+          uv lock --check
+          uv sync --frozen
+
+      - name: Run macOS package lifecycle security tests
+        run: |
+          cd sensor
+          uv run pytest \
+            tests/unit/test_package_security.py \
+            tests/unit/test_pkg_network_lifecycle.py \
+            -q

@@ -35,7 +35,7 @@
     </choice>
 
     <pkg-ref id="com.squirrelops.home.app"
-             version="__VERSION__"
+             version="__APP_VERSION__"
              installKBytes="__APP_SIZE__"
              auth="root"
              onConclusion="none">app.pkg</pkg-ref>
@@ -43,14 +43,14 @@
     <pkg-ref id="com.squirrelops.home.app">
         <bundle-version>
             <bundle id="com.squirrelops.home"
-                    CFBundleShortVersionString="__VERSION__"
+                    CFBundleShortVersionString="__APP_VERSION__"
                     path="Applications/SquirrelOps Home.app"
                     BundleIsRelocatable="false"/>
         </bundle-version>
     </pkg-ref>
 
     <pkg-ref id="com.squirrelops.home.sensor"
-             version="__VERSION__"
+             version="__SENSOR_VERSION__"
              installKBytes="__SENSOR_SIZE__"
              auth="root"
              onConclusion="none">sensor.pkg</pkg-ref>

@@ -13,7 +13,7 @@ import pathlib
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -21,118 +21,136 @@ logger = logging.getLogger(__name__)
 # Config sub-models
 # ---------------------------------------------------------------------------
 
-class TLSConfig(BaseModel):
+class StrictConfigModel(BaseModel):
+    """Reject unknown nested configuration keys.
+
+    Top-level legacy compatibility remains on ``Settings``. Nested sections
+    are strict so a misspelled or attacker-supplied runtime option cannot be
+    silently persisted and then interpreted differently by another release.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TLSConfig(StrictConfigModel):
     enabled: bool = True
 
 
-class SensorConfig(BaseModel):
+class SensorConfig(StrictConfigModel):
     id: str = ""
-    name: str = "SquirrelOps Home Sensor"
+    name: str = Field(default="SquirrelOps Home Sensor", min_length=1, max_length=128)
     data_dir: str = "./data"
-    port: int = 8443
+    port: int = Field(default=8443, ge=1, le=65535)
     tls: TLSConfig = Field(default_factory=TLSConfig)
     secret_passphrase: str | None = None
 
 
-class NetworkConfig(BaseModel):
-    scan_interval: int = 300
-    interface: str = "auto"
-    subnet: str = "auto"
-    learning_duration_hours: int = 48
+class NetworkConfig(StrictConfigModel):
+    scan_interval: int = Field(default=300, ge=1, le=86400)
+    interface: str = Field(default="auto", min_length=1, max_length=32)
+    subnet: str = Field(default="auto", min_length=1, max_length=64)
+    learning_duration_hours: int = Field(default=48, ge=1, le=8760)
 
 
-class DecoyConfig(BaseModel):
-    max_decoys: int = 3
-    health_check_interval: int = 1800
-    restart_max_attempts: int = 3
-    restart_window_seconds: int = 300
+class DecoyConfig(StrictConfigModel):
+    max_decoys: int = Field(default=3, ge=0, le=64)
+    health_check_interval: int = Field(default=1800, ge=1, le=86400)
+    restart_max_attempts: int = Field(default=3, ge=0, le=20)
+    restart_window_seconds: int = Field(default=300, ge=1, le=86400)
 
 
-class AlertMethodsConfig(BaseModel):
+class AlertMethodsConfig(StrictConfigModel):
     notification: bool = True
     menubar: bool = True
     fullscreen: bool = False
     slack: bool = False
 
 
-class AlertConfig(BaseModel):
-    retention_days: int = 90
-    incident_window_minutes: int = 15
-    incident_close_window_minutes: int = 30
+class AlertConfig(StrictConfigModel):
+    retention_days: int = Field(default=90, ge=1, le=3650)
+    incident_window_minutes: int = Field(default=15, ge=1, le=1440)
+    incident_close_window_minutes: int = Field(default=30, ge=1, le=1440)
     methods: AlertMethodsConfig = Field(default_factory=AlertMethodsConfig)
 
 
-class ClassifierConfig(BaseModel):
+class ClassifierConfig(StrictConfigModel):
     mode: str = "local"
-    confidence_threshold: float = 0.70
-    llm_provider: str | None = None
-    llm_endpoint: str | None = None
-    llm_model: str | None = None
-    llm_api_key: str | None = None
+    confidence_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
+    llm_provider: str | None = Field(default=None, max_length=32)
+    llm_endpoint: str | None = Field(default=None, max_length=2048)
+    llm_model: str | None = Field(default=None, max_length=512)
+    llm_api_key: str | None = Field(default=None, max_length=8192)
 
 
-class SignalWeightsConfig(BaseModel):
-    mdns: float = 0.30
-    dhcp: float = 0.25
-    connections: float = 0.25
-    mac: float = 0.10
-    ports: float = 0.10
+class SignalWeightsConfig(StrictConfigModel):
+    mdns: float = Field(default=0.30, ge=0.0, le=1.0)
+    dhcp: float = Field(default=0.25, ge=0.0, le=1.0)
+    connections: float = Field(default=0.25, ge=0.0, le=1.0)
+    mac: float = Field(default=0.10, ge=0.0, le=1.0)
+    ports: float = Field(default=0.10, ge=0.0, le=1.0)
 
 
-class FingerprintConfig(BaseModel):
-    auto_approve_threshold: float = 0.75
-    verify_threshold: float = 0.50
+class FingerprintConfig(StrictConfigModel):
+    auto_approve_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    verify_threshold: float = Field(default=0.50, ge=0.0, le=1.0)
     signal_weights: SignalWeightsConfig = Field(default_factory=SignalWeightsConfig)
 
 
-class ScoutsConfig(BaseModel):
+class ScoutsConfig(StrictConfigModel):
     enabled: bool = True
-    interval_minutes: int = 30
-    max_concurrent_probes: int = 20
-    max_mimic_decoys: int = 10
-    max_virtual_ips: int = 15
-    virtual_ip_range_start: int = 200
-    virtual_ip_range_end: int = 250
+    interval_minutes: int = Field(default=30, ge=1, le=1440)
+    max_concurrent_probes: int = Field(default=20, ge=1, le=64)
+    max_mimic_decoys: int = Field(default=5, ge=0, le=64)
+    max_virtual_ips: int = Field(default=5, ge=0, le=51)
+    virtual_ip_range_start: int = Field(default=200, ge=1, le=254)
+    virtual_ip_range_end: int = Field(default=250, ge=1, le=254)
+
+    @model_validator(mode="after")
+    def validate_virtual_ip_pool(self) -> ScoutsConfig:
+        if self.virtual_ip_range_start > self.virtual_ip_range_end:
+            raise ValueError("virtual IP range start must not exceed its end")
+        pool_size = self.virtual_ip_range_end - self.virtual_ip_range_start + 1
+        if self.max_virtual_ips > pool_size:
+            raise ValueError("max_virtual_ips exceeds the configured candidate pool")
+        return self
 
 
-class HomeAssistantConfig(BaseModel):
+class HomeAssistantConfig(StrictConfigModel):
     enabled: bool = False
-    url: str = ""
-    token: str = ""
+    url: str = Field(default="", max_length=2048)
+    token: str = Field(default="", max_length=8192)
 
 
-class LearningModeConfig(BaseModel):
+class LearningModeConfig(StrictConfigModel):
     enabled: bool = False
     started_at: str | None = None
-    duration_hours: int = 48
+    duration_hours: int = Field(default=48, ge=1, le=8760)
 
 
-class PairingConfig(BaseModel):
-    """Local pairing transport and peer-verification settings.
+class PairingConfig(StrictConfigModel):
+    """Development-only local pairing transport settings.
 
-    ``socket_path`` defaults to ``<sensor.data_dir>/../run/pairing.sock`` at
-    runtime. Local automatic pairing is fail-closed: the peer must be the
-    installed SquirrelOps app unless ``allow_unsigned_local`` is explicitly
-    enabled for source development.
+    Production never starts the local setup-key socket because file-descriptor
+    passing can separate the process using a connected stream from the process
+    identity captured by peer-credential checks. ``allow_unsigned_local`` is an
+    explicit source-development escape hatch only.
     """
 
     socket_path: str | None = None
-    allowed_app_path: str = (
-        "/Applications/SquirrelOps Home.app/Contents/MacOS/SquirrelOpsHome"
-    )
     allowed_app_requirement: str = (
-        'identifier "com.squirrelops.home" and anchor apple generic'
+        'identifier "com.squirrelops.home" and anchor apple generic and '
+        'certificate leaf[subject.OU] = "PSQ5HK5U65"'
     )
     allow_unsigned_local: bool = False
 
 
-class ProfileLimits(BaseModel):
-    scan_interval: int = 300
-    max_decoys: int = 3
+class ProfileLimits(StrictConfigModel):
+    scan_interval: int = Field(default=300, ge=1, le=86400)
+    max_decoys: int = Field(default=3, ge=0, le=64)
     llm_mode: str = "none"
 
 
-class ProfilesConfig(BaseModel):
+class ProfilesConfig(StrictConfigModel):
     default: str = "standard"
     lite: ProfileLimits = Field(
         default_factory=lambda: ProfileLimits(scan_interval=900, max_decoys=3, llm_mode="none")
@@ -190,6 +208,13 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 _ENV_PREFIX = "SQUIRRELOPS_"
+_INTERNAL_RUNTIME_ENV = {
+    "SQUIRRELOPS_LAN_SUBNET",
+    "SQUIRRELOPS_NETWORK_HELPER_SOCKET",
+    "SQUIRRELOPS_NETWORK_INTERFACE",
+    "SQUIRRELOPS_SENSOR_BRIDGE_IP",
+    "SQUIRRELOPS_SENSOR_UID",
+}
 
 
 def _collect_env_overrides() -> dict[str, Any]:
@@ -202,6 +227,8 @@ def _collect_env_overrides() -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     for key, value in os.environ.items():
         if not key.startswith(_ENV_PREFIX):
+            continue
+        if key in _INTERNAL_RUNTIME_ENV:
             continue
         parts = key[len(_ENV_PREFIX) :].lower().split("__")
         current = overrides

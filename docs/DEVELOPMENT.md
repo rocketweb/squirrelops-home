@@ -24,8 +24,13 @@ squirrelops-home/
 ├── scripts/        Build, install, and signing scripts
 ├── docs/           Documentation
 ├── site/           Update site and manifest
-└── VERSION         Single source of truth for version number
+├── VERSION         Home distribution version
+└── APP_VERSION     macOS app version
 ```
+
+The sensor version is independently authoritative in `sensor/pyproject.toml`.
+Compatibility is determined by explicit API and helper protocol versions, not
+by requiring component version strings to match.
 
 ---
 
@@ -206,35 +211,74 @@ The helper isn't running or can't execute `ifconfig`. Reinstall and check logs.
 | App (release) | `cd app && BUILD_CONFIG=release bash build-app.sh` |
 | Installer (.pkg) | `bash scripts/build-pkg.sh` |
 
-### Release workflow
-
-Releases are triggered by pushing a `v*` tag. The GitHub Actions workflow (`.github/workflows/release.yml`) handles:
-
-1. Verifying the tag, `VERSION`, sensor package version, and install-script version agree
-2. Building and publishing the multi-architecture sensor container
-3. Building the `.pkg` installer with the app, sensor, and privileged helper
-4. Code signing, Apple notarization, stapling, and Gatekeeper verification
-5. Creating the GitHub Release with the installer, checksums, and install scripts
-6. Updating `site/public/manifest.json` for app and sensor update checks
-
-Release builds fail closed if signing or notarization credentials are missing.
-Before tagging a release:
+The source Linux Compose file deliberately has no guessed LAN. Set the directly
+connected private CIDR explicitly before using it:
 
 ```bash
-# Update VERSION, sensor/pyproject.toml, sensor/uv.lock, scripts/install.sh,
-# site/public/install.sh, PreviewData, documentation, and release notes.
+cd sensor
+SQUIRRELOPS_SUBNET=192.168.1.0/24 docker compose up
+```
+
+### Release workflow
+
+Releases are manual deployments from protected `main`. Pushing a tag does not
+run publication code. The workflow requires the operator to enter an existing
+protected tag and its full commit SHA, then verifies both against `main`.
+
+Every publishing job uses the protected `release` environment. Component
+identity and distribution releases are intentionally separate:
+
+1. A protected `app-vX.Y.Z` tag identifies the exact app component source.
+2. `Release Sensor` verifies `sensor-vX.Y.Z`, builds and attests the
+   multi-architecture image, and publishes the digest-pinned Linux installer.
+3. `Release Home Distribution` verifies `home-vX.Y.Z`, confirms that the
+   embedded app and sensor source exactly match their existing component tags,
+   and builds the signed and notarized macOS package.
+4. Both paths check that their component version sources, GitHub-verified
+   signed tag, commit, and protected `main` agree.
+5. Both require release immutability, the pinned reviewed tag-ruleset revision,
+   and the independently reviewed release environment
+6. Each generates `SHA256SUMS`, component release metadata, canonical verification
+   instructions, and, for Home releases, the exact
+   `squirrelops-home.rb` Homebrew cask candidate
+7. Each uploads and attests every asset on a draft release
+8. Each verifies GitHub's asset digests and publishes the immutable release last
+
+The workflow does not publish the source-only macOS installer, use PyPI, write
+to `main`, update the website, or update a Homebrew tap. GitHub's editable
+release description only points readers to the checksummed and attested
+`RELEASE-VERIFICATION.md` asset. Website and Homebrew changes are separate
+reviewed pull requests based on `release-metadata.json` and the attested cask
+candidate.
+
+Release builds fail closed if signing, notarization, immutability, or
+environment approval is missing. Configure all controls in
+[Release security](RELEASE_SECURITY.md) before tagging a release.
+
+Before tagging:
+
+```bash
+# Update only the versions whose shipped components changed:
+# VERSION (Home distribution), APP_VERSION, sensor/pyproject.toml,
+# sensor/uv.lock, scripts/install.sh, PreviewData, documentation, and notes.
 git diff --check
 cd sensor && uv lock --check && uv run pytest && uv run ruff check .
 cd ../app && swift test
 cd ..
 
-# Confirm main is current, then create the immutable release tag.
+# Confirm main is current, then create the applicable protected signed tag.
 git fetch origin
 test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
-git tag -a vX.Y.Z -m "SquirrelOps Home X.Y.Z"
-git push origin vX.Y.Z
+git tag -s app-vX.Y.Z -m "SquirrelOps Home App X.Y.Z"
+git push origin app-vX.Y.Z
+git tag -s sensor-vX.Y.Z -m "SquirrelOps Home Sensor X.Y.Z"
+git push origin sensor-vX.Y.Z
+# After the sensor release is independently verified:
+git tag -s home-vX.Y.Z -m "SquirrelOps Home X.Y.Z"
+git push origin home-vX.Y.Z
 ```
 
-After the workflow completes, verify the release assets, package digest,
-notarization result, update manifest, and the published GHCR image before
-announcing the release.
+Dispatch `Release Sensor` before `Release Home Distribution` when both changed.
+After publication, verify each immutable release and attestation. Verify the
+package digest and notarization for Home releases and the GHCR digest for
+sensor releases before opening website and Homebrew promotion pull requests.

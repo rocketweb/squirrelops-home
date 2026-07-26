@@ -101,6 +101,96 @@ struct HelperReadinessTests {
         close(sockets[1])
         sockets[1] = -1
 
-        sendAll(fd: sockets[0], data: Data("response\n".utf8))
+        #expect(!sendAll(fd: sockets[0], data: Data("response\n".utf8)))
+    }
+
+    @Test("Client sockets enforce receive and send timeouts")
+    func clientSocketTimeoutsAreConfigured() throws {
+        var sockets = [Int32](repeating: -1, count: 2)
+        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)
+        defer {
+            if sockets[0] >= 0 { close(sockets[0]) }
+            if sockets[1] >= 0 { close(sockets[1]) }
+        }
+
+        #expect(
+            configureClientSocketTimeouts(
+                fd: sockets[0],
+                timeoutSeconds: 1
+            )
+        )
+
+        for option in [SO_RCVTIMEO, SO_SNDTIMEO] {
+            var timeout = timeval()
+            var size = socklen_t(MemoryLayout<timeval>.size)
+            #expect(
+                getsockopt(
+                    sockets[0],
+                    SOL_SOCKET,
+                    option,
+                    &timeout,
+                    &size
+                ) == 0
+            )
+            #expect(timeout.tv_sec == 1)
+            #expect(timeout.tv_usec == 0)
+        }
+    }
+
+    @Test("Slow request lines cannot extend the absolute read deadline")
+    func socketReadHasAbsoluteDeadline() throws {
+        var sockets = [Int32](repeating: -1, count: 2)
+        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)
+        defer {
+            if sockets[0] >= 0 { close(sockets[0]) }
+            if sockets[1] >= 0 { close(sockets[1]) }
+        }
+
+        #expect(send(sockets[1], "x", 1, 0) == 1)
+        let start = DispatchTime.now().uptimeNanoseconds
+        let request = readLineFromSocket(
+            fd: sockets[0],
+            timeoutSeconds: 0.05
+        )
+        let elapsed = Double(
+            DispatchTime.now().uptimeNanoseconds - start
+        ) / 1_000_000_000
+
+        #expect(request == nil)
+        #expect(elapsed < 1)
+    }
+
+    @Test("Blocked response writes stop at the absolute send deadline")
+    func socketWriteHasAbsoluteDeadline() throws {
+        var sockets = [Int32](repeating: -1, count: 2)
+        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)
+        defer {
+            if sockets[0] >= 0 { close(sockets[0]) }
+            if sockets[1] >= 0 { close(sockets[1]) }
+        }
+
+        var sendBufferSize: Int32 = 4096
+        #expect(
+            setsockopt(
+                sockets[0],
+                SOL_SOCKET,
+                SO_SNDBUF,
+                &sendBufferSize,
+                socklen_t(MemoryLayout<Int32>.size)
+            ) == 0
+        )
+        let response = Data(repeating: 0x61, count: 1_048_576)
+        let start = DispatchTime.now().uptimeNanoseconds
+        let sent = sendAll(
+            fd: sockets[0],
+            data: response,
+            timeoutSeconds: 0.05
+        )
+        let elapsed = Double(
+            DispatchTime.now().uptimeNanoseconds - start
+        ) / 1_000_000_000
+
+        #expect(!sent)
+        #expect(elapsed < 1)
     }
 }

@@ -69,6 +69,16 @@ def mock_subsystems() -> dict[str, Any]:
     mock_run_migrations = AsyncMock()
     mocks["run_migrations"] = mock_run_migrations
 
+    # Daily alert retention
+    mock_retention_scheduler = AsyncMock()
+    mock_retention_scheduler.start = AsyncMock()
+    mock_retention_scheduler.stop = AsyncMock()
+    mock_create_retention_scheduler = MagicMock(
+        return_value=mock_retention_scheduler
+    )
+    mocks["create_retention_scheduler"] = mock_create_retention_scheduler
+    mocks["retention_scheduler"] = mock_retention_scheduler
+
     # Event bus
     mock_event_bus = MagicMock()
     mock_event_bus.publish = AsyncMock(return_value=1)
@@ -83,6 +93,7 @@ def mock_subsystems() -> dict[str, Any]:
     mock_scan_loop.start = AsyncMock()
     mock_scan_loop.stop = AsyncMock()
     mock_scan_loop.set_orchestrator = MagicMock()
+    mock_scan_loop.set_hostname_advisor_target = MagicMock()
     mock_scan_loop.set_ip_conflict_handler = MagicMock()
     mock_scan_loop.privileged_ops = MagicMock()
     mock_scan_loop.privileged_ops.is_available = AsyncMock(return_value=True)
@@ -195,6 +206,12 @@ def patched(mock_subsystems: dict[str, Any]):
         )
         stack.enter_context(
             patch(
+                "squirrelops_home_sensor.__main__.create_retention_scheduler",
+                mock_subsystems["create_retention_scheduler"],
+            )
+        )
+        stack.enter_context(
+            patch(
                 "squirrelops_home_sensor.__main__.create_event_bus",
                 mock_subsystems["create_event_bus"],
             )
@@ -285,8 +302,50 @@ def test_full_profile_canonicalizes_stale_nested_runtime_limits() -> None:
     assert config["decoys"]["max_decoys"] == 3
     assert config["classifier"]["mode"] == "local_llm"
     assert config["scouts"]["interval_minutes"] == 30
-    assert config["scouts"]["max_mimic_decoys"] == 30
-    assert config["scouts"]["max_virtual_ips"] == 30
+    assert config["scouts"]["max_mimic_decoys"] == 10
+    assert config["scouts"]["max_virtual_ips"] == 10
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_endpoint"),
+    [
+        ("openrouter", "https://openrouter.ai/api/v1"),
+        ("fireworks", "https://api.fireworks.ai/inference/v1"),
+    ],
+)
+def test_cloud_provider_builds_openai_compatible_classifier(
+    provider: str,
+    expected_endpoint: str,
+) -> None:
+    from squirrelops_home_sensor.__main__ import _create_llm_classifier
+
+    classifier = _create_llm_classifier({
+        "classifier": {
+            "mode": "cloud_llm",
+            "llm_provider": provider,
+            "llm_endpoint": "https://attacker.invalid/v1",
+            "llm_model": "provider/model",
+            "llm_api_key": "secret",
+        },
+    })
+
+    assert classifier is not None
+    assert classifier._endpoint == expected_endpoint
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "fireworks"])
+def test_cloud_provider_without_key_is_disabled(provider: str) -> None:
+    from squirrelops_home_sensor.__main__ import _create_llm_classifier
+
+    classifier = _create_llm_classifier({
+        "classifier": {
+            "mode": "cloud_llm",
+            "llm_provider": provider,
+            "llm_model": "provider/model",
+        },
+    })
+
+    assert classifier is None
 
 
 class TestEntryPointStartup:
@@ -340,6 +399,22 @@ class TestEntryPointStartup:
         mock_subsystems["create_event_bus"].assert_called_once_with(mock_subsystems["db"])
 
     @pytest.mark.asyncio
+    async def test_starts_daily_alert_retention(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+
+        await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        mock_subsystems["create_retention_scheduler"].assert_called_once()
+        mock_subsystems["retention_scheduler"].start.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_starts_scan_loop(
         self,
         config_file: Path,
@@ -368,6 +443,11 @@ class TestEntryPointStartup:
         await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
 
         mock_subsystems["orchestrator"].start.assert_called_once()
+        mock_subsystems[
+            "scan_loop"
+        ].set_hostname_advisor_target.assert_called_once_with(
+            mock_subsystems["mimic_orchestrator"]
+        )
 
     @pytest.mark.asyncio
     async def test_creates_fastapi_app_with_dependencies(
@@ -401,6 +481,23 @@ class TestEntryPointStartup:
 
         mock_subsystems["uvicorn_server_cls"].assert_called_once()
         mock_subsystems["uvicorn_server"].serve.assert_called_once()
+        uvicorn_config = mock_subsystems["uvicorn_server_cls"].call_args.args[0]
+        assert uvicorn_config.proxy_headers is False
+
+    @pytest.mark.asyncio
+    async def test_packaged_defaults_do_not_start_setup_key_socket(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """Production requires administrator-assisted manual key entry."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+        await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        mock_subsystems["local_pairing_cls"].assert_not_called()
 
     @pytest.mark.asyncio
     async def test_disabled_tls_is_forced_to_loopback(
@@ -546,6 +643,9 @@ class TestEntryPointShutdown:
         """One early stop error is reported only after all later cleanup."""
         from squirrelops_home_sensor.__main__ import run_sensor
 
+        mock_subsystems["load_config"].return_value["pairing"] = {
+            "allow_unsigned_local": True,
+        }
         mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
         mock_subsystems["local_pairing"].stop.side_effect = RuntimeError(
             "local pairing stop failed"
@@ -697,6 +797,31 @@ class TestEntryPointShutdown:
         await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
 
         mock_subsystems["scan_loop"].stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_shutdown_stops_alert_retention_before_closing_database(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        call_order: list[str] = []
+
+        async def stop_retention() -> None:
+            call_order.append("retention.stop")
+
+        async def close_db() -> None:
+            call_order.append("db.close")
+
+        mock_subsystems["retention_scheduler"].stop.side_effect = stop_retention
+        mock_subsystems["db"].close.side_effect = close_db
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+
+        await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        assert call_order == ["retention.stop", "db.close"]
 
     @pytest.mark.asyncio
     async def test_shutdown_stops_orchestrator(

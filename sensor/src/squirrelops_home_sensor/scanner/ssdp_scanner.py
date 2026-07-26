@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
 import socket
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -202,6 +203,19 @@ class SSDPScanner:
 
         Returns list of (raw_response, source_ip) tuples.
         """
+        helper_socket = os.environ.get("SQUIRRELOPS_NETWORK_HELPER_SOCKET", "")
+        if helper_socket:
+            from squirrelops_home_sensor.privileged.linux_sidecar import (
+                LinuxNetworkHelperClient,
+            )
+
+            return await LinuxNetworkHelperClient(helper_socket).ssdp_msearch(
+                self._collect_timeout
+            )
+        return await self._send_msearch_local()
+
+    async def _send_msearch_local(self) -> list[tuple[str, str]]:
+        """Run the bounded multicast exchange in the current namespace."""
         responses: list[tuple[str, str]] = []
 
         try:

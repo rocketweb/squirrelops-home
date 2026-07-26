@@ -14,7 +14,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import ssl
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -49,6 +51,7 @@ _MAX_FAVICON_SIZE = 64 * 1024
 _HTTP_TIMEOUT = 5.0
 _PROTO_TIMEOUT = 5.0
 _TLS_TIMEOUT = 5.0
+_PORT_PROBE_DEADLINE = 20.0
 
 
 @dataclass
@@ -88,10 +91,32 @@ class ScoutEngine:
         db: aiosqlite.Connection,
         max_concurrent: int = 20,
         http_timeout: float = _HTTP_TIMEOUT,
+        probe_deadline: float = _PORT_PROBE_DEADLINE,
     ) -> None:
+        if (
+            isinstance(max_concurrent, bool)
+            or not isinstance(max_concurrent, int)
+            or not 1 <= max_concurrent <= 64
+        ):
+            raise ValueError("max_concurrent must be between 1 and 64")
+        if (
+            isinstance(http_timeout, bool)
+            or not isinstance(http_timeout, (int, float))
+            or not math.isfinite(http_timeout)
+            or not 0 < http_timeout <= 30
+        ):
+            raise ValueError("http_timeout must be finite and between 0 and 30 seconds")
+        if (
+            isinstance(probe_deadline, bool)
+            or not isinstance(probe_deadline, (int, float))
+            or not math.isfinite(probe_deadline)
+            or not 0 < probe_deadline <= 60
+        ):
+            raise ValueError("probe_deadline must be finite and between 0 and 60 seconds")
         self._db = db
         self._semaphore = asyncio.Semaphore(max_concurrent)
-        self._http_timeout = http_timeout
+        self._http_timeout = float(http_timeout)
+        self._probe_deadline = float(probe_deadline)
 
     async def scout_device(
         self, device_id: int, ip: str, ports: list[int],
@@ -325,23 +350,55 @@ class ScoutEngine:
             is_tls = port in _TLS_PORTS
             is_proto = port in _PROTOCOL_PORTS
 
-            tasks = []
+            probes: list[tuple[str, Callable[[], Awaitable[None]]]] = []
             if is_http:
-                tasks.append(("http", self._probe_http(profile, ip, port, use_tls=is_tls)))
+                probes.append((
+                    "http",
+                    lambda: self._probe_http(
+                        profile,
+                        ip,
+                        port,
+                        use_tls=is_tls,
+                    ),
+                ))
             if is_tls:
-                tasks.append(("tls", self._probe_tls(profile, ip, port)))
+                probes.append(("tls", lambda: self._probe_tls(profile, ip, port)))
             if is_proto and not is_http:
-                tasks.append(("proto", self._probe_protocol(profile, ip, port)))
+                probes.append((
+                    "proto",
+                    lambda: self._probe_protocol(profile, ip, port),
+                ))
 
             # If no specific probe, try a generic banner read
-            if not tasks:
-                tasks.append(("proto", self._probe_protocol(profile, ip, port)))
+            if not probes:
+                probes.append((
+                    "proto",
+                    lambda: self._probe_protocol(profile, ip, port),
+                ))
 
-            for name, task in tasks:
-                try:
-                    await task
-                except Exception as exc:
-                    logger.debug("Probe %s failed for %s:%d: %s", name, ip, port, exc)
+            try:
+                # Bound the complete multi-probe lifecycle, not only individual
+                # reads. A hostile port cannot monopolize a semaphore slot by
+                # consuming each per-operation timeout in sequence.
+                async with asyncio.timeout(self._probe_deadline):
+                    for name, probe in probes:
+                        try:
+                            await probe()
+                        except Exception as exc:
+                            logger.debug(
+                                "Probe %s failed for %s:%d: %s",
+                                name,
+                                ip,
+                                port,
+                                exc,
+                            )
+            except TimeoutError:
+                logger.debug(
+                    "Scout deadline exceeded for %s:%d after %.1fs",
+                    ip,
+                    port,
+                    self._probe_deadline,
+                )
 
             return profile
 
@@ -365,42 +422,76 @@ class ScoutEngine:
             verify=False,
             follow_redirects=False,
             trust_env=False,
-            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                "Accept-Encoding": "identity",
+            },
         ) as client:
             # GET /
             try:
-                resp = await client.get(f"{base_url}/")
-                profile.http_status = resp.status_code
-                profile.http_headers = dict(resp.headers)
-                profile.http_server_header = resp.headers.get("server")
-                body = resp.text[:_MAX_BODY_SIZE] if resp.text else None
-                profile.http_body_snippet = body
+                async with asyncio.timeout(self._http_timeout):
+                    async with client.stream("GET", f"{base_url}/") as resp:
+                        profile.http_status = resp.status_code
+                        profile.http_headers = dict(resp.headers)
+                        profile.http_server_header = resp.headers.get("server")
+
+                        payload = bytearray()
+                        # Read the wire representation. A hostile device can
+                        # ignore Accept-Encoding: identity and advertise a tiny
+                        # compressed body that expands far beyond this cap.
+                        async for chunk in resp.aiter_raw(
+                            chunk_size=_MAX_BODY_SIZE
+                        ):
+                            remaining = _MAX_BODY_SIZE - len(payload)
+                            payload.extend(chunk[:remaining])
+                            if len(payload) >= _MAX_BODY_SIZE:
+                                break
+                        if payload:
+                            encoding = resp.encoding or "utf-8"
+                            try:
+                                profile.http_body_snippet = bytes(payload).decode(
+                                    encoding,
+                                    errors="replace",
+                                )
+                            except LookupError:
+                                profile.http_body_snippet = bytes(payload).decode(
+                                    "utf-8",
+                                    errors="replace",
+                                )
             except Exception as exc:
                 logger.debug("HTTP GET / failed for %s:%d: %s", ip, port, exc)
                 return
 
             # GET /favicon.ico
             try:
-                async with client.stream(
-                    "GET",
-                    f"{base_url}/favicon.ico",
-                ) as favicon_resp:
-                    if favicon_resp.status_code == 200:
-                        payload = bytearray()
-                        async for chunk in favicon_resp.aiter_bytes(
-                            chunk_size=8192
+                async with asyncio.timeout(self._http_timeout):
+                    async with client.stream(
+                        "GET",
+                        f"{base_url}/favicon.ico",
+                    ) as favicon_resp:
+                        content_encoding = favicon_resp.headers.get(
+                            "content-encoding",
+                            "",
+                        ).strip().casefold()
+                        if (
+                            favicon_resp.status_code == 200
+                            and content_encoding in ("", "identity")
                         ):
-                            if len(payload) + len(chunk) > _MAX_FAVICON_SIZE:
-                                payload.clear()
-                                break
-                            payload.extend(chunk)
-                        if payload:
-                            favicon_body = bytes(payload)
-                            profile.favicon_body = favicon_body
-                            profile.favicon_hash = hashlib.md5(
-                                favicon_body,
-                                usedforsecurity=False,
-                            ).hexdigest()
+                            payload = bytearray()
+                            async for chunk in favicon_resp.aiter_raw(
+                                chunk_size=8192
+                            ):
+                                if len(payload) + len(chunk) > _MAX_FAVICON_SIZE:
+                                    payload.clear()
+                                    break
+                                payload.extend(chunk)
+                            if payload:
+                                favicon_body = bytes(payload)
+                                profile.favicon_body = favicon_body
+                                profile.favicon_hash = hashlib.md5(
+                                    favicon_body,
+                                    usedforsecurity=False,
+                                ).hexdigest()
             except Exception:
                 pass  # favicon is optional
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from squirrelops_home_sensor.devices.signatures import (
     DeviceClassification,
@@ -20,6 +21,45 @@ from squirrelops_home_sensor.fingerprint.composite import CompositeFingerprint
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class DeviceClassificationEvidence:
+    """Interpretable, privacy-bounded signals that may be sent to an LLM.
+
+    Fingerprint hashes and connection destinations deliberately do not belong
+    here. They remain useful for local matching but provide no classification
+    value to a language model. ``mac_oui`` contains at most the first three
+    octets, never a device's complete MAC address.
+    """
+
+    mac_oui: str | None = None
+    dns_hostname: str | None = None
+    mdns_hostname: str | None = None
+    open_ports: tuple[int, ...] = ()
+    detected_services: tuple[str, ...] = ()
+    dhcp_options: tuple[int, ...] = ()
+    mdns_service_types: tuple[str, ...] = ()
+    upnp_friendly_name: str | None = None
+    upnp_manufacturer: str | None = None
+    upnp_model_name: str | None = None
+    upnp_server_header: str | None = None
+
+    @classmethod
+    def from_fingerprint(
+        cls,
+        fingerprint: CompositeFingerprint,
+    ) -> DeviceClassificationEvidence:
+        """Build the only safe evidence recoverable from a fingerprint."""
+        mac_oui = (
+            fingerprint.mac_address[:8]
+            if fingerprint.mac_address is not None
+            else None
+        )
+        return cls(
+            mac_oui=mac_oui,
+            mdns_hostname=fingerprint.mdns_hostname,
+        )
+
+
 class LLMClassifier(ABC):
     """Abstract interface for LLM-based device classification.
 
@@ -28,13 +68,20 @@ class LLMClassifier(ABC):
     """
 
     @abstractmethod
-    async def classify(self, fingerprint: CompositeFingerprint) -> DeviceClassification:
-        """Classify a device based on its fingerprint signals.
+    async def classify(
+        self,
+        fingerprint: CompositeFingerprint,
+        evidence: DeviceClassificationEvidence | None = None,
+    ) -> DeviceClassification:
+        """Classify a device using privacy-bounded, interpretable evidence.
 
         Parameters
         ----------
         fingerprint:
-            The composite fingerprint with all available signals.
+            The local composite fingerprint. Implementations must not send its
+            opaque hashes or complete MAC address to a provider.
+        evidence:
+            Sanitized source metadata that is useful for classification.
 
         Returns
         -------
@@ -71,17 +118,37 @@ class DeviceClassifier:
         self._sig_db = signature_db
         self._llm = llm
 
-    def set_llm(self, llm: LLMClassifier | None) -> None:
-        """Replace or disable the live LLM fallback."""
+    def set_llm(self, llm: LLMClassifier | None) -> LLMClassifier | None:
+        """Replace the live LLM fallback and return the previous instance."""
+        previous = self._llm
         self._llm = llm
+        return previous
 
-    async def classify(self, fingerprint: CompositeFingerprint) -> DeviceClassification:
+    @property
+    def has_llm(self) -> bool:
+        """Return whether an optional LLM fallback is currently configured."""
+        return self._llm is not None
+
+    async def classify(
+        self,
+        fingerprint: CompositeFingerprint,
+        evidence: DeviceClassificationEvidence | None = None,
+        *,
+        allow_llm: bool = True,
+        allow_local: bool = True,
+    ) -> DeviceClassification:
         """Classify a device using the full classification chain.
 
         Parameters
         ----------
         fingerprint:
             The composite fingerprint for the device.
+        evidence:
+            Interpretable evidence for the optional LLM fallback.
+        allow_llm:
+            False while a scan is still gathering port and discovery metadata.
+        allow_local:
+            False when enriching an incomplete local result with the LLM.
 
         Returns
         -------
@@ -89,14 +156,15 @@ class DeviceClassifier:
             The best classification found, or a fallback "Unknown" result.
         """
         # Stage 1: Local signature database
-        local_result = self._classify_local(fingerprint)
-        if local_result is not None:
-            return local_result
+        if allow_local:
+            local_result = self._classify_local(fingerprint)
+            if local_result is not None:
+                return local_result
 
         # Stage 2: LLM fallback
-        if self._llm is not None:
+        if allow_llm and self._llm is not None:
             try:
-                llm_result = await self._llm.classify(fingerprint)
+                llm_result = await self._llm.classify(fingerprint, evidence)
                 return llm_result
             except Exception:
                 logger.warning(

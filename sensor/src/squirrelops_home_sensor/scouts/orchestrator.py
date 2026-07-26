@@ -14,6 +14,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import wraps
 from typing import Any
@@ -22,6 +24,7 @@ import aiosqlite
 
 from squirrelops_home_sensor.decoys.credentials import CredentialGenerator, GeneratedCredential
 from squirrelops_home_sensor.decoys.identity import (
+    canonicalize_decoy_hostname,
     canonicalize_local_hostname,
     mdns_label,
 )
@@ -38,6 +41,7 @@ from squirrelops_home_sensor.scouts.mdns import (
     generate_mimic_hostname,
     mdns_service_type_for,
     mimic_display_name,
+    network_uses_host_identifiers,
     should_refresh_mimic_name,
 )
 from squirrelops_home_sensor.scouts.templates import MimicTemplate, MimicTemplateGenerator
@@ -74,12 +78,51 @@ class _ReentrantAsyncLock:
             self._owner = None
             self._lock.release()
 
+    def is_owned_by_another_task(self) -> bool:
+        task = asyncio.current_task()
+        return self._owner is not None and self._owner is not task
+
+    @property
+    def is_locked(self) -> bool:
+        return self._owner is not None
+
 
 def _serialized_lifecycle(method: Any) -> Any:
     """Serialize a lifecycle method while allowing its internal nesting."""
 
     @wraps(method)
     async def wrapped(self: MimicOrchestrator, *args: Any, **kwargs: Any) -> Any:
+        async with self._lifecycle_lock:
+            return await method(self, *args, **kwargs)
+
+    return wrapped
+
+
+def _serialized_user_lifecycle(method: Any) -> Any:
+    """Reject user actions instead of queueing behind long Scout work."""
+
+    @wraps(method)
+    async def wrapped(self: MimicOrchestrator, *args: Any, **kwargs: Any) -> Any:
+        if self._lifecycle_lock.is_owned_by_another_task():
+            raise MimicLifecycleBusyError(
+                "Fake host lifecycle is busy; wait for the current network update"
+            )
+        async with self._lifecycle_lock:
+            return await method(self, *args, **kwargs)
+
+    return wrapped
+
+
+def _serialized_background_lifecycle(method: Any) -> Any:
+    """Skip stale routine work instead of queueing it behind lifecycle work."""
+
+    @wraps(method)
+    async def wrapped(self: MimicOrchestrator, *args: Any, **kwargs: Any) -> Any:
+        if self._lifecycle_lock.is_owned_by_another_task():
+            logger.info(
+                "Skipping routine mimic reconciliation while lifecycle work is active"
+            )
+            return 0
         async with self._lifecycle_lock:
             return await method(self, *args, **kwargs)
 
@@ -96,6 +139,21 @@ class MimicDeploymentError(Exception):
 
 class MimicCleanupError(Exception):
     """Raised when a mimic remains protected and persisted for cleanup retry."""
+
+
+class MimicLifecycleBusyError(Exception):
+    """Raised when a user action would wait behind long Scout lifecycle work."""
+
+
+@dataclass(frozen=True, slots=True)
+class _MimicRemovalTarget:
+    """Generation identity captured before a removal waits for serialization."""
+
+    requested_id: int
+    primary_id: int
+    host_id: int | None
+    generation_created_at: str | None
+    runtime: MimicDecoy | None
 
 
 class MimicOrchestrator:
@@ -127,8 +185,11 @@ class MimicOrchestrator:
         max_mimics: int = 10,
         mdns_advertiser: MimicMDNSAdvertiser | None = None,
         port_forward_manager: PortForwardManager | None = None,
+        sensor_hostnames: set[str] | None = None,
         canary_enabled: bool = False,
         canary_domain: str = "canary.local",
+        backend_bind_address_for: Callable[[str], str] | None = None,
+        hostname_advisor: Any | None = None,
     ) -> None:
         self._engine = scout_engine
         self._template_gen = template_generator
@@ -147,7 +208,10 @@ class MimicOrchestrator:
         )
         self._mdns = mdns_advertiser
         self._port_fwd = port_forward_manager
+        self._sensor_hostnames = frozenset(sensor_hostnames or ())
+        self._hostname_advisor = hostname_advisor
         self._network_ready = True
+        self._backend_bind_address_for = backend_bind_address_for or (lambda ip: ip)
         self._startup_resume_endpoints: dict[int, str] | None = None
         self._lifecycle_lock = _ReentrantAsyncLock()
 
@@ -158,6 +222,11 @@ class MimicOrchestrator:
             self.is_mimic_operational(decoy_id)
             for decoy_id in self._active_mimics
         )
+
+    @property
+    def lifecycle_busy(self) -> bool:
+        """Whether protected fake-host lifecycle work currently owns the lock."""
+        return self._lifecycle_lock.is_locked
 
     def is_mimic_operational(self, decoy_id: int) -> bool:
         """Whether a listener also has a positively verified virtual IP."""
@@ -172,6 +241,13 @@ class MimicOrchestrator:
             # exposes it.
             return True
         return mimic.bind_address in verified_ips
+
+    def _backend_bind_kwargs(self, advertised_ip: str) -> dict[str, str]:
+        """Pass a separate backend address only for namespace-separated Linux."""
+        backend_ip = self._backend_bind_address_for(advertised_ip)
+        if backend_ip == advertised_ip:
+            return {}
+        return {"backend_bind_address": backend_ip}
 
     async def _resolve_primary_id(self, decoy_id: int) -> int:
         """Resolve any service row to its virtual host's runtime owner."""
@@ -216,30 +292,73 @@ class MimicOrchestrator:
             self._service_to_primary[int(row["id"])] = primary_id
         return rows
 
-    async def _unique_generated_hostname(self, hostname: str) -> str:
-        """Resolve a generated host label collision deterministically."""
+    async def _unique_generated_hostname(
+        self,
+        hostname: str,
+        *,
+        allow_identifiers: bool = False,
+    ) -> str:
+        """Resolve durable-name and shared mDNS-label collisions."""
         canonical = canonicalize_local_hostname(hostname)
         label = mdns_label(canonical)
-        suffix = 1
-        while True:
-            candidate = (
-                canonical
-                if suffix == 1
-                else canonicalize_local_hostname(
+        modifiers = ("main", "shared", "office", "home", "central")
+        candidates = [canonical]
+        candidates.extend(
+            canonicalize_local_hostname(
+                f"{modifier}-{label[: 62 - len(modifier)].rstrip('-')}"
+            )
+            for modifier in modifiers
+        )
+        if allow_identifiers:
+            candidates.extend(
+                canonicalize_local_hostname(
                     f"{label[: 63 - len(str(suffix)) - 1].rstrip('-')}"
                     f"-{suffix}"
                 )
+                for suffix in range(2, 100)
             )
+        for candidate in candidates:
             cursor = await self._db.execute(
-                """SELECT 1 FROM decoy_hosts
-                   WHERE hostname = ? COLLATE NOCASE
-                     AND retired_at IS NULL
-                   LIMIT 1""",
-                (candidate,),
+                """SELECT hostname FROM decoy_hosts
+                   WHERE retired_at IS NULL""",
             )
-            if await cursor.fetchone() is None:
+            existing = list(await cursor.fetchall())
+            if not any(
+                mdns_label(str(row["hostname"])) == mdns_label(candidate)
+                for row in existing
+            ):
                 return candidate
-            suffix += 1
+        raise ValueError("No collision-free durable fake-host name is available")
+
+    async def _observed_real_hostnames(self) -> list[str]:
+        """Return bounded hostname values observed from real devices."""
+        cursor = await self._db.execute(
+            """SELECT hostname
+               FROM devices
+               WHERE hostname IS NOT NULL
+               UNION ALL
+               SELECT mdns_hostname AS hostname
+               FROM device_fingerprints
+               WHERE mdns_hostname IS NOT NULL"""
+        )
+        candidates = [
+            str(row["hostname"])
+            for row in await cursor.fetchall()
+        ]
+        candidates.extend(self._sensor_hostnames)
+        return list(dict.fromkeys(candidates))[:128]
+
+    async def _observed_real_hostname_labels(self) -> set[str]:
+        """Return normalized labels owned by real devices or the sensor host."""
+        labels: set[str] = set()
+        for candidate in await self._observed_real_hostnames():
+            try:
+                labels.add(mdns_label(candidate))
+            except ValueError:
+                # Friendly names and unrelated DNS domains do not claim the
+                # single-label ``.local`` identity used by mimic advertising.
+                continue
+        return labels
 
     def effective_mimic_status(
         self,
@@ -263,6 +382,10 @@ class MimicOrchestrator:
         if max_mimics < 0:
             raise ValueError("Maximum mimic count cannot be negative")
         self._max_mimics = max_mimics
+
+    def set_hostname_advisor(self, advisor: Any | None) -> None:
+        """Apply the optional AI advisor used only for future fake hosts."""
+        self._hostname_advisor = advisor
 
     @_serialized_lifecycle
     async def reconfigure(self, max_mimics: int) -> list[int]:
@@ -365,6 +488,27 @@ class MimicOrchestrator:
             logger.info("Every eligible source device already has an active mimic")
             return 0
 
+        batch_size = min(slots, len(ordered_profiles))
+        real_hostnames = await self._observed_real_hostnames()
+        allow_identifiers = network_uses_host_identifiers(real_hostnames)
+        ai_suggestions: list[str] = []
+        if self._hostname_advisor is not None and batch_size > 0:
+            suggestion_count = (batch_size + 1) // 2
+            try:
+                ai_suggestions = await (
+                    self._hostname_advisor.suggest_decoy_hostnames(
+                        existing_hostnames=real_hostnames,
+                        count=suggestion_count,
+                        allow_identifiers=allow_identifiers,
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    "AI decoy naming failed; using deterministic names",
+                    exc_info=True,
+                )
+                ai_suggestions = []
+
         if arp_results is None:
             try:
                 arp_results = await self._ip_manager.snapshot_real_ip_owners()
@@ -383,13 +527,19 @@ class MimicOrchestrator:
 
         deployed = 0
         batch_ips: set[str] = set()
-        for device_id, profiles in ordered_profiles[:slots]:
+        for index, (device_id, profiles) in enumerate(ordered_profiles[:slots]):
             try:
                 active_before = set(self._active_mimics)
                 ok = await self._deploy_mimic_for_device(
                     device_id,
                     profiles,
                     arp_results=arp_results,
+                    suggested_hostname=(
+                        ai_suggestions[index]
+                        if index < len(ai_suggestions)
+                        else None
+                    ),
+                    allow_identifiers=allow_identifiers,
                 )
                 if ok:
                     deployed += 1
@@ -894,7 +1044,7 @@ class MimicOrchestrator:
                 + ", ".join(sorted(failures))
             )
 
-    @_serialized_lifecycle
+    @_serialized_background_lifecycle
     async def reconcile_ip_conflicts(
         self,
         arp_results: list[tuple[str, str]] | None = None,
@@ -925,6 +1075,8 @@ class MimicOrchestrator:
         profiles: list,
         *,
         arp_results: list[tuple[str, str]] | None = None,
+        suggested_hostname: str | None = None,
+        allow_identifiers: bool = False,
     ) -> bool:
         """Deploy a mimic decoy for a specific device."""
         # Look up device info
@@ -989,13 +1141,31 @@ class MimicOrchestrator:
             template_id = template_cursor.lastrowid
 
             # Generate mDNS hostname for this mimic
+            existing_cursor = await self._db.execute(
+                """SELECT hostname
+                   FROM decoy_hosts
+                   WHERE retired_at IS NULL"""
+            )
+            existing_hostnames = await self._observed_real_hostnames()
+            existing_hostnames.extend(
+                str(row["hostname"])
+                for row in await existing_cursor.fetchall()
+            )
             mdns_hostname = generate_mimic_hostname(
                 mdns_name=hostname or template.mdns_name,
                 device_category=template.device_category,
                 virtual_ip=virtual_ip,
+                existing_hostnames=existing_hostnames,
+                suggested_names=(
+                    [suggested_hostname]
+                    if suggested_hostname is not None
+                    else []
+                ),
+                allow_identifiers=allow_identifiers,
             )
             durable_hostname = await self._unique_generated_hostname(
-                mdns_hostname
+                mdns_hostname,
+                allow_identifiers=allow_identifiers,
             )
             mdns_hostname = mdns_label(durable_hostname)
 
@@ -1124,6 +1294,7 @@ class MimicOrchestrator:
             tls_cert_pem=tls_cert_pem,
             tls_key_pem=tls_key_pem,
             credentials_by_port=credentials_by_port,
+            **self._backend_bind_kwargs(virtual_ip),
         )
         mimic.on_connection = lambda event, _did=decoy_id: self._handle_connection(
             event,
@@ -1702,7 +1873,7 @@ class MimicOrchestrator:
         identity_row = await identity_cursor.fetchone()
         if identity_row is not None:
             mimic_name = str(identity_row["hostname"])
-            mdns_hostname = mimic_name.removesuffix(".local")
+            mdns_hostname = mdns_label(mimic_name)
             service_rows = await self._service_rows_for_primary(decoy_id)
             changed = False
             for service_row in service_rows:
@@ -1870,7 +2041,7 @@ class MimicOrchestrator:
         hostname: str,
     ) -> dict[str, Any]:
         """Atomically rename one virtual host and all of its service rows."""
-        canonical = canonicalize_local_hostname(hostname)
+        canonical = canonicalize_decoy_hostname(hostname)
         new_label = mdns_label(canonical)
         primary_id = await self._resolve_primary_id(decoy_id)
         cursor = await self._db.execute(
@@ -1891,28 +2062,44 @@ class MimicOrchestrator:
 
         host_id = int(primary_row["durable_host_id"])
         bind_address = str(primary_row["bind_address"])
-        old_hostname = canonicalize_local_hostname(primary_row["hostname"])
-        collision_cursor = await self._db.execute(
-            """SELECT 1
-               FROM decoy_hosts
-               WHERE hostname = ? COLLATE NOCASE
-                 AND id != ?
-                 AND retired_at IS NULL
-               LIMIT 1""",
-            (canonical, host_id),
-        )
-        if await collision_cursor.fetchone() is not None:
-            raise RuntimeError(
-                f"Hostname {canonical} is already assigned to another fake host"
-            )
-        service_rows = await self._service_rows_for_primary(primary_id)
+        old_hostname = canonicalize_decoy_hostname(primary_row["hostname"])
+        old_label = mdns_label(old_hostname)
         if old_hostname == canonical:
+            service_rows = await self._service_rows_for_primary(primary_id)
             return {
                 "host_id": host_id,
                 "hostname": canonical,
                 "bind_address": bind_address,
                 "decoy_ids": [int(row["id"]) for row in service_rows],
             }
+
+        if (
+            new_label != old_label
+            and new_label in await self._observed_real_hostname_labels()
+        ):
+            raise RuntimeError(
+                f"Hostname label {new_label} is already used by a real device "
+                "or the sensor host"
+            )
+
+        collision_cursor = await self._db.execute(
+            """SELECT hostname
+               FROM decoy_hosts
+               WHERE id != ?
+                 AND retired_at IS NULL
+               ORDER BY id""",
+            (host_id,),
+        )
+        collisions = list(await collision_cursor.fetchall())
+        if any(
+            mdns_label(str(row["hostname"])) == new_label
+            for row in collisions
+        ):
+            raise RuntimeError(
+                f"Hostname label {new_label} is already assigned to another "
+                "fake host"
+            )
+        service_rows = await self._service_rows_for_primary(primary_id)
 
         try:
             primary_config = json.loads(primary_row["config"] or "{}")
@@ -1940,7 +2127,6 @@ class MimicOrchestrator:
         )
         configured_type = primary_row["mdns_service_type"]
         active_mimic = self._active_mimics.get(primary_id)
-        old_label = mdns_label(old_hostname)
         tls_cert_pem: str | None = None
         tls_key_pem: str | None = None
         if any(bool(config.get("tls")) for config in port_configs):
@@ -1949,7 +2135,12 @@ class MimicOrchestrator:
                 bind_address,
             )
 
-        if active_mimic is not None and self._mdns is not None:
+        mdns_label_changed = old_label != new_label
+        if (
+            mdns_label_changed
+            and active_mimic is not None
+            and self._mdns is not None
+        ):
             await self._mdns.unregister(primary_id)
             registered = await self._register_mdns_batch(
                 self._mdns_registration_specs(
@@ -2023,7 +2214,11 @@ class MimicOrchestrator:
         except Exception:
             await self._db.execute("ROLLBACK TO SAVEPOINT mimic_hostname_update")
             await self._db.execute("RELEASE SAVEPOINT mimic_hostname_update")
-            if active_mimic is not None and self._mdns is not None:
+            if (
+                mdns_label_changed
+                and active_mimic is not None
+                and self._mdns is not None
+            ):
                 await self._mdns.unregister(primary_id)
                 await self._register_mdns_batch(
                     self._mdns_registration_specs(
@@ -2472,18 +2667,173 @@ class MimicOrchestrator:
         rows = list(await cursor.fetchall())
         return {row[0] for row in rows if row[0] is not None}
 
-    @_serialized_lifecycle
-    async def remove_mimic(self, decoy_id: int) -> bool:
-        """Stop and remove a mimic decoy, releasing its virtual IP."""
-        decoy_id = await self._resolve_primary_id(decoy_id)
-        mimic = self._active_mimics.get(decoy_id)
-
-        # Clean up DB record (works for both active and stopped mimics)
-        cursor = await self._db.execute(
-            "SELECT * FROM decoys WHERE id = ? AND decoy_type = 'mimic'",
-            (decoy_id,),
+    async def _capture_mimic_removal_target(
+        self,
+        decoy_id: int,
+    ) -> _MimicRemovalTarget | None:
+        """Bind a remove request to the host generation visible at entry."""
+        mapped_primary_id = self._service_to_primary.get(decoy_id, decoy_id)
+        runtime = self._active_mimics.get(mapped_primary_id)
+        rows = list(
+            await self._db.execute_fetchall(
+                """SELECT requested.id AS requested_id,
+                      CASE
+                          WHEN requested.host_id IS NULL THEN requested.id
+                          ELSE primary_row.id
+                      END AS primary_id,
+                      requested.host_id AS host_id,
+                      COALESCE(
+                          host_row.created_at,
+                          requested.created_at
+                      ) AS generation_created_at,
+                      requested.bind_address
+               FROM decoys requested
+               LEFT JOIN decoy_hosts host_row
+                 ON host_row.id = requested.host_id
+               LEFT JOIN decoys primary_row
+                 ON primary_row.host_id = requested.host_id
+                AND primary_row.is_primary = 1
+                AND primary_row.decoy_type = 'mimic'
+                AND primary_row.retired_at IS NULL
+               WHERE requested.id = ?
+                 AND requested.decoy_type = 'mimic'
+                 AND requested.retired_at IS NULL
+                 AND (
+                     requested.host_id IS NULL
+                     OR (
+                         host_row.retired_at IS NULL
+                         AND primary_row.id IS NOT NULL
+                     )
+                 )
+                   LIMIT 1""",
+                (decoy_id,),
+            )
         )
-        row = await cursor.fetchone()
+        if not rows:
+            if runtime is None:
+                return None
+            return _MimicRemovalTarget(
+                requested_id=decoy_id,
+                primary_id=mapped_primary_id,
+                host_id=None,
+                generation_created_at=None,
+                runtime=runtime,
+            )
+
+        row = rows[0]
+        primary_id = int(row["primary_id"])
+        if runtime is not None and (
+            mapped_primary_id != primary_id
+            or runtime.bind_address != row["bind_address"]
+        ):
+            logger.warning(
+                "Mimic %d changed identity while its removal target was "
+                "being captured",
+                decoy_id,
+            )
+            return None
+        return _MimicRemovalTarget(
+            requested_id=int(row["requested_id"]),
+            primary_id=primary_id,
+            host_id=(
+                int(row["host_id"])
+                if row["host_id"] is not None
+                else None
+            ),
+            generation_created_at=str(row["generation_created_at"]),
+            runtime=runtime,
+        )
+
+    async def _revalidate_mimic_removal_target(
+        self,
+        target: _MimicRemovalTarget,
+    ) -> tuple[int, Any | None, MimicDecoy | None] | None:
+        """Resolve a captured generation without following a recycled ID."""
+        if target.generation_created_at is None:
+            current = self._active_mimics.get(target.primary_id)
+            if current is not target.runtime:
+                return None
+            rows = await self._db.execute_fetchall(
+                "SELECT 1 FROM decoys WHERE id = ? LIMIT 1",
+                (target.primary_id,),
+            )
+            if rows:
+                return None
+            return target.primary_id, None, current
+
+        if target.host_id is not None:
+            rows = list(
+                await self._db.execute_fetchall(
+                    """SELECT primary_row.*
+                   FROM decoy_hosts host_row
+                   JOIN decoys primary_row
+                     ON primary_row.host_id = host_row.id
+                    AND primary_row.is_primary = 1
+                    AND primary_row.decoy_type = 'mimic'
+                    AND primary_row.retired_at IS NULL
+                   WHERE host_row.id = ?
+                     AND host_row.created_at = ?
+                     AND host_row.retired_at IS NULL
+                       LIMIT 1""",
+                    (target.host_id, target.generation_created_at),
+                )
+            )
+        else:
+            rows = list(
+                await self._db.execute_fetchall(
+                    """SELECT *
+                   FROM decoys
+                   WHERE id = ?
+                     AND decoy_type = 'mimic'
+                     AND host_id IS NULL
+                     AND created_at = ?
+                     AND retired_at IS NULL
+                       LIMIT 1""",
+                    (target.primary_id, target.generation_created_at),
+                )
+            )
+        if not rows:
+            return None
+
+        row = rows[0]
+        primary_id = int(row["id"])
+        current = self._active_mimics.get(primary_id)
+        if target.runtime is not None and current is not target.runtime:
+            return None
+        return primary_id, row, current
+
+    async def remove_mimic(self, decoy_id: int) -> bool:
+        """Stop the captured mimic generation and release its virtual IP."""
+        if self._lifecycle_lock.is_owned_by_another_task():
+            raise MimicLifecycleBusyError(
+                "Fake host lifecycle is busy; wait for the current network update"
+            )
+        target = await self._capture_mimic_removal_target(decoy_id)
+        if target is None:
+            return False
+        if self._lifecycle_lock.is_owned_by_another_task():
+            raise MimicLifecycleBusyError(
+                "Fake host lifecycle is busy; wait for the current network update"
+            )
+        async with self._lifecycle_lock:
+            resolved = await self._revalidate_mimic_removal_target(target)
+            if resolved is None:
+                logger.info(
+                    "Skipped stale removal for mimic %d because its host "
+                    "generation changed while the request was queued",
+                    decoy_id,
+                )
+                return False
+            primary_id, row, mimic = resolved
+            return await self._remove_bound_mimic(primary_id, row, mimic)
+
+    async def _remove_bound_mimic(
+        self,
+        decoy_id: int,
+        row: Any | None,
+        mimic: MimicDecoy | None,
+    ) -> bool:
+        """Remove one already revalidated host generation."""
         if row is None and mimic is None:
             return False
         if row is None:
@@ -2504,57 +2854,56 @@ class MimicOrchestrator:
                 "PF isolation was retained"
             )
 
-        if row is not None:
-            bind_address = row["bind_address"]
-            config = json.loads(row["config"]) if row["config"] else {}
-            template_id = config.get("template_id")
-            status_rows = await self._service_status_rows(decoy_id)
+        bind_address = row["bind_address"]
+        config = json.loads(row["config"]) if row["config"] else {}
+        template_id = config.get("template_id")
+        status_rows = await self._service_status_rows(decoy_id)
 
-            # Stop the listener first, remove the address second, and only then
-            # remove PF. A failed alias operation therefore remains isolated.
-            if not await self._deactivate_failed_mimic(
-                decoy_id=decoy_id,
-                bind_address=bind_address,
-                mimic=mimic,
-            ):
-                raise MimicCleanupError(
-                    f"Mimic {decoy_id} network cleanup is incomplete; "
-                    "its persisted state and PF isolation were retained"
-                )
-
-            await self._delete_mimic_records(
-                decoy_id=decoy_id,
-                template_id=template_id,
-                virtual_ip=bind_address,
-                retirement_reason="removed_by_user",
-            )
-            # Clean up stale status events only when no preserved alert points
-            # at the event sequence.
-            service_ids = [int(item["id"]) for item in status_rows]
-            placeholders = ",".join("?" for _ in service_ids)
-            await self._db.execute(
-                "DELETE FROM events WHERE event_type = 'decoy.status_changed' "
-                f"AND json_extract(payload, '$.id') IN ({placeholders}) "
-                "AND NOT EXISTS ("
-                "    SELECT 1 FROM home_alerts ha WHERE ha.event_seq = events.seq"
-                ")",
-                service_ids,
-            )
-            await self._db.commit()
-
-            name = mimic.name if mimic else row["name"]
-            await self._publish_group_status(
-                decoy_id,
-                "removed",
-                hostname=name,
-                rows=status_rows,
+        # Stop the listener first, remove the address second, and only then
+        # remove PF. A failed alias operation therefore remains isolated.
+        if not await self._deactivate_failed_mimic(
+            decoy_id=decoy_id,
+            bind_address=bind_address,
+            mimic=mimic,
+        ):
+            raise MimicCleanupError(
+                f"Mimic {decoy_id} network cleanup is incomplete; "
+                "its persisted state and PF isolation were retained"
             )
 
-            logger.info("Removed mimic decoy '%s' (id=%d)", name, decoy_id)
+        await self._delete_mimic_records(
+            decoy_id=decoy_id,
+            template_id=template_id,
+            virtual_ip=bind_address,
+            retirement_reason="removed_by_user",
+        )
+        # Clean up stale status events only when no preserved alert points
+        # at the event sequence.
+        service_ids = [int(item["id"]) for item in status_rows]
+        placeholders = ",".join("?" for _ in service_ids)
+        await self._db.execute(
+            "DELETE FROM events WHERE event_type = 'decoy.status_changed' "
+            f"AND json_extract(payload, '$.id') IN ({placeholders}) "
+            "AND NOT EXISTS ("
+            "    SELECT 1 FROM home_alerts ha WHERE ha.event_seq = events.seq"
+            ")",
+            service_ids,
+        )
+        await self._db.commit()
+
+        name = mimic.name if mimic else row["name"]
+        await self._publish_group_status(
+            decoy_id,
+            "removed",
+            hostname=name,
+            rows=status_rows,
+        )
+
+        logger.info("Removed mimic decoy '%s' (id=%d)", name, decoy_id)
 
         return True
 
-    @_serialized_lifecycle
+    @_serialized_user_lifecycle
     async def restart_mimic(self, decoy_id: int) -> bool:
         """Restart a stopped mimic decoy."""
         if not self._network_ready:
@@ -2709,6 +3058,7 @@ class MimicOrchestrator:
                 tls_cert_pem=tls_cert_pem,
                 tls_key_pem=tls_key_pem,
                 credentials_by_port=credentials_by_port,
+                **self._backend_bind_kwargs(bind_address),
             )
             mimic.on_connection = lambda event, _did=decoy_id: self._handle_connection(
                 event,
@@ -2731,7 +3081,7 @@ class MimicOrchestrator:
                     decoy_id,
                     exc,
                 )
-                return False
+                raise
             if not alias_restored:
                 return False
 
@@ -2824,6 +3174,8 @@ class MimicOrchestrator:
             logger.info("Restarted mimic decoy '%s' (id=%d)", mimic_name, decoy_id)
             return True
 
+        except HelperUnavailableError:
+            raise
         except Exception:
             logger.exception("Failed to restart mimic decoy %d", decoy_id)
             await self._deactivate_failed_mimic(
@@ -3051,8 +3403,8 @@ class MimicOrchestrator:
             rows_by_ip.setdefault(row["ip_address"], []).append((row, key))
 
         # Keep one canonical active fake host per real source. All candidates
-        # are already under deny-all quarantine; extras are withdrawn and
-        # stopped below while their forensic rows remain intact.
+        # are already under deny-all quarantine; safely withdrawn inactive
+        # hosts are retired below while their forensic rows remain intact.
         active_by_source: dict[int, list[tuple[Any, int]]] = {}
         for row, key in row_keys:
             source_device_id = row["source_device_id"]
@@ -3131,6 +3483,26 @@ class MimicOrchestrator:
                         f"Could not clear stale packet-filter state for {ip}"
                     )
                 continue
+
+            for row, _key in stale_entries:
+                if (
+                    row["persisted_decoy_id"] is None
+                    or row["decoy_type"] != "mimic"
+                    or row["status"] != "stopped"
+                ):
+                    continue
+                await self._delete_mimic_records(
+                    decoy_id=int(row["persisted_decoy_id"]),
+                    template_id=row["template_id"],
+                    virtual_ip=ip,
+                    delete_virtual_ip=False,
+                    retirement_reason="stopped_after_network_cleanup",
+                )
+                logger.info(
+                    "Retired stopped mimic host %d after verified startup "
+                    "network cleanup; preserved its alert and connection evidence",
+                    row["persisted_decoy_id"],
+                )
 
             retired_duplicate = False
             for row, key in entries:
@@ -3391,6 +3763,7 @@ class MimicOrchestrator:
                     tls_cert_pem=tls_cert_pem,
                     tls_key_pem=tls_key_pem,
                     credentials_by_port=credentials_by_port,
+                    **self._backend_bind_kwargs(bind_address),
                 )
                 mimic.on_connection = lambda event, _did=decoy_id: self._handle_connection(
                     event,

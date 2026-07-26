@@ -292,6 +292,7 @@ struct AlertDetailView: View {
         case "device.new": return "New Device"
         case "device.verification_needed": return "Device Verification"
         case "device.mac_changed": return "MAC Address Changed"
+        case "security.arp_conflict": return "ARP Identity Conflict"
         case "security.port_risk": return "Port Risk"
         case "security.vendor_advisory": return "Vendor Advisory"
         case "system.sensor_offline": return "Sensor Offline"

@@ -42,7 +42,14 @@ struct AlertFeedView: View {
         ("Decoy Trip", ["decoy.trip", "decoy.credential_trip"]),
         ("New Device", ["device.new", "device.verification_needed"]),
         ("MAC Changed", ["device.mac_changed"]),
-        ("Security", ["security.port_risk", "security.vendor_advisory"]),
+        (
+            "Security",
+            [
+                "security.arp_conflict",
+                "security.port_risk",
+                "security.vendor_advisory",
+            ]
+        ),
         ("System", ["system.sensor_offline", "system.learning_complete"]),
     ]
 

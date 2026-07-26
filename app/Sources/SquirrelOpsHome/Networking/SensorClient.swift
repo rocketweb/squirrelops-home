@@ -63,16 +63,35 @@ public final class SensorClient: Sendable {
         self.decoder = decoder
     }
 
+    /// Pairing-only client with an explicit TOFU trust mode. The authenticated
+    /// setup-key transcript establishes the sensor identity before persistence.
+    public init(pairingBaseURL: URL) {
+        self.baseURL = pairingBaseURL
+        self.certFingerprint = nil
+        let delegate = TLSPinningDelegate(serverTrustMode: .pairingTOFU)
+        self.session = URLSession(
+            configuration: .default,
+            delegate: delegate,
+            delegateQueue: nil
+        )
+
+        let decoder = JSONDecoder()
+        self.decoder = decoder
+    }
+
     /// Create a client with TLS pinning and paired client certificate support.
     public init(
         baseURL: URL,
         certFingerprint: String,
-        caCertData: Data?,
+        caCertData: Data,
         clientIdentity: SecIdentity? = nil
     ) {
         self.baseURL = baseURL
         self.certFingerprint = certFingerprint
-        let delegate = TLSPinningDelegate(caCertData: caCertData, clientIdentity: clientIdentity)
+        let delegate = TLSPinningDelegate(
+            serverTrustMode: .pinnedCA(caCertData),
+            clientIdentity: clientIdentity
+        )
         let config = URLSessionConfiguration.default
         self.session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
 

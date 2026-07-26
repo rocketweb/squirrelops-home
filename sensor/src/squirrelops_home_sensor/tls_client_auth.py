@@ -18,10 +18,16 @@ _CLIENT_CERT_DER_KEY = "client_cert_der"
 
 
 def add_client_cert_to_scope(scope: Any, transport: asyncio.Transport) -> None:
-    """Add the peer certificate DER bytes to an ASGI scope when TLS provided one."""
+    """Record the TLS transport and any peer certificate in an ASGI scope."""
     ssl_object = transport.get_extra_info("ssl_object")
     if not isinstance(ssl_object, ssl.SSLObject):
         return
+
+    # Transport security is independent of whether the peer supplied a
+    # certificate. Keep this server-derived signal in the scope so auth never
+    # has to trust proxy-rewritable scheme data.
+    extensions = scope.setdefault("extensions", {})
+    tls_extension = extensions.setdefault(_TLS_EXTENSION_KEY, {})
 
     try:
         cert_der = ssl_object.getpeercert(binary_form=True)
@@ -32,9 +38,15 @@ def add_client_cert_to_scope(scope: Any, transport: asyncio.Transport) -> None:
     if not cert_der:
         return
 
-    extensions = scope.setdefault("extensions", {})
-    tls_extension = extensions.setdefault(_TLS_EXTENSION_KEY, {})
     tls_extension[_CLIENT_CERT_DER_KEY] = cert_der
+
+
+def is_tls_transport(scope: Any) -> bool:
+    """Return whether the server transport, rather than a header, established TLS."""
+    extensions = scope.get("extensions")
+    if not isinstance(extensions, dict):
+        return False
+    return isinstance(extensions.get(_TLS_EXTENSION_KEY), dict)
 
 
 def client_cert_fingerprint_from_scope(scope: Any) -> str | None:

@@ -21,9 +21,13 @@ import aiosqlite
 import pytest
 
 from squirrelops_home_sensor.db.migrations import apply_migrations
-from squirrelops_home_sensor.devices.classifier import DeviceClassifier
+from squirrelops_home_sensor.devices.classifier import (
+    DeviceClassificationEvidence,
+    DeviceClassifier,
+    LLMClassifier,
+)
 from squirrelops_home_sensor.devices.manager import DeviceManager, ScanResult
-from squirrelops_home_sensor.devices.signatures import SignatureDB
+from squirrelops_home_sensor.devices.signatures import DeviceClassification, SignatureDB
 from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.events.log import EventLog
 from squirrelops_home_sensor.events.types import EventType
@@ -32,7 +36,11 @@ from squirrelops_home_sensor.privileged.helper import (
 )
 from squirrelops_home_sensor.scanner.loop import ScanLoop
 from squirrelops_home_sensor.scanner.mdns_browser import MDNSBrowser, MDNSResult
-from squirrelops_home_sensor.scanner.port_scanner import PortResult, PortScanner
+from squirrelops_home_sensor.scanner.port_scanner import (
+    PortResult,
+    PortScanner,
+    PortScanResults,
+)
 from squirrelops_home_sensor.scanner.ssdp_scanner import SSDPResult, SSDPScanner
 
 SENSOR_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -398,7 +406,7 @@ class TestScanLoopExecution:
         ]
 
     @pytest.mark.asyncio
-    async def test_same_mac_multi_ip_uses_lowest_deterministic_address(
+    async def test_same_mac_multi_ip_is_quarantined(
         self,
         scan_loop: ScanLoop,
         mock_ops: AsyncMock,
@@ -420,9 +428,77 @@ class TestScanLoopExecution:
         rows = await (await db.execute(
             "SELECT ip_address, mac_address FROM devices"
         )).fetchall()
-        assert [(row["ip_address"], row["mac_address"]) for row in rows] == [
-            ("192.168.1.203", "AE:29:0A:E5:CC:C5"),
+        assert rows == []
+
+    @pytest.mark.asyncio
+    async def test_forged_lower_ip_cannot_move_device_or_wipe_verified_ports(
+        self,
+        scan_loop: ScanLoop,
+        mock_ops: AsyncMock,
+        mock_port_scanner: AsyncMock,
+        device_manager: DeviceManager,
+        db: aiosqlite.Connection,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ambiguous MAC claims quarantine both targets and preserve inventory."""
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.scanner.loop._local_interface_macs",
+            lambda: set(),
+            raising=False,
+        )
+        victim_mac = "AA:BB:CC:00:00:50"
+        other_mac = "DE:AD:BE:EF:00:99"
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.50", victim_mac),
+            ("192.168.1.99", other_mac),
         ]
+        mock_port_scanner.scan_with_banners.return_value = {
+            "192.168.1.50": [
+                PortResult(port=22, service_name="ssh"),
+                PortResult(port=445, service_name="smb"),
+            ],
+            "192.168.1.99": [
+                PortResult(port=80, service_name="http"),
+            ],
+        }
+        await scan_loop.run_single_scan()
+
+        analyzer = AsyncMock()
+        analyzer.analyze_all_devices.return_value = 0
+        scan_loop._security_analyzer = analyzer
+        mock_port_scanner.reset_mock()
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.50", victim_mac),
+            ("192.168.1.3", victim_mac),
+            ("192.168.1.99", other_mac),
+        ]
+        mock_port_scanner.scan_with_banners.return_value = {}
+
+        await scan_loop.run_single_scan()
+
+        victim = next(
+            device
+            for device in device_manager.get_known_devices()
+            if device.mac_address == victim_mac
+        )
+        assert victim.ip_address == "192.168.1.50"
+        assert victim.open_ports == frozenset({22, 445})
+        assert mock_port_scanner.scan_with_banners.call_args.kwargs["targets"] == [
+            "192.168.1.99"
+        ]
+        rows = await (await db.execute(
+            "SELECT port FROM device_open_ports "
+            "WHERE device_id = ? ORDER BY port",
+            (victim.device_id,),
+        )).fetchall()
+        assert [row["port"] for row in rows] == [22, 445]
+        analyzer.record_arp_conflicts.assert_awaited_once_with(
+            [{
+                "kind": "mac_observed_at_multiple_ips",
+                "ip_addresses": ["192.168.1.3", "192.168.1.50"],
+                "mac_addresses": [victim_mac],
+            }]
+        )
 
     @pytest.mark.asyncio
     async def test_security_analysis_uses_only_hosts_seen_in_current_scan(
@@ -640,6 +716,44 @@ class TestScanLoopExecution:
         )).fetchall()
         assert [row["port"] for row in rows] == [80, 443]
         analyzer.analyze_all_devices.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_inconclusive_probe_preserves_only_that_verified_port(
+        self,
+        scan_loop: ScanLoop,
+        mock_port_scanner: AsyncMock,
+        device_manager: DeviceManager,
+        db: aiosqlite.Connection,
+    ) -> None:
+        await scan_loop.run_single_scan()
+        mock_port_scanner.scan_with_banners.return_value = PortScanResults(
+            {
+                "192.168.1.1": [
+                    PortResult(port=80, service_name="http"),
+                ],
+            },
+            inconclusive_ports={
+                "192.168.1.1": frozenset({443}),
+            },
+        )
+
+        await scan_loop.run_single_scan()
+
+        tracked = next(
+            device
+            for device in device_manager.get_known_devices()
+            if device.ip_address == "192.168.1.1"
+        )
+        assert tracked.open_ports == frozenset({80, 443})
+        rows = await (await db.execute(
+            "SELECT port, service_name FROM device_open_ports "
+            "WHERE device_id = ? ORDER BY port",
+            (tracked.device_id,),
+        )).fetchall()
+        assert [(row["port"], row["service_name"]) for row in rows] == [
+            (80, "http"),
+            (443, "https"),
+        ]
 
     @pytest.mark.asyncio
     async def test_processing_error_skips_authoritative_offline_reconciliation(
@@ -1425,6 +1539,90 @@ class TestScanLoopPhase3:
         cursor = await db.execute("SELECT model_name FROM devices WHERE ip_address = '192.168.1.2'")
         row = await cursor.fetchone()
         assert row[0] == "Sonos One"
+
+    @pytest.mark.asyncio
+    async def test_ai_classification_runs_after_port_and_discovery_enrichment(
+        self,
+        db: aiosqlite.Connection,
+        event_bus: EventBus,
+    ) -> None:
+        """The provider receives useful Phase 2/3 evidence in one final call."""
+
+        class CapturingLLM(LLMClassifier):
+            evidence: DeviceClassificationEvidence | None = None
+
+            async def classify(
+                self,
+                _fingerprint,
+                evidence=None,
+            ) -> DeviceClassification:
+                self.evidence = evidence
+                return DeviceClassification(
+                    manufacturer="Acme",
+                    device_type="nas",
+                    model="Vault 2000",
+                    confidence=0.8,
+                    source="llm",
+                )
+
+        llm = CapturingLLM()
+        manager = DeviceManager(
+            db=db,
+            event_bus=event_bus,
+            classifier=DeviceClassifier(
+                SignatureDB({}, {}, []),
+                llm,
+            ),
+        )
+        ops = AsyncMock(spec=PrivilegedOperations)
+        ops.arp_scan.return_value = [
+            ("192.168.1.77", "02:00:00:00:00:77"),
+        ]
+        port_scanner = AsyncMock(spec=PortScanner)
+        port_scanner.scan_with_banners.return_value = {
+            "192.168.1.77": [
+                PortResult(port=22, service_name="ssh"),
+                PortResult(port=445, service_name="microsoft-ds"),
+            ],
+        }
+        mdns = AsyncMock(spec=MDNSBrowser)
+        mdns.browse.return_value = [
+            MDNSResult(
+                ip="192.168.1.77",
+                hostname="vault.local.",
+                service_types=frozenset({"_smb._tcp.local."}),
+            ),
+        ]
+        ssdp = AsyncMock(spec=SSDPScanner)
+        ssdp.scan.return_value = [
+            SSDPResult(
+                ip="192.168.1.77",
+                friendly_name="Office Vault",
+                manufacturer="Acme Hardware",
+                model_name="Vault 2000",
+                server_header="Linux UPnP/1.0",
+            ),
+        ]
+        loop = ScanLoop(
+            device_manager=manager,
+            event_bus=event_bus,
+            privileged_ops=ops,
+            subnet="192.168.1.0/24",
+            scan_interval=1,
+            port_scanner=port_scanner,
+            mdns_browser=mdns,
+            ssdp_scanner=ssdp,
+        )
+
+        await loop.run_single_scan()
+
+        assert llm.evidence is not None
+        assert llm.evidence.open_ports == (22, 445)
+        assert llm.evidence.detected_services == ("microsoft-ds", "ssh")
+        assert llm.evidence.mdns_hostname == "vault.local."
+        assert llm.evidence.mdns_service_types == ("_smb._tcp.local.",)
+        assert llm.evidence.upnp_friendly_name == "Office Vault"
+        assert llm.evidence.upnp_server_header == "Linux UPnP/1.0"
 
     @pytest.mark.asyncio
     async def test_phase3_mdns_wins_over_ssdp_for_hostname(

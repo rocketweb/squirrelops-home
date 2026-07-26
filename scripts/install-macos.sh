@@ -24,7 +24,9 @@ CONFIG_FILE="$CONFIG_DIR/config.yaml"
 PLIST_NAME="com.squirrelops.sensor"
 PLIST_DEST="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SENSOR_DIR="$SCRIPT_DIR/../sensor"
 PLIST_TEMPLATE="$SCRIPT_DIR/../sensor/resources/${PLIST_NAME}.plist"
+REQUIRED_UV_VERSION="0.10.2"
 
 # ---------------------------------------------------------------------------
 # Colors (if terminal supports them)
@@ -67,6 +69,22 @@ if [ -z "$PYTHON_CMD" ]; then
     error "Python 3.11+ is required but not found. Install via: brew install python@3.12"
 fi
 
+# This installer is intentionally source-checkout-only. Release installs use the
+# signed and notarized .pkg, which embeds the sensor and its locked dependencies.
+command -v uv >/dev/null 2>&1 || {
+    error "uv $REQUIRED_UV_VERSION is required. Install it from https://docs.astral.sh/uv/."
+}
+ACTUAL_UV_VERSION="$(uv --version | awk '{ print $2 }')"
+if [ "$ACTUAL_UV_VERSION" != "$REQUIRED_UV_VERSION" ]; then
+    error "uv $REQUIRED_UV_VERSION is required (found $ACTUAL_UV_VERSION)."
+fi
+if [ ! -f "$SENSOR_DIR/pyproject.toml" ] || [ ! -f "$SENSOR_DIR/uv.lock" ]; then
+    error "A complete source checkout with sensor/pyproject.toml and sensor/uv.lock is required. Use the signed .pkg for release installs."
+fi
+if [ ! -f "$PLIST_TEMPLATE" ]; then
+    error "LaunchAgent template is missing from the source checkout: $PLIST_TEMPLATE"
+fi
+
 # ---------------------------------------------------------------------------
 # Step 2: Create directory tree
 # ---------------------------------------------------------------------------
@@ -79,39 +97,18 @@ mkdir -p "$HOME/Library/LaunchAgents"
 chmod 700 "$DATA_DIR" "$CONFIG_DIR" "$LOG_DIR"
 
 # ---------------------------------------------------------------------------
-# Step 3: Create Python venv
+# Step 3: Sync the exact locked Python environment
 # ---------------------------------------------------------------------------
-if [ -d "$VENV_DIR" ]; then
-    info "Virtual environment already exists at $VENV_DIR"
-else
-    info "Creating Python virtual environment..."
-    "$PYTHON_CMD" -m venv "$VENV_DIR"
-fi
-
-VENV_PYTHON="$VENV_DIR/bin/python"
-VENV_PIP="$VENV_DIR/bin/pip"
-
-# Upgrade pip
-"$VENV_PIP" install --upgrade pip --quiet
+info "Syncing the locked sensor environment..."
+UV_PROJECT_ENVIRONMENT="$VENV_DIR" uv sync \
+    --project "$SENSOR_DIR" \
+    --python "$PYTHON_CMD" \
+    --frozen \
+    --no-dev \
+    --no-editable
 
 # ---------------------------------------------------------------------------
-# Step 4: Install squirrelops-home-sensor package
-# ---------------------------------------------------------------------------
-info "Installing squirrelops-home-sensor..."
-
-SENSOR_DIR="$SCRIPT_DIR/../sensor"
-if [ -f "$SENSOR_DIR/pyproject.toml" ]; then
-    info "Installing from local source: $SENSOR_DIR"
-    "$VENV_PIP" install "$SENSOR_DIR" --quiet
-else
-    info "Installing from PyPI..."
-    "$VENV_PIP" install squirrelops-home-sensor --quiet || {
-        error "Failed to install squirrelops-home-sensor. Ensure the package is available."
-    }
-fi
-
-# ---------------------------------------------------------------------------
-# Step 5: Generate default config if not exists
+# Step 4: Generate default config if not exists
 # ---------------------------------------------------------------------------
 if [ -f "$CONFIG_FILE" ]; then
     info "Config already exists at $CONFIG_FILE"
@@ -145,54 +142,13 @@ chmod 755 "$RUN_DIR"
 chmod 600 "$CONFIG_FILE"
 
 # ---------------------------------------------------------------------------
-# Step 6: Generate launchd plist from template
+# Step 5: Generate launchd plist from template
 # ---------------------------------------------------------------------------
 info "Generating launchd plist..."
 
 VENV_PYTHON_PATH="$VENV_DIR/bin/python"
 
-if [ -f "$PLIST_TEMPLATE" ]; then
-    PLIST_CONTENT=$(cat "$PLIST_TEMPLATE")
-else
-    warn "Plist template not found at $PLIST_TEMPLATE, using embedded template"
-    PLIST_CONTENT='<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.squirrelops.sensor</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>__PYTHON_PATH__</string>
-        <string>-m</string>
-        <string>squirrelops_home_sensor</string>
-        <string>--config</string>
-        <string>__CONFIG_PATH__</string>
-        <string>--port</string>
-        <string>8443</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>__INSTALL_DIR__</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>SQUIRRELOPS_DATA_DIR</key>
-        <string>__DATA_DIR__</string>
-        <key>SQUIRRELOPS_LOG_PATH</key>
-        <string>__LOG_DIR__/squirrelops-sensor.log</string>
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
-    <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
-</dict>
-</plist>'
-fi
+PLIST_CONTENT=$(cat "$PLIST_TEMPLATE")
 
 # Replace placeholders
 PLIST_CONTENT="${PLIST_CONTENT//__PYTHON_PATH__/$VENV_PYTHON_PATH}"
@@ -202,13 +158,13 @@ PLIST_CONTENT="${PLIST_CONTENT//__DATA_DIR__/$DATA_DIR}"
 PLIST_CONTENT="${PLIST_CONTENT//__LOG_DIR__/$LOG_DIR}"
 
 # ---------------------------------------------------------------------------
-# Step 7: Install plist to ~/Library/LaunchAgents/
+# Step 6: Install plist to ~/Library/LaunchAgents/
 # ---------------------------------------------------------------------------
 info "Installing plist to $PLIST_DEST"
 echo "$PLIST_CONTENT" > "$PLIST_DEST"
 
 # ---------------------------------------------------------------------------
-# Step 8: Load via launchctl (unload existing first)
+# Step 7: Load via launchctl (unload existing first)
 # ---------------------------------------------------------------------------
 info "Loading sensor via launchctl..."
 DOMAIN_TARGET="gui/$(id -u)"
@@ -224,7 +180,7 @@ launchctl bootstrap "$DOMAIN_TARGET" "$PLIST_DEST"
 info "Sensor loaded successfully"
 
 # ---------------------------------------------------------------------------
-# Step 9: Installation summary
+# Step 8: Installation summary
 # ---------------------------------------------------------------------------
 echo ""
 echo -e "${BOLD}=========================================${NC}"

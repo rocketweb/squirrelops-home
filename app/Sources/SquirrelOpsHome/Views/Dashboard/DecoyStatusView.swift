@@ -26,7 +26,7 @@ struct DecoyStatusView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.statusError(colorScheme).opacity(0.08))
             }
-            if appState.decoys.isEmpty {
+            if operationalInventory.decoys.isEmpty {
                 emptyState
             } else {
                 decoyGrid
@@ -41,36 +41,12 @@ struct DecoyStatusView: View {
         }
     }
 
-    private var activeDecoys: [DecoySummary] {
-        appState.decoys.filter(\.isActiveDeployment)
+    private var operationalInventory: OperationalDecoyInventory {
+        OperationalDecoyInventory(appState.decoys)
     }
 
-    private var mimicServices: [DecoySummary] {
-        appState.decoys.filter(\.isVirtualMimic)
-    }
-
-    private var mimicGroups: [DecoyHostGroup] {
-        DecoyHostGroup.grouping(mimicServices)
-    }
-
-    private var activeMimicServices: [DecoySummary] {
-        activeDecoys.filter(\.isVirtualMimic)
-    }
-
-    private var activeMimicGroups: [DecoyHostGroup] {
-        DecoyHostGroup.grouping(activeMimicServices)
-    }
-
-    private var activeHostListeners: [DecoySummary] {
-        activeDecoys.filter(\.isHostListener)
-    }
-
-    private var activeHostListenerCount: Int {
-        activeHostListeners.count
-    }
-
-    private var inactiveHostListeners: [DecoySummary] {
-        appState.decoys.filter { $0.isHostListener && !$0.isActiveDeployment }
+    private var deploymentSummary: DecoyDeploymentSummary {
+        operationalInventory.summary
     }
 
     private var toolbar: some View {
@@ -80,11 +56,7 @@ struct DecoyStatusView: View {
                 .tracking(Typography.h3Tracking)
                 .foregroundStyle(Theme.textPrimary(colorScheme))
             Spacer()
-            Text(
-                "\(activeMimicGroups.count) fake hosts · "
-                + "\(activeMimicServices.count) service decoys · "
-                + "\(activeHostListenerCount) host listeners"
-            )
+            Text(deploymentSummary.breakdownLabel)
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
         }
@@ -94,7 +66,7 @@ struct DecoyStatusView: View {
     private var decoyGrid: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.md) {
-                if activeHostListenerCount > 0 {
+                if !operationalInventory.hostListeners.isEmpty {
                     Label(
                         "Host listeners use this sensor Mac's LAN address and the shown port. "
                         + "Only virtual-IP mimics have their own network address.",
@@ -112,26 +84,18 @@ struct DecoyStatusView: View {
                     .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusMd))
                 }
 
-                if !mimicServices.isEmpty {
+                if !operationalInventory.mimicGroups.isEmpty {
                     mimicSection(
                         title: "Fake hosts",
                         description: "Services sharing a virtual IP belong to one fake host. Each port keeps its own behavior and evidence; lifecycle actions apply to the entire host.",
-                        groups: mimicGroups
+                        groups: operationalInventory.mimicGroups
                     )
                 }
 
-                if !activeHostListeners.isEmpty {
+                if !operationalInventory.hostListeners.isEmpty {
                     decoySection(
-                        title: "Active host listeners",
-                        decoys: activeHostListeners
-                    )
-                }
-
-                if !inactiveHostListeners.isEmpty {
-                    decoySection(
-                        title: "Inactive host listeners",
-                        description: "These listeners are disabled and do not count as deployed decoys.",
-                        decoys: inactiveHostListeners
+                        title: "Host listeners",
+                        decoys: operationalInventory.hostListeners
                     )
                 }
             }
@@ -204,12 +168,16 @@ struct DecoyStatusView: View {
 
                 VStack(alignment: .leading, spacing: Spacing.xs) {
                     if editingMimicGroupID == group.id {
-                        TextField("hostname.local", text: $hostnameDraft)
+                        TextField("hostname, hostname.local, or hostname.localdomain", text: $hostnameDraft)
                             .textFieldStyle(.roundedBorder)
                             .font(Typography.mono)
                             .onSubmit {
                                 Task { await saveHostname(for: group) }
                             }
+
+                        Text("Suffix is optional. .local and .localdomain are supported.")
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.textTertiary(colorScheme))
 
                         HStack(spacing: Spacing.sm) {
                             Button("Cancel") {
@@ -282,12 +250,23 @@ struct DecoyStatusView: View {
                         .font(Typography.caption)
                         .tracking(Typography.captionTracking)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
-                    DecoyToggle(
-                        decoy: representative,
-                        appState: appState,
-                        scopeLabel: "All services on \(group.bindAddress)"
-                    ) { message in
-                        actionError = message
+
+                    HStack {
+                        Text("Restart or remove this fake host in Scouts.")
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.textSecondary(colorScheme))
+                        Spacer()
+                        Button("Open Scouts") {
+                            selectedDecoy = nil
+                            appState.selectedDashboardSection = .scouts
+                        }
+                        .buttonStyle(.plain)
+                        .font(Typography.bodySmall)
+                        .foregroundStyle(Theme.accentDefault(colorScheme))
+                        .help(
+                            "Open Scouts to manage every service on "
+                            + representative.bindAddress
+                        )
                     }
                 }
             }

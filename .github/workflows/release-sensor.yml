@@ -1,0 +1,373 @@
+name: Release Sensor
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing protected sensor tag (for example, sensor-v2.0.0)
+        required: true
+        type: string
+      commit_sha:
+        description: Full commit SHA expected for the tag and protected main
+        required: true
+        type: string
+
+concurrency:
+  group: squirrelops-sensor-production-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify-release:
+    name: Verify protected sensor release inputs
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sensor_version: ${{ steps.release.outputs.sensor_version }}
+      tag: ${{ steps.release.outputs.tag }}
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+    steps:
+      - name: Checkout dispatched commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Require exact protected refs and sensor version
+        id: release
+        env:
+          EXPECTED_COMMIT: ${{ inputs.commit_sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RUN_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]
+          [ "$GITHUB_RUN_ATTEMPT" = "1" ]
+          [ "$GITHUB_REF" = "refs/heads/main" ]
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TAG" =~ ^sensor-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [ "$RUN_COMMIT" = "$EXPECTED_COMMIT" ]
+
+          git fetch --no-tags --force origin \
+            refs/heads/main:refs/remotes/origin/main
+          [ "$RUN_COMMIT" = "$(git rev-parse refs/remotes/origin/main)" ]
+          git ls-remote --exit-code --refs origin \
+            "refs/tags/${RELEASE_TAG}" >/dev/null
+          git fetch --no-tags --force origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          [ "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RUN_COMMIT" ]
+
+          SENSOR_VERSION="$(
+            awk -F'"' '/^version = / { print $2; exit }' sensor/pyproject.toml
+          )"
+          INSTALL_SENSOR_VERSION="$(
+            awk -F'"' '/^SQUIRRELOPS_SENSOR_VERSION=/ { print $2; exit }' \
+              scripts/install.sh
+          )"
+          [ "$RELEASE_TAG" = "sensor-v${SENSOR_VERSION}" ]
+          [ "$INSTALL_SENSOR_VERSION" = "$SENSOR_VERSION" ]
+          {
+            echo "sensor_version=$SENSOR_VERSION"
+            echo "tag=$RELEASE_TAG"
+            echo "commit_sha=$RUN_COMMIT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Keep Linux publication blocked until review
+        run: |
+          python3 scripts/check-linux-release-boundary.py \
+            .github/release-policy.json .
+
+      - name: Mint narrow release-policy token
+        id: release-policy-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_POLICY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: read
+          permission-administration: read
+          permission-contents: read
+
+      - name: Require remote release protections
+        env:
+          GH_TOKEN: ${{ steps.release-policy-token.outputs.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          bash scripts/check-release-controls.sh \
+            "$GITHUB_REPOSITORY" "$RELEASE_TAG" .github/release-policy.json \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_ACTOR_ID"
+
+  build-container:
+    name: Build and attest container
+    runs-on: ubuntu-latest
+    needs: verify-release
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      digest: ${{ steps.docker.outputs.digest }}
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      IMAGE: ghcr.io/${{ github.repository_owner }}/squirrelops-sensor
+      SENSOR_VERSION: ${{ needs.verify-release.outputs.sensor_version }}
+    steps:
+      - name: Checkout immutable sensor commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.verify-release.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build private OCI archive
+        id: docker
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: sensor
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: squirrelops-sensor:${{ env.SENSOR_VERSION }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.verify-release.outputs.commit_sha }}
+            org.opencontainers.image.version=${{ env.SENSOR_VERSION }}
+          build-args: |
+            VERSION=${{ env.SENSOR_VERSION }}
+          provenance: mode=max
+          sbom: true
+          no-cache: true
+          outputs: type=oci,dest=${{ runner.temp }}/squirrelops-sensor.oci.tar
+
+      - name: Attest container digest
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.docker.outputs.digest }}
+          subject-version: ${{ env.SENSOR_VERSION }}
+          push-to-registry: false
+
+      - name: Upload private OCI archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sensor-oci
+          path: ${{ runner.temp }}/squirrelops-sensor.oci.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-release:
+    name: Publish immutable sensor release
+    runs-on: ubuntu-latest
+    needs:
+      - verify-release
+      - build-container
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
+      SENSOR_VERSION: ${{ needs.verify-release.outputs.sensor_version }}
+      RELEASE_COMMIT: ${{ needs.verify-release.outputs.commit_sha }}
+      DOCKER_DIGEST: ${{ needs.build-container.outputs.digest }}
+      IMAGE: ghcr.io/${{ github.repository_owner }}/squirrelops-sensor
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout immutable sensor commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.verify-release.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download private OCI archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: sensor-oci
+          path: release-input
+
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: 1.3.1
+
+      - name: Authenticate to GHCR
+        run: |
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io \
+            --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Prove release targets are unused
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          [ "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT" ]
+          ! gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1
+
+          set +e
+          TAG_RESULT="$(oras resolve "${IMAGE}:${SENSOR_VERSION}" 2>&1)"
+          TAG_STATUS=$?
+          DIGEST_RESULT="$(oras resolve "${IMAGE}@${DOCKER_DIGEST}" 2>&1)"
+          DIGEST_STATUS=$?
+          set -e
+          [ "$TAG_STATUS" -ne 0 ]
+          [ "$DIGEST_STATUS" -ne 0 ]
+          printf '%s\n' "$TAG_RESULT" \
+            | grep -Eiq 'manifest unknown|name unknown|not found'
+          printf '%s\n' "$DIGEST_RESULT" \
+            | grep -Eiq 'manifest unknown|name unknown|not found'
+
+      - name: Prepare sensor assets
+        run: |
+          set -euo pipefail
+          python3 scripts/prepare-sensor-release-assets.py \
+            --oci-archive release-input/squirrelops-sensor.oci.tar \
+            --docker-digest "$DOCKER_DIGEST" \
+            --tag "$RELEASE_TAG" \
+            --commit "$RELEASE_COMMIT" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output release-assets
+          (cd release-assets && shasum -a 256 -c SHA256SUMS)
+
+      - name: Create draft sensor release
+        run: |
+          printf '%s\n' \
+            "Canonical sensor verification instructions are in SENSOR-RELEASE-VERIFICATION.md." \
+            > release-body.md
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --target "$RELEASE_COMMIT" \
+            --draft \
+            --title "SquirrelOps Home Sensor ${SENSOR_VERSION}" \
+            --notes-file release-body.md
+          gh release upload "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" release-assets/*
+
+      - name: Attest sensor release assets
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: |
+            release-assets/install.sh
+            release-assets/install.sh.sha256
+            release-assets/squirrelops-sensor-*.oci.tar
+            release-assets/SHA256SUMS
+            release-assets/sensor-release-metadata.json
+            release-assets/SENSOR-RELEASE-VERIFICATION.md
+
+      - name: Verify draft sensor release
+        run: |
+          bash scripts/verify-github-release.sh \
+            "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$RELEASE_COMMIT" \
+            release-assets draft
+
+      - name: Mint final-gate token
+        id: release-policy-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_POLICY_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: read
+          permission-administration: read
+          permission-contents: read
+
+      - name: Promote exact image and publish release last
+        env:
+          RELEASE_POLICY_TOKEN: ${{ steps.release-policy-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          PROMOTED=0
+          cleanup() {
+            STATUS=$?
+            trap - EXIT
+            if [ "$STATUS" -ne 0 ] && [ "$PROMOTED" -eq 1 ]; then
+              CURRENT="$(oras resolve "${IMAGE}:${SENSOR_VERSION}" 2>/dev/null || true)"
+              STATE="$(gh release view "$RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" --json isDraft,isImmutable 2>/dev/null || true)"
+              if [ "$CURRENT" = "$DOCKER_DIGEST" ] \
+                && printf '%s' "$STATE" \
+                  | jq -e '.isDraft == true and .isImmutable == false' >/dev/null
+              then
+                oras manifest delete --force "${IMAGE}:${SENSOR_VERSION}" || true
+              fi
+              # End the conditional cleanup of the promoted component tag.
+            fi
+            exit "$STATUS"
+          }
+          trap cleanup EXIT
+
+          GH_TOKEN="$RELEASE_POLICY_TOKEN" \
+            bash scripts/check-release-controls.sh \
+              "$GITHUB_REPOSITORY" "$RELEASE_TAG" .github/release-policy.json \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_ACTOR_ID"
+          python3 scripts/check-linux-release-boundary.py \
+            .github/release-policy.json .
+          git fetch --no-tags --force origin \
+            "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          [ "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$RELEASE_COMMIT" ]
+          bash scripts/verify-github-release.sh \
+            "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$RELEASE_COMMIT" \
+            release-assets draft
+
+          OCI="release-assets/squirrelops-sensor-${SENSOR_VERSION}.oci.tar"
+          PROMOTED=1
+          oras cp --from-oci-layout \
+            "${OCI}@${DOCKER_DIGEST}" "${IMAGE}:${SENSOR_VERSION}"
+          [ "$(oras resolve "${IMAGE}:${SENSOR_VERSION}")" = "$DOCKER_DIGEST" ]
+          oras manifest fetch "${IMAGE}@${DOCKER_DIGEST}" \
+            > "$RUNNER_TEMP/image-index.json"
+          jq -e '
+            .mediaType == "application/vnd.oci.image.index.v1+json"
+            and (
+              [.manifests[]
+                | select(.platform.os == "linux")
+                | .platform.architecture] | sort
+            ) == ["amd64", "arm64"]
+          ' "$RUNNER_TEMP/image-index.json" >/dev/null
+          gh attestation verify "oci://${IMAGE}@${DOCKER_DIGEST}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow \
+              "${GITHUB_REPOSITORY}/.github/workflows/release-sensor.yml" \
+            --signer-digest "$RELEASE_COMMIT" \
+            --source-digest "$RELEASE_COMMIT" \
+            --source-ref refs/heads/main
+
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" --draft=false
+          VERIFIED=0
+          for ATTEMPT in 1 2 3 4 5 6; do
+            if bash scripts/verify-github-release.sh \
+              "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$RELEASE_COMMIT" \
+              release-assets immutable \
+              && gh release verify "$RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+              && [ "$(oras resolve "${IMAGE}:${SENSOR_VERSION}")" = "$DOCKER_DIGEST" ]
+            then
+              VERIFIED=1
+              break
+            fi
+            sleep 5
+          done
+          [ "$VERIFIED" -eq 1 ]
+          trap - EXIT
