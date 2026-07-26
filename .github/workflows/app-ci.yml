@@ -35,7 +35,10 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
 
       - name: Build
-        run: swift build
+        # Xcode 16.2's Swift 6.0.3 frontend can crash while batch-lowering the
+        # large privileged-helper RPC module. Compile one primary file at a
+        # time; this does not change optimization or release behavior.
+        run: swift build -Xswiftc -disable-batch-mode
 
       - name: Test
-        run: swift test
+        run: swift test -Xswiftc -disable-batch-mode

@@ -53,6 +53,11 @@ validate_no_build_host_paths() {
 
 SWIFT_FLAGS=()
 
+# Xcode 16.2's Swift 6.0.3 frontend can crash while batch-lowering the
+# privileged-helper RPC module. Compile one primary file at a time so both CI
+# and the notarized release use the same stable compiler path.
+SWIFT_FLAGS+=(-Xswiftc -disable-batch-mode)
+
 if [ "$BUILD_CONFIG" = "release" ]; then
     SWIFT_FLAGS+=(-c release)
 fi
@@ -81,13 +86,8 @@ APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 
 echo "[+] Config: $BUILD_CONFIG | Arch: $BUILD_ARCH"
 echo "[+] Build dir: $BUILD_DIR"
-if [ ${#SWIFT_FLAGS[@]} -gt 0 ]; then
-    echo "[+] Building with flags: ${SWIFT_FLAGS[*]}..."
-    swift build "${SWIFT_FLAGS[@]}"
-else
-    echo "[+] Building..."
-    swift build
-fi
+echo "[+] Building with flags: ${SWIFT_FLAGS[*]}..."
+swift build "${SWIFT_FLAGS[@]}"
 
 echo "[+] Creating .app bundle..."
 rm -rf "$APP_BUNDLE"
