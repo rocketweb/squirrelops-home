@@ -11,18 +11,21 @@ struct ScoutMimicRevision: Equatable, Hashable, Sendable {
 struct ScoutRefreshSnapshot: Equatable, Sendable {
     let hasStatus: Bool
     let isRunning: Bool
+    let lifecycleBusy: Bool
     let activeMimics: Int
     let maxMimics: Int
     let mimicRevision: [ScoutMimicRevision]
 
     init(
         isRunning: Bool,
+        lifecycleBusy: Bool = false,
         activeMimics: Int,
         maxMimics: Int,
         mimicRevision: [ScoutMimicRevision]
     ) {
         self.hasStatus = true
         self.isRunning = isRunning
+        self.lifecycleBusy = lifecycleBusy
         self.activeMimics = activeMimics
         self.maxMimics = maxMimics
         self.mimicRevision = mimicRevision
@@ -31,6 +34,7 @@ struct ScoutRefreshSnapshot: Equatable, Sendable {
     init(status: ScoutStatusResponse?, mimics: [MimicDecoySummary]) {
         self.hasStatus = status != nil
         self.isRunning = status?.isRunning ?? false
+        self.lifecycleBusy = status?.lifecycleBusy ?? false
         self.activeMimics = status?.activeMimics ?? 0
         self.maxMimics = status?.maxMimics ?? 0
         self.mimicRevision = mimics
@@ -50,6 +54,7 @@ struct ScoutRefreshSnapshot: Equatable, Sendable {
         let activeRows = mimicRevision.lazy.filter { $0.status == "active" }.count
         return hasStatus
             && !isRunning
+            && !lifecycleBusy
             && maxMimics > 0
             && activeMimics >= maxMimics
             && activeRows >= activeMimics
@@ -71,7 +76,7 @@ struct ScoutRefreshPollState {
     mutating func shouldPoll(after snapshot: ScoutRefreshSnapshot) -> Bool {
         guard pollsStarted < maximumPolls else { return false }
 
-        if snapshot.isRunning {
+        if snapshot.isRunning || snapshot.lifecycleBusy {
             stableIdleSamples = 0
         } else if snapshot.isIdleAtCapacity {
             previousSnapshot = snapshot
@@ -83,7 +88,9 @@ struct ScoutRefreshPollState {
         }
         previousSnapshot = snapshot
 
-        guard snapshot.isRunning || stableIdleSamples < requiredStableIdleSamples else {
+        guard snapshot.isRunning
+            || snapshot.lifecycleBusy
+            || stableIdleSamples < requiredStableIdleSamples else {
             return false
         }
         pollsStarted += 1
@@ -124,6 +131,27 @@ enum ScoutRefreshPolicy {
     }
 }
 
+enum ScoutLifecyclePresentation {
+    static func activityLabel(
+        serverLabel: String,
+        actionInFlight: Bool
+    ) -> String {
+        actionInFlight ? "Updating" : serverLabel
+    }
+
+    static func controlsDisabled(
+        serverBusy: Bool,
+        actionInFlight: Bool
+    ) -> Bool {
+        serverBusy || actionInFlight
+    }
+}
+
+private enum ScoutMimicLifecycleAction: Equatable {
+    case restart(Int)
+    case remove(Int)
+}
+
 /// Squirrel Scouts view: scout status, service profiles, and virtual fake hosts.
 struct SquirrelScoutsView: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -143,6 +171,7 @@ struct SquirrelScoutsView: View {
     @State private var actionMessage: String?
     @State private var actionMessageIsError = false
     @State private var loadError: String?
+    @State private var lifecycleAction: ScoutMimicLifecycleAction?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -240,6 +269,7 @@ struct SquirrelScoutsView: View {
                 .disabled(
                     isRunningScout
                     || scoutStatus?.isRunning == true
+                    || lifecycleControlsDisabled
                     || scoutStatus?.enabled != true
                 )
             }
@@ -258,7 +288,14 @@ struct SquirrelScoutsView: View {
                         icon: "network"
                     )
                     MetricCard(title: "Interval", value: "\(status.intervalMinutes)m", icon: "timer")
-                    MetricCard(title: "Status", value: status.isRunning ? "Scouting" : "Idle", icon: "circle.fill")
+                    MetricCard(
+                        title: "Status",
+                        value: ScoutLifecyclePresentation.activityLabel(
+                            serverLabel: status.activityLabel,
+                            actionInFlight: lifecycleAction != nil
+                        ),
+                        icon: "circle.fill"
+                    )
                 }
 
                 if let lastScout = status.lastScoutAt {
@@ -336,6 +373,7 @@ struct SquirrelScoutsView: View {
                     isDeployingMimics
                     || isRunningScout
                     || scoutStatus?.isRunning == true
+                    || lifecycleControlsDisabled
                     || scoutStatus?.enabled != true
                 )
             }
@@ -347,12 +385,12 @@ struct SquirrelScoutsView: View {
             .font(Typography.bodySmall)
             .foregroundStyle(Theme.textSecondary(colorScheme))
 
-            if mimics.isEmpty {
+            if operationalMimics.isEmpty {
                 HStack(spacing: Spacing.md) {
                     Image(systemName: "theatermasks")
                         .font(.system(size: 24))
                         .foregroundStyle(Theme.textTertiary(colorScheme))
-                    Text("No fake hosts deployed yet. Run Scout to discover services and fill available capacity.")
+                    Text("No active fake hosts. Run Scout to discover services and fill available capacity.")
                         .font(Typography.bodySmall)
                         .foregroundStyle(Theme.textSecondary(colorScheme))
                 }
@@ -366,8 +404,12 @@ struct SquirrelScoutsView: View {
                 .cornerRadius(Spacing.radiusLg)
             } else {
                 Text(
-                    "\(mimicGroups.count) fake hosts · "
-                    + "\(mimics.count) service decoys"
+                    "\(mimicGroups.count) active "
+                        + (mimicGroups.count == 1 ? "fake host" : "fake hosts")
+                        + " · \(operationalMimics.count) "
+                        + (operationalMimics.count == 1
+                            ? "service decoy"
+                            : "service decoys")
                 )
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
@@ -376,8 +418,14 @@ struct SquirrelScoutsView: View {
         }
     }
 
+    private var operationalMimics: [MimicDecoySummary] {
+        mimics.filter {
+            $0.status == "active" || $0.status == "degraded"
+        }
+    }
+
     private var mimicGroups: [MimicHostGroup] {
-        MimicHostGroup.grouping(mimics)
+        MimicHostGroup.operationalGrouping(mimics)
     }
 
     private let mimicColumns = [GridItem(.adaptive(minimum: 340), spacing: Spacing.md)]
@@ -399,12 +447,16 @@ struct SquirrelScoutsView: View {
 
                 VStack(alignment: .leading, spacing: Spacing.xs) {
                     if editingMimicGroupID == group.id {
-                        TextField("hostname.local", text: $hostnameDraft)
+                        TextField("hostname, hostname.local, or hostname.localdomain", text: $hostnameDraft)
                             .textFieldStyle(.roundedBorder)
                             .font(Typography.mono)
                             .onSubmit {
                                 Task { await saveHostname(for: group) }
                             }
+
+                        Text("Suffix is optional. .local and .localdomain are supported.")
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.textTertiary(colorScheme))
 
                         HStack(spacing: Spacing.sm) {
                             Button("Cancel") {
@@ -473,11 +525,20 @@ struct SquirrelScoutsView: View {
                         Button {
                             Task { await restartMimic(representative.id) }
                         } label: {
-                            Label("Restart fake host", systemImage: "arrow.clockwise")
+                            if lifecycleAction == .restart(representative.id) {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label(
+                                    "Restart fake host",
+                                    systemImage: "arrow.clockwise"
+                                )
                                 .font(Typography.bodySmall)
+                            }
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(Theme.accentDefault(colorScheme))
+                        .disabled(lifecycleControlsDisabled)
                     }
 
                     Spacer()
@@ -485,11 +546,17 @@ struct SquirrelScoutsView: View {
                     Button {
                         Task { await removeMimic(representative.id) }
                     } label: {
-                        Label("Remove fake host", systemImage: "trash")
-                            .font(Typography.bodySmall)
+                        if lifecycleAction == .remove(representative.id) {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Remove fake host", systemImage: "trash")
+                                .font(Typography.bodySmall)
+                        }
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.statusError(colorScheme))
+                    .disabled(lifecycleControlsDisabled)
                     .help("Remove this fake host and all of its service decoys")
                 }
             }
@@ -835,6 +902,9 @@ struct SquirrelScoutsView: View {
 
     private func restartMimic(_ id: Int) async {
         guard let client = appState.sensorClient else { return }
+        guard !lifecycleControlsDisabled else { return }
+        lifecycleAction = .restart(id)
+        defer { lifecycleAction = nil }
         do {
             try await client.request(.restartMimic(id: id))
             await loadAll()
@@ -842,6 +912,7 @@ struct SquirrelScoutsView: View {
             actionMessage = "Fake host restarted."
             actionMessageIsError = false
         } catch {
+            await loadAll()
             actionMessage = "Could not restart fake host: \(error.localizedDescription)"
             actionMessageIsError = true
         }
@@ -849,6 +920,9 @@ struct SquirrelScoutsView: View {
 
     private func removeMimic(_ id: Int) async {
         guard let client = appState.sensorClient else { return }
+        guard !lifecycleControlsDisabled else { return }
+        lifecycleAction = .remove(id)
+        defer { lifecycleAction = nil }
         do {
             try await client.request(.removeMimic(id: id))
             await loadAll()
@@ -860,6 +934,7 @@ struct SquirrelScoutsView: View {
             actionMessage = "Fake host removed."
             actionMessageIsError = false
         } catch {
+            await loadAll()
             actionMessage = "Could not remove fake host: \(error.localizedDescription)"
             actionMessageIsError = true
         }
@@ -881,6 +956,13 @@ struct SquirrelScoutsView: View {
     }
 
     // MARK: - Helpers
+
+    private var lifecycleControlsDisabled: Bool {
+        ScoutLifecyclePresentation.controlsDisabled(
+            serverBusy: scoutStatus?.lifecycleBusy == true,
+            actionInFlight: lifecycleAction != nil
+        )
+    }
 
     private func mimicHostTitle(_ group: MimicHostGroup) -> String {
         if let hostname = group.hostname, !hostname.isEmpty {

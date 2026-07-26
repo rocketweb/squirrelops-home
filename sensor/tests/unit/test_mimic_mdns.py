@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,6 +12,7 @@ from squirrelops_home_sensor.scouts.mdns import (
     generate_mimic_hostname,
     mdns_service_type_for,
     mimic_display_name,
+    network_uses_host_identifiers,
     should_refresh_mimic_name,
 )
 
@@ -24,58 +26,89 @@ class TestGenerateMimicHostname:
         h2 = generate_mimic_hostname(None, "smart_home", "192.168.1.200")
         assert h1 == h2
 
-    def test_different_ips_give_different_hostnames(self):
-        """Different IPs produce different hostnames."""
-        h1 = generate_mimic_hostname(None, "smart_home", "192.168.1.200")
-        h2 = generate_mimic_hostname(None, "smart_home", "192.168.1.201")
-        assert h1 != h2
-
-    def test_uses_mdns_name_as_base(self):
-        """Sanitized source names seed a distinct fake-host identity."""
+    def test_source_name_informs_style_without_being_cloned(self):
+        """A fake host never advertises a numbered clone of its source."""
         h = generate_mimic_hostname("tp-link-plug", "smart_home", "192.168.1.200")
-        assert h.startswith("tp-link-plug-")
-        assert h != "tp-link-plug"
+        assert not h.startswith("tp-link-plug-")
+        assert h in {"home", "hub", "control", "automation"}
 
     def test_strips_local_suffix(self):
         """Generated names do not carry .local or random suffixes."""
         h = generate_mimic_hostname("my-device.local.", "generic", "192.168.1.200")
         assert ".local" not in h
-        assert h.startswith("my-device-")
+        assert not re.search(r"-(?:\d+|[0-9a-f]{4})$", h)
 
     def test_category_prefix_for_smart_home(self):
         """Smart home category uses plausible generic names."""
         h = generate_mimic_hostname(None, "smart_home", "192.168.1.200")
-        assert h.rsplit("-", 1)[0] in {"home", "hub", "control", "automation"}
+        assert h in {"home", "hub", "control", "automation"}
 
     def test_category_prefix_for_camera(self):
         """Camera category uses plausible generic names."""
         h = generate_mimic_hostname(None, "camera", "192.168.1.200")
-        assert h.rsplit("-", 1)[0] in {
+        assert h in {
             "camera", "security", "garage-cam", "porch-cam",
         }
 
     def test_unknown_category_falls_back_to_generic(self):
         """Unknown device category uses generic bait names."""
         h = generate_mimic_hostname(None, "unknown_type", "192.168.1.200")
-        assert h.rsplit("-", 1)[0] in {
+        assert h in {
             "files", "media", "business", "office", "docs", "backup",
         }
 
-    def test_hostname_has_stable_address_suffix(self):
-        """Hostnames remain readable while service instances stay unique."""
-        h = generate_mimic_hostname(None, "nas", "192.168.1.200")
-        assert h.rsplit("-", 1)[0] in {"files", "backup", "archive", "storage"}
-        suffix = h.rsplit("-", 1)[-1]
-        assert len(suffix) == 4
-        assert all(character in "0123456789abcdef" for character in suffix)
-
     @pytest.mark.parametrize("category", ["nas", "printer", "generic"])
-    def test_full_virtual_ip_pool_has_unique_hostnames(self, category):
-        names = {
-            generate_mimic_hostname(None, category, f"192.168.1.{octet}")
-            for octet in range(200, 251)
-        }
-        assert len(names) == 51
+    def test_full_profile_names_are_unique_without_generic_identifiers(self, category):
+        names: set[str] = set()
+        for octet in range(200, 210):
+            name = generate_mimic_hostname(
+                None,
+                category,
+                f"192.168.1.{octet}",
+                existing_hostnames=names,
+            )
+            names.add(name)
+        assert len(names) == 10
+        assert all(not re.search(r"-(?:\d+|[0-9a-f]{4})$", name) for name in names)
+
+    def test_ai_suggestion_is_preferred_after_local_validation(self):
+        assert generate_mimic_hostname(
+            None,
+            "nas",
+            "192.168.1.200",
+            existing_hostnames={"files", "media"},
+            suggested_names=["starbase-files"],
+        ) == "starbase-files"
+
+    def test_ai_collision_falls_back_to_generic_name(self):
+        name = generate_mimic_hostname(
+            None,
+            "nas",
+            "192.168.1.200",
+            existing_hostnames={"starbase-files"},
+            suggested_names=["starbase-files"],
+        )
+        assert name != "starbase-files"
+        assert name in {"files", "backup", "archive", "storage"}
+
+    def test_ai_identifier_is_rejected_when_network_has_no_identifier_pattern(self):
+        name = generate_mimic_hostname(
+            None,
+            "nas",
+            "192.168.1.200",
+            existing_hostnames={"media", "office"},
+            suggested_names=["starbase-2042", "files-a6d6"],
+            allow_identifiers=False,
+        )
+        assert name not in {"starbase-2042", "files-a6d6"}
+
+    def test_network_identifier_detection_requires_a_pattern(self):
+        assert network_uses_host_identifiers(
+            ["office-01.local", "office-02.local", "media"]
+        )
+        assert not network_uses_host_identifiers(
+            ["iphone-15-pro.local", "media", "files", "office"]
+        )
 
     def test_mimic_display_name_adds_local_suffix(self):
         """Decoy display names match the advertised local hostname."""
@@ -121,10 +154,17 @@ class TestMimicMDNSAdvertiser:
         adv = MimicMDNSAdvertiser()
         zeroconf = AsyncMock()
         adv._zeroconf = zeroconf
+        existing: set[str] = set()
 
         for decoy_id, octet in enumerate((200, 204), start=1):
             ip = f"192.168.1.{octet}"
-            hostname = generate_mimic_hostname(None, "nas", ip)
+            hostname = generate_mimic_hostname(
+                None,
+                "nas",
+                ip,
+                existing_hostnames=existing,
+            )
+            existing.add(hostname)
             assert await adv.register(
                 decoy_id=decoy_id,
                 virtual_ip=ip,

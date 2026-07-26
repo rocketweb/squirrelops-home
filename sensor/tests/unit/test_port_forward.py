@@ -271,6 +271,37 @@ class TestPortForwardManager:
         assert mgr.protected_endpoint_count == 2
 
     @pytest.mark.asyncio
+    async def test_startup_quarantine_deduplicates_historical_rows_by_ip(self):
+        """Stopped history sharing an active IP is one helper endpoint."""
+        mgr, priv_ops = self._make_manager()
+
+        assert await mgr.quarantine_endpoints({
+            1: "192.168.1.200",
+            2: "192.168.1.200",
+            3: "192.168.1.201",
+        })
+
+        priv_ops.setup_port_forwards.assert_awaited_once_with(
+            rules=[],
+            protected_endpoints=[
+                {"ip": "192.168.1.200", "direct_ports": []},
+                {"ip": "192.168.1.201", "direct_ports": []},
+            ],
+            interface="en0",
+        )
+
+        priv_ops.setup_port_forwards.reset_mock()
+        assert await mgr.remove_forwards(1)
+        priv_ops.setup_port_forwards.assert_awaited_once_with(
+            rules=[],
+            protected_endpoints=[
+                {"ip": "192.168.1.200", "direct_ports": []},
+                {"ip": "192.168.1.201", "direct_ports": []},
+            ],
+            interface="en0",
+        )
+
+    @pytest.mark.asyncio
     async def test_normal_rules_replace_startup_quarantine(self):
         mgr, priv_ops = self._make_manager()
         await mgr.quarantine_endpoints({1: "192.168.1.200"})

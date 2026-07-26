@@ -19,12 +19,16 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------
-# Version pinning — update this for each release
+# Release template. Update the version for each release. The release workflow
+# replaces the digest placeholder; a checkout copy fails closed for install and
+# upgrade operations.
 # -----------------------------------------------------------------------
-SQUIRRELOPS_VERSION="1.1.14"
+SQUIRRELOPS_SENSOR_VERSION="2.0.0"
+SQUIRRELOPS_IMAGE_DIGEST="__RELEASE_IMAGE_DIGEST__"
 
 INSTALL_DIR="/opt/squirrelops"
 IMAGE="ghcr.io/rocketweb/squirrelops-sensor"
+IMAGE_REF="${IMAGE}@${SQUIRRELOPS_IMAGE_DIGEST}"
 COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
 
 # Defaults
@@ -55,7 +59,7 @@ error() { echo -e "${RED}[x]${NC} $*" >&2; exit 1; }
 # -----------------------------------------------------------------------
 usage() {
     cat <<EOF
-SquirrelOps Home Sensor — Linux Installer v${SQUIRRELOPS_VERSION}
+SquirrelOps Home Sensor — Linux Installer v${SQUIRRELOPS_SENSOR_VERSION}
 
 Usage:
   sudo bash install.sh [OPTIONS]
@@ -158,6 +162,12 @@ preflight() {
     docker compose version >/dev/null 2>&1 || error "docker compose (v2) is required. Install: https://docs.docker.com/compose/install/"
 }
 
+validate_release_image() {
+    if [[ ! "$SQUIRRELOPS_IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        error "Release installer is missing its pinned container digest. Download install.sh from a published release."
+    fi
+}
+
 # =======================================================================
 # ACTION: Uninstall
 # =======================================================================
@@ -201,8 +211,9 @@ do_uninstall() {
 # =======================================================================
 do_upgrade() {
     preflight
+    validate_release_image
 
-    info "SquirrelOps Home Sensor — Upgrade to v${SQUIRRELOPS_VERSION}"
+    info "SquirrelOps Home Sensor — Upgrade to v${SQUIRRELOPS_SENSOR_VERSION}"
 
     if [ ! -f "$COMPOSE_FILE" ]; then
         error "No existing installation found at $INSTALL_DIR. Run without --upgrade to install."
@@ -216,14 +227,14 @@ do_upgrade() {
         *)               error "Unsupported architecture: $ARCH" ;;
     esac
 
-    info "Pulling sensor image v${SQUIRRELOPS_VERSION} for $PLATFORM..."
-    docker pull --platform "$PLATFORM" "$IMAGE:$SQUIRRELOPS_VERSION"
+    info "Pulling the pinned sensor image for v${SQUIRRELOPS_SENSOR_VERSION} ($PLATFORM)..."
+    docker pull --platform "$PLATFORM" "$IMAGE_REF"
 
-    # Update the image tag in the compose file to the new version
+    # Update the compose file to the immutable manifest-list digest.
     if command -v sed >/dev/null 2>&1; then
-        sed -i.bak "s|image: ${IMAGE}:.*|image: ${IMAGE}:${SQUIRRELOPS_VERSION}|" "$COMPOSE_FILE"
+        sed -i.bak "s|image: ${IMAGE}.*|image: ${IMAGE_REF}|" "$COMPOSE_FILE"
         rm -f "${COMPOSE_FILE}.bak"
-        info "Updated $COMPOSE_FILE to v${SQUIRRELOPS_VERSION}"
+        info "Updated $COMPOSE_FILE to v${SQUIRRELOPS_SENSOR_VERSION}"
     fi
 
     info "Restarting sensor..."
@@ -238,7 +249,7 @@ do_upgrade() {
     health_check "$check_port"
 
     echo ""
-    info "Upgrade to v${SQUIRRELOPS_VERSION} complete."
+    info "Upgrade to v${SQUIRRELOPS_SENSOR_VERSION} complete."
 }
 
 # =======================================================================
@@ -246,8 +257,9 @@ do_upgrade() {
 # =======================================================================
 do_install() {
     preflight
+    validate_release_image
 
-    info "SquirrelOps Home Sensor — Install v${SQUIRRELOPS_VERSION}"
+    info "SquirrelOps Home Sensor — Install v${SQUIRRELOPS_SENSOR_VERSION}"
 
     # -------------------------------------------------------------------
     # Detect architecture
@@ -276,11 +288,10 @@ do_install() {
     # -------------------------------------------------------------------
     # Build environment block for docker-compose.yml
     # -------------------------------------------------------------------
+    LAN_SUBNET="${SUBNET:-192.168.1.0/24}"
     ENV_BLOCK="      SQUIRRELOPS_DATA_DIR: /app/data"
     ENV_BLOCK="${ENV_BLOCK}\n      SQUIRRELOPS_PORT: \"${PORT}\""
-    if [ -n "$SUBNET" ]; then
-        ENV_BLOCK="${ENV_BLOCK}\n      SQUIRRELOPS_SUBNET: \"${SUBNET}\""
-    fi
+    ENV_BLOCK="${ENV_BLOCK}\n      SQUIRRELOPS_SUBNET: \"${LAN_SUBNET}\""
     if [ -n "$PROFILE" ]; then
         ENV_BLOCK="${ENV_BLOCK}\n      SQUIRRELOPS_PROFILE: \"${PROFILE}\""
     fi
@@ -289,24 +300,86 @@ do_install() {
     # Write docker-compose.yml
     # -------------------------------------------------------------------
     cat > "$COMPOSE_FILE" <<EOF
-# SquirrelOps Home Sensor v${SQUIRRELOPS_VERSION} — managed by install.sh
+# SquirrelOps Home Sensor v${SQUIRRELOPS_SENSOR_VERSION} — managed by install.sh
 # Do not edit manually — re-run the installer to update.
 
 services:
-  sensor:
-    image: ${IMAGE}:${SQUIRRELOPS_VERSION}
+  network-helper:
+    image: ${IMAGE_REF}
     network_mode: host
+    user: "0:0"
+    command:
+      - /app/.venv/bin/python
+      - -m
+      - squirrelops_home_sensor.privileged.linux_sidecar
+    cap_drop:
+      - ALL
     cap_add:
       - NET_RAW
       - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    volumes:
+      - helper_socket:/run/squirrelops
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    environment:
+      SQUIRRELOPS_NETWORK_HELPER_SOCKET: /run/squirrelops/network-helper.sock
+      SQUIRRELOPS_SENSOR_UID: "10001"
+      SQUIRRELOPS_SENSOR_BRIDGE_IP: 172.30.0.2
+      SQUIRRELOPS_LAN_SUBNET: "${LAN_SUBNET}"
+      SQUIRRELOPS_NETWORK_INTERFACE: auto
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -m
+        - squirrelops_home_sensor.privileged.linux_sidecar
+        - --healthcheck
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  sensor:
+    image: ${IMAGE_REF}
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    ports:
+      - "${PORT}:${PORT}"
     volumes:
       - sensor_data:/app/data
+      - helper_socket:/run/squirrelops:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     environment:
 $(echo -e "$ENV_BLOCK")
+      SQUIRRELOPS_NETWORK_HELPER_SOCKET: /run/squirrelops/network-helper.sock
+      SQUIRRELOPS_SENSOR_BRIDGE_IP: 172.30.0.2
+    depends_on:
+      network-helper:
+        condition: service_healthy
+    networks:
+      sensor_private:
+        ipv4_address: 172.30.0.2
     restart: unless-stopped
+
+networks:
+  sensor_private:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/28
 
 volumes:
   sensor_data:
+  helper_socket:
 EOF
 
     info "Configuration written to $COMPOSE_FILE"
@@ -314,8 +387,8 @@ EOF
     # -------------------------------------------------------------------
     # Pull image
     # -------------------------------------------------------------------
-    info "Pulling sensor image v${SQUIRRELOPS_VERSION} for $PLATFORM..."
-    docker pull --platform "$PLATFORM" "$IMAGE:$SQUIRRELOPS_VERSION"
+    info "Pulling the pinned sensor image for v${SQUIRRELOPS_SENSOR_VERSION} ($PLATFORM)..."
+    docker pull --platform "$PLATFORM" "$IMAGE_REF"
 
     # -------------------------------------------------------------------
     # Start sensor
@@ -333,7 +406,7 @@ EOF
     # -------------------------------------------------------------------
     echo ""
     echo -e "${BOLD}=========================================${NC}"
-    echo -e "${BOLD}  SquirrelOps Home Sensor v${SQUIRRELOPS_VERSION}${NC}"
+    echo -e "${BOLD}  SquirrelOps Home Sensor v${SQUIRRELOPS_SENSOR_VERSION}${NC}"
     echo -e "${BOLD}  is running!${NC}"
     echo -e "${BOLD}=========================================${NC}"
     echo ""

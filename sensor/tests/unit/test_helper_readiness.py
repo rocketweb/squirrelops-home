@@ -156,7 +156,11 @@ async def test_helper_availability_rejects_accept_then_close() -> None:
 def test_package_probes_helper_rpc_as_sensor_account() -> None:
     postinstall = (REPO_ROOT / "scripts/pkg/postinstall").read_text(encoding="utf-8")
 
-    assert '/usr/bin/sudo -n -u "$SENSOR_USER" "$PYTHON_PATH"' in postinstall
+    assert (
+        '/usr/bin/sudo -n -u "$SENSOR_USER" /usr/bin/env -i'
+        in postinstall
+    )
+    assert '"$PYTHON_PATH" -I - "$HELPER_SOCKET"' in postinstall
     assert '"method": "ping"' in postinstall
     assert '"protocol_version"' in postinstall
     assert '"arp_scan"' in postinstall
@@ -189,7 +193,7 @@ def test_package_fails_closed_unless_launchd_identity_is_set_and_verified() -> N
 
     assert 'set_launchd_identity "UserName" "$SENSOR_USER"' in identity_block
     assert 'set_launchd_identity "GroupName" "$SENSOR_GROUP"' in identity_block
-    assert 'PlistBuddy -c "Print :${key}" "$PLIST_DEST"' in identity_block
+    assert 'PlistBuddy -c "Print :${key}" "$PLIST_TEMP"' in identity_block
     assert 'if [ "$actual_value" != "$expected_value" ]; then' in identity_block
     assert "Cannot configure the required launchd service identity" in identity_block
     assert "exit 1" in identity_block
@@ -202,11 +206,15 @@ def test_package_fails_closed_unless_launchd_identity_is_set_and_verified() -> N
 
 def test_package_fails_closed_when_launchd_template_is_missing() -> None:
     postinstall = (REPO_ROOT / "scripts/pkg/postinstall").read_text(encoding="utf-8")
-    template_start = postinstall.index('if [ -f "$PLIST_TEMPLATE" ]; then')
+    template_start = postinstall.index('if [ -L "$PLIST_TEMPLATE" ]')
     template_end = postinstall.index("# Step 3b: Run the daemon", template_start)
     template_block = postinstall[template_start:template_end]
 
-    assert "Plist template not found" in template_block
+    assert "Plist template is missing or unsafe" in template_block
+    assert "'%Su:%Sg:%HT:%l'" in template_block
+    assert "root:wheel:Regular File:1" in template_block
+    assert "/usr/bin/mktemp" in template_block
+    assert '"$PLIST_TEMPLATE" > "$PLIST_TEMP"' in template_block
     assert ">&2" in template_block
     assert "exit 1" in template_block
     assert "exit 0" not in template_block
@@ -222,20 +230,21 @@ def test_package_requires_and_verifies_sensor_storage_permissions() -> None:
     identity_block = postinstall[identity_start:identity_end]
 
     assert 'if ! configure_sensor_permissions; then' in identity_block
-    assert 'chown -R "${SENSOR_USER}:${SENSOR_GROUP}" "$DATA_DIR" "$LOG_DIR"' in (
-        identity_block
-    )
+    assert "chown -R" not in postinstall
     assert (
-        'chown "${SENSOR_USER}:${SENSOR_GROUP}" "$INSTALL_DIR/run" "$CONFIG_FILE"'
+        '/usr/sbin/chown "${SENSOR_USER}:${SENSOR_GROUP}" \\\n'
+        '        "$DATA_DIR" "$INSTALL_DIR/run" "$CONFIG_FILE"'
         in identity_block
     )
     assert 'chmod 700 "$DATA_DIR"' in identity_block
     assert 'chmod 700 "$LOG_DIR"' in identity_block
     assert 'chmod 755 "$INSTALL_DIR/run"' in identity_block
     assert 'chmod 600 "$CONFIG_FILE"' in identity_block
-    assert 'find "$LOG_DIR" -maxdepth 1 -type f -exec chmod 600 {} \\;' in (
-        identity_block
-    )
+    assert '/usr/bin/find "$LOG_DIR" -xdev -maxdepth 1 -type f' in identity_block
+    assert "-exec /bin/chmod 600 {} \\;" in identity_block
+    assert 'validate_mutable_tree "$DATA_DIR"' in postinstall
+    assert 'validate_mutable_tree "$LOG_DIR"' in postinstall
+    assert "'%Su|%Sg|%HT|%l'" in postinstall
     assert '/usr/bin/stat -f "%Su:%Sg:%Lp"' in identity_block
     assert 'verify_owner_mode "$DATA_DIR" "700"' in identity_block
     assert 'verify_owner_mode "$LOG_DIR" "700"' in identity_block

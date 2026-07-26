@@ -8,9 +8,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from squirrelops_home_sensor.devices.classifier import DeviceClassificationEvidence
 from squirrelops_home_sensor.devices.llm_classifier import (
+    LLM_PROVIDER_ENDPOINTS,
     OpenAICompatibleClassifier,
     _build_user_prompt,
+    resolve_llm_endpoint,
 )
 from squirrelops_home_sensor.devices.signatures import DeviceClassification
 from squirrelops_home_sensor.fingerprint.composite import CompositeFingerprint
@@ -50,12 +53,58 @@ _SAMPLE_FINGERPRINT = CompositeFingerprint(
     connection_pattern_hash="ghi789",
 )
 
+_SAMPLE_EVIDENCE = DeviceClassificationEvidence(
+    mac_oui="A4:83:E7",
+    dns_hostname="iphone-kitchen",
+    mdns_hostname="sarahs-iphone.local.",
+    open_ports=(22, 443, 7000),
+    detected_services=("ssh", "https", "airplay"),
+    dhcp_options=(1, 3, 6, 15, 119, 252),
+    mdns_service_types=("_airplay._tcp.local.", "_raop._tcp.local."),
+    upnp_friendly_name="Kitchen Phone",
+    upnp_manufacturer="Apple Inc.",
+    upnp_model_name="iPhone",
+    upnp_server_header="iOS UPnP/1.0",
+)
+
 _SAMPLE_LLM_REPLY = {
     "manufacturer": "Apple",
     "device_type": "smartphone",
     "model": "iPhone 15",
     "confidence": 0.92,
 }
+
+
+@pytest.mark.parametrize(
+    ("provider", "configured", "expected"),
+    [
+        ("lmstudio", None, "http://localhost:1234/v1"),
+        ("ollama", None, "http://localhost:11434/v1"),
+        (
+            "openrouter",
+            "https://attacker.invalid/v1",
+            "https://openrouter.ai/api/v1",
+        ),
+        (
+            "fireworks",
+            "https://attacker.invalid/v1",
+            "https://api.fireworks.ai/inference/v1",
+        ),
+        ("custom", "https://models.example/v1", "https://models.example/v1"),
+        ("none", "https://models.example/v1", None),
+    ],
+)
+def test_provider_endpoint_resolution(
+    provider: str,
+    configured: str | None,
+    expected: str | None,
+) -> None:
+    assert resolve_llm_endpoint(provider, configured) == expected
+
+
+def test_cloud_provider_endpoints_are_https() -> None:
+    assert LLM_PROVIDER_ENDPOINTS["openrouter"].startswith("https://")
+    assert LLM_PROVIDER_ENDPOINTS["fireworks"].startswith("https://")
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +152,51 @@ class TestSuccessfulClassification:
         assert result.model == "iPhone 15"
         assert result.confidence == pytest.approx(0.92)
         assert result.source == "llm"
+
+    @pytest.mark.asyncio
+    async def test_suggests_pattern_matching_decoy_hostnames(
+        self, classifier_no_key: OpenAICompatibleClassifier
+    ) -> None:
+        mock_response = _make_chat_response({
+            "hostnames": ["apollo-files", "apollo-media"],
+        })
+        with patch.object(
+            classifier_no_key._client,
+            "post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+            names = await classifier_no_key.suggest_decoy_hostnames(
+                existing_hostnames=["apollo-laptop", "apollo-printer"],
+                count=2,
+                allow_identifiers=False,
+            )
+
+        assert names == ["apollo-files", "apollo-media"]
+        prompt = mock_post.call_args.kwargs["json"]["messages"][1]["content"]
+        assert "apollo-laptop" in prompt
+        assert "Do not add numeric" in prompt
+
+    @pytest.mark.asyncio
+    async def test_decoy_name_suggestions_reject_non_string_and_excess_values(
+        self, classifier_no_key: OpenAICompatibleClassifier
+    ) -> None:
+        mock_response = _make_chat_response({
+            "hostnames": ["files", 42, "media", "office"],
+        })
+        with patch.object(
+            classifier_no_key._client,
+            "post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+            names = await classifier_no_key.suggest_decoy_hostnames(
+                existing_hostnames=["home"],
+                count=2,
+                allow_identifiers=False,
+            )
+
+        assert names == ["files", "media"]
 
     @pytest.mark.asyncio
     async def test_sends_to_correct_url(
@@ -286,23 +380,39 @@ class TestPromptConstruction:
         assert "sarahs-iphone" in prompt
         assert "mDNS hostname" in prompt
 
-    def test_prompt_includes_dhcp_hash(self) -> None:
-        fp = CompositeFingerprint(dhcp_fingerprint_hash="abc123")
-        prompt = _build_user_prompt(fp)
-        assert "abc123" in prompt
-        assert "DHCP fingerprint hash" in prompt
+    def test_prompt_uses_interpretable_evidence_instead_of_hashes(self) -> None:
+        prompt = _build_user_prompt(_SAMPLE_FINGERPRINT, _SAMPLE_EVIDENCE)
+        assert "Open TCP ports: 22, 443, 7000" in prompt
+        assert "Detected services: ssh, https, airplay" in prompt
+        assert "DHCP option codes" in prompt
+        assert "1, 3, 6, 15, 119, 252" in prompt
+        assert "_airplay._tcp.local." in prompt
+        assert "Kitchen Phone" in prompt
+        assert "Apple Inc." in prompt
+        assert "iPhone" in prompt
+        assert "iOS UPnP/1.0" in prompt
 
-    def test_prompt_includes_open_ports_hash(self) -> None:
-        fp = CompositeFingerprint(open_ports_hash="def456")
-        prompt = _build_user_prompt(fp)
-        assert "def456" in prompt
-        assert "Open ports hash" in prompt
+    def test_prompt_never_includes_local_fingerprint_hashes(self) -> None:
+        prompt = _build_user_prompt(_SAMPLE_FINGERPRINT, _SAMPLE_EVIDENCE)
+        assert "abc123" not in prompt
+        assert "def456" not in prompt
+        assert "ghi789" not in prompt
+        assert "fingerprint hash" not in prompt.lower()
+        assert "connection pattern" not in prompt.lower()
 
-    def test_prompt_includes_connection_pattern_hash(self) -> None:
-        fp = CompositeFingerprint(connection_pattern_hash="ghi789")
-        prompt = _build_user_prompt(fp)
-        assert "ghi789" in prompt
-        assert "Connection pattern hash" in prompt
+    def test_prompt_redacts_full_addresses_embedded_in_metadata(self) -> None:
+        evidence = DeviceClassificationEvidence(
+            dns_hostname="camera at 192.168.1.25",
+            mdns_hostname="device-aabbccddeeff.local",
+            upnp_friendly_name="device-AA:BB:CC:DD:EE:FF",
+            upnp_server_header="bridge fe80::1234",
+        )
+        prompt = _build_user_prompt(CompositeFingerprint(), evidence)
+        assert "192.168.1.25" not in prompt
+        assert "AA:BB:CC:DD:EE:FF" not in prompt
+        assert "aabbccddeeff" not in prompt
+        assert "fe80::1234" not in prompt
+        assert "[redacted-address]" in prompt
 
     def test_prompt_omits_none_signals(self) -> None:
         fp = CompositeFingerprint(mac_address="A4:83:E7:11:22:33")

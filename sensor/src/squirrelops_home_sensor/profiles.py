@@ -8,8 +8,8 @@ user may override it at any time.
 
 Profiles:
     Lite     -- 15-min scans, <=3 classic decoys, scouts/mimics disabled
-    Standard -- 5-min scans, <=3 classic + <=10 mimic decoys
-    Full     -- 1-min scans, <=3 classic + <=30 mimic decoys
+    Standard -- 5-min scans, <=3 host listeners + <=5 fake hosts
+    Full     -- 1-min scans, <=3 host listeners + <=10 fake hosts
 """
 
 from __future__ import annotations
@@ -58,11 +58,11 @@ class ProfileSettings:
     """Immutable settings for a single resource profile."""
 
     scan_interval: int  # seconds between active scans
-    max_decoys: int  # maximum concurrent classic decoy services
+    max_decoys: int  # maximum concurrent classic host listeners
     llm_mode: LLMMode  # classification strategy
     scout_interval_minutes: int = 30  # 0 = disabled
-    max_mimic_decoys: int = 10
-    max_virtual_ips: int = 15
+    max_mimic_decoys: int = 5
+    max_virtual_ips: int = 5
 
     @property
     def total_decoy_capacity(self) -> int:
@@ -88,16 +88,16 @@ PROFILE_SETTINGS: dict[ResourceProfile, ProfileSettings] = {
         max_decoys=3,
         llm_mode=LLMMode.CLOUD_LLM,
         scout_interval_minutes=60,
-        max_mimic_decoys=10,
-        max_virtual_ips=10,
+        max_mimic_decoys=5,
+        max_virtual_ips=5,
     ),
     ResourceProfile.FULL: ProfileSettings(
         scan_interval=60,
         max_decoys=3,
         llm_mode=LLMMode.LOCAL_LLM,
         scout_interval_minutes=30,
-        max_mimic_decoys=30,
-        max_virtual_ips=30,
+        max_mimic_decoys=10,
+        max_virtual_ips=10,
     ),
 }
 

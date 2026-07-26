@@ -299,7 +299,7 @@ enum PreviewData {
     // MARK: - System
 
     static let health = HealthResponse(
-        version: "1.1.14",
+        version: "2.0.0",
         sensorId: "sensor-001",
         uptimeSeconds: 86400
     )

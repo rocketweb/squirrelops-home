@@ -21,6 +21,7 @@ struct AlertRow: View {
         case "device.new": return "New device"
         case "device.verification_needed": return "Device verification"
         case "device.mac_changed": return "MAC changed"
+        case "security.arp_conflict": return "ARP identity conflict"
         case "security.port_risk": return "Port risk"
         case "security.vendor_advisory": return "Vendor advisory"
         case "system.sensor_offline": return "Sensor offline"

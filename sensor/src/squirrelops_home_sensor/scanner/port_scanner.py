@@ -31,6 +31,23 @@ class PortResult:
     banner: str | None = None
 
 
+class PortScanResults(dict[str, list[PortResult]]):
+    """Open ports plus probes whose result was not authoritative.
+
+    A refusal proves a port is closed. Timeouts and network errors do not, so
+    callers must preserve any last-verified state for those exact ports.
+    """
+
+    def __init__(
+        self,
+        *args,
+        inconclusive_ports: dict[str, frozenset[int]] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.inconclusive_ports = inconclusive_ports or {}
+
+
 class PortScanner:
     """Async TCP connect scanner with optional banner grabbing.
 
@@ -93,7 +110,7 @@ class PortScanner:
         targets: list[str],
         ports: list[int],
         banner_timeout: float = 3.0,
-    ) -> dict[str, list[PortResult]]:
+    ) -> PortScanResults:
         """Scan targets for open TCP ports with service name lookup and banner grabbing.
 
         After TCP connect succeeds, attempts to read a banner (first bytes
@@ -116,7 +133,7 @@ class PortScanner:
             IPs with no open ports are omitted.
         """
         if not targets or not ports:
-            return {}
+            return PortScanResults()
 
         tasks = []
         for ip in targets:
@@ -126,14 +143,23 @@ class PortScanner:
         results_list = await asyncio.gather(*tasks)
 
         open_ports: dict[str, list[PortResult]] = defaultdict(list)
-        for ip, result in results_list:
+        inconclusive_ports: dict[str, set[int]] = defaultdict(set)
+        for ip, port, result, conclusive in results_list:
             if result is not None:
                 open_ports[ip].append(result)
+            elif not conclusive:
+                inconclusive_ports[ip].add(port)
 
-        return {
-            ip: sorted(results, key=lambda r: r.port)
-            for ip, results in open_ports.items()
-        }
+        return PortScanResults(
+            {
+                ip: sorted(results, key=lambda r: r.port)
+                for ip, results in open_ports.items()
+            },
+            inconclusive_ports={
+                ip: frozenset(port_list)
+                for ip, port_list in inconclusive_ports.items()
+            },
+        )
 
     async def _check_port(
         self, ip: str, port: int
@@ -151,15 +177,15 @@ class PortScanner:
                 writer.close()
                 await writer.wait_closed()
                 return (ip, port, True)
-            except (TimeoutError, ConnectionRefusedError, OSError):
+            except (TimeoutError, OSError):
                 return (ip, port, False)
 
     async def _check_port_with_banner(
         self, ip: str, port: int, banner_timeout: float,
-    ) -> tuple[str, PortResult | None]:
+    ) -> tuple[str, int, PortResult | None, bool]:
         """Check if a port is open and attempt to grab a banner.
 
-        Returns (ip, PortResult) if open, (ip, None) if closed.
+        The final boolean reports whether a negative result is authoritative.
         """
         async with self._semaphore:
             try:
@@ -167,8 +193,10 @@ class PortScanner:
                     asyncio.open_connection(ip, port),
                     timeout=self._timeout,
                 )
-            except (TimeoutError, ConnectionRefusedError, OSError):
-                return (ip, None)
+            except ConnectionRefusedError:
+                return (ip, port, None, True)
+            except (TimeoutError, OSError):
+                return (ip, port, None, False)
 
             # Port is open — try banner grab
             banner = None
@@ -184,11 +212,16 @@ class PortScanner:
                 pass
 
             service_name = get_service_name(port)
-            return (ip, PortResult(
-                port=port,
-                service_name=service_name,
-                banner=banner,
-            ))
+            return (
+                ip,
+                port,
+                PortResult(
+                    port=port,
+                    service_name=service_name,
+                    banner=banner,
+                ),
+                True,
+            )
 
     async def _grab_banner(
         self,

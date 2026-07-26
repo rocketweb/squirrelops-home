@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import httpx
 import websockets
 
+from squirrelops_home_sensor.netvalidation import resolve_lan_url
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 5.0  # seconds
@@ -102,12 +104,29 @@ class HomeAssistantClient:
 
     async def test_connection(self) -> bool:
         """Test connectivity to Home Assistant. Returns True if the API responds with 200."""
+        endpoint = f"{self._base_url}/api/"
+        resolved = await asyncio.to_thread(resolve_lan_url, endpoint)
+        if resolved is None:
+            logger.warning("Blocked Home Assistant connection to a non-LAN endpoint")
+            return False
         try:
-            async with httpx.AsyncClient() as client:
+            # Connect to the validated address observed immediately above.
+            # Preserve the configured hostname for HTTP virtual hosting and
+            # TLS SNI/certificate validation.
+            extensions = (
+                {"sni_hostname": resolved.hostname}
+                if endpoint.startswith("https://")
+                else None
+            )
+            async with httpx.AsyncClient(
+                trust_env=False,
+                follow_redirects=False,
+            ) as client:
                 resp = await client.get(
-                    f"{self._base_url}/api/",
-                    headers=self._headers,
+                    resolved.pinned_url,
+                    headers=self._headers | {"Host": resolved.host_header},
                     timeout=_TIMEOUT,
+                    extensions=extensions,
                 )
                 return resp.status_code == 200
         except httpx.HTTPError:
@@ -120,11 +139,38 @@ class HomeAssistantClient:
         Opens a short-lived WebSocket connection, authenticates, sends
         the command, and returns the result. Returns [] on any error.
         """
+        endpoint = f"{self._ws_url}/api/websocket"
+        http_endpoint = endpoint.replace("ws://", "http://", 1).replace(
+            "wss://",
+            "https://",
+            1,
+        )
+        resolved = await asyncio.to_thread(resolve_lan_url, http_endpoint)
+        if resolved is None:
+            logger.warning("Blocked Home Assistant WebSocket to a non-LAN endpoint")
+            return []
         try:
             async with asyncio.timeout(_TIMEOUT * 2):
-                async with websockets.connect(
-                    f"{self._ws_url}/api/websocket"
-                ) as ws:
+                if endpoint.startswith("wss://"):
+                    connection = websockets.connect(
+                        endpoint,
+                        host=resolved.connect_ip,
+                        port=resolved.port,
+                        proxy=None,
+                        open_timeout=_TIMEOUT,
+                        close_timeout=_TIMEOUT,
+                        server_hostname=resolved.hostname,
+                    )
+                else:
+                    connection = websockets.connect(
+                        endpoint,
+                        host=resolved.connect_ip,
+                        port=resolved.port,
+                        proxy=None,
+                        open_timeout=_TIMEOUT,
+                        close_timeout=_TIMEOUT,
+                    )
+                async with connection as ws:
                     # Wait for auth_required
                     msg = json.loads(await ws.recv())
                     if msg.get("type") != "auth_required":

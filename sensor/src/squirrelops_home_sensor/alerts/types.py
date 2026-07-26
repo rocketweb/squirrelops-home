@@ -62,6 +62,7 @@ class AlertType(enum.Enum):
     SYSTEM_LEARNING_COMPLETE = "system.learning_complete"
     DEVICE_REVIEW_REMINDER = "device.review_reminder"
     BEHAVIORAL_ANOMALY = "behavioral.anomaly"
+    SECURITY_ARP_CONFLICT = "security.arp_conflict"
     SECURITY_PORT_RISK = "security.port_risk"
     SECURITY_VENDOR_ADVISORY = "security.vendor_advisory"
 
@@ -78,6 +79,7 @@ ALERT_SEVERITY_MAP: dict[AlertType, Severity] = {
     AlertType.SYSTEM_LEARNING_COMPLETE: Severity.LOW,
     AlertType.DEVICE_REVIEW_REMINDER: Severity.LOW,
     AlertType.BEHAVIORAL_ANOMALY: Severity.MEDIUM,
+    AlertType.SECURITY_ARP_CONFLICT: Severity.HIGH,
     AlertType.SECURITY_PORT_RISK: Severity.MEDIUM,
     AlertType.SECURITY_VENDOR_ADVISORY: Severity.MEDIUM,
 }

@@ -96,6 +96,73 @@ def test_remove_mimic_reports_preserved_cleanup_state(client, app):
     assert "PF isolation" in response.json()["detail"]
 
 
+def test_restart_mimic_reports_unavailable_network_helper(client, app):
+    from squirrelops_home_sensor.api.routes_scouts import get_mimic_orchestrator
+    from squirrelops_home_sensor.scouts.orchestrator import HelperUnavailableError
+
+    orchestrator = SimpleNamespace(
+        restart_mimic=AsyncMock(
+            side_effect=HelperUnavailableError(
+                "Could not confirm quarantine before restarting fake host"
+            )
+        )
+    )
+    _override(app, get_mimic_orchestrator, orchestrator)
+
+    response = client.post("/scouts/mimics/42/restart")
+
+    assert response.status_code == 503
+    assert "Could not confirm quarantine" in response.json()["detail"]
+
+
+def test_remove_mimic_reports_busy_scout_lifecycle(client, app):
+    from squirrelops_home_sensor.api.routes_scouts import get_mimic_orchestrator
+    from squirrelops_home_sensor.scouts.orchestrator import (
+        MimicLifecycleBusyError,
+    )
+
+    orchestrator = SimpleNamespace(
+        remove_mimic=AsyncMock(
+            side_effect=MimicLifecycleBusyError(
+                "Fake host lifecycle is busy; wait for the current network update"
+            )
+        )
+    )
+    _override(app, get_mimic_orchestrator, orchestrator)
+
+    response = client.delete("/scouts/mimics/42")
+
+    assert response.status_code == 409
+    assert "current network update" in response.json()["detail"]
+
+
+def test_scout_status_reports_protected_lifecycle_work(client, app):
+    from squirrelops_home_sensor.api.routes_scouts import (
+        get_mimic_orchestrator,
+        get_scout_scheduler,
+    )
+
+    scheduler = SimpleNamespace(
+        interval_minutes=30,
+        is_scouting=False,
+        last_scout_at=None,
+        last_scout_duration_ms=None,
+    )
+    orchestrator = SimpleNamespace(
+        active_count=2,
+        max_mimics=10,
+        lifecycle_busy=True,
+    )
+    _override(app, get_scout_scheduler, scheduler)
+    _override(app, get_mimic_orchestrator, orchestrator)
+
+    response = client.get("/scouts/status")
+
+    assert response.status_code == 200
+    assert response.json()["is_running"] is False
+    assert response.json()["lifecycle_busy"] is True
+
+
 def test_deploy_mimics_reports_preserved_cleanup_state(client, app):
     from squirrelops_home_sensor.api.routes_scouts import get_mimic_orchestrator
     from squirrelops_home_sensor.scouts.orchestrator import MimicCleanupError

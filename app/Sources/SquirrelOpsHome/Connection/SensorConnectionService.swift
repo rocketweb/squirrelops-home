@@ -139,6 +139,14 @@ public final class SensorConnectionService: @unchecked Sendable {
             scheduleReconnect()
             return
         }
+        guard SensorAPICompatibility.supports(status.apiProtocolVersion) else {
+            state = .incompatible
+            lastError = SensorAPICompatibility.errorMessage(
+                for: status.apiProtocolVersion
+            )
+            await syncStateAsync()
+            return
+        }
 
         // Apply authenticated version/status immediately. Bulk collections are
         // independent and must not keep Sensor Version blank (or disconnect the

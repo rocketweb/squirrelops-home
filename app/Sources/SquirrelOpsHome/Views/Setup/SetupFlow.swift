@@ -156,7 +156,7 @@ struct LocalSensorSetupView: View {
                 .font(.system(size: 48))
                 .foregroundStyle(Theme.statusWarning(colorScheme))
 
-            Text("Auto-Pairing Failed")
+            Text("Setup Key Required")
                 .font(Typography.h2)
                 .foregroundStyle(Theme.textPrimary(colorScheme))
 

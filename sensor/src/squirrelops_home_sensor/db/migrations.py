@@ -207,26 +207,14 @@ async def _apply_v7(db: aiosqlite.Connection) -> None:
     analyzer created a new alert for every scan cycle that found the same open
     port on the same device.  This migration removes those historical duplicates,
     keeping only the latest alert per unique (device_id, alert_type, title)
-    combination.  Insight state entries already point to the latest alert so
-    they remain valid after the cleanup.
+    combination. Insight state entries that reference a discarded duplicate are
+    repointed to the retained alert before cleanup.
     """
-    # Step 1: Count duplicates so we can log useful info
-    cursor = await db.execute("""
-        SELECT COUNT(*) FROM home_alerts
-        WHERE incident_id IS NULL
-        AND id NOT IN (
-            SELECT MAX(id) FROM home_alerts
-            WHERE incident_id IS NULL
-            GROUP BY device_id, alert_type, title
-        )
-    """)
-    row = await cursor.fetchone()
-    dup_count = row[0] if row else 0
-
-    if dup_count > 0:
-        # Step 2: Delete duplicate standalone alerts, keeping only the latest
-        await db.execute("""
-            DELETE FROM home_alerts
+    await db.execute("SAVEPOINT squirrelops_v7")
+    try:
+        # Step 1: Count duplicates so we can log useful info
+        cursor = await db.execute("""
+            SELECT COUNT(*) FROM home_alerts
             WHERE incident_id IS NULL
             AND id NOT IN (
                 SELECT MAX(id) FROM home_alerts
@@ -234,29 +222,73 @@ async def _apply_v7(db: aiosqlite.Connection) -> None:
                 GROUP BY device_id, alert_type, title
             )
         """)
+        row = await cursor.fetchone()
+        dup_count = row[0] if row else 0
 
-        # Step 3: Clean up any orphaned insight_state entries that may reference
-        # deleted alerts (shouldn't happen since we keep the MAX id, but be safe)
-        await db.execute("""
-            DELETE FROM security_insight_state
-            WHERE alert_id IS NOT NULL
-            AND alert_id NOT IN (SELECT id FROM home_alerts)
-        """)
+        if dup_count > 0:
+            # Step 2: Repoint insight state before deleting referenced alerts.
+            await db.execute("""
+                UPDATE security_insight_state
+                SET alert_id = (
+                    SELECT MAX(winner.id)
+                    FROM home_alerts AS referenced
+                    JOIN home_alerts AS winner
+                      ON winner.incident_id IS NULL
+                     AND winner.device_id IS referenced.device_id
+                     AND winner.alert_type = referenced.alert_type
+                     AND winner.title = referenced.title
+                    WHERE referenced.id = security_insight_state.alert_id
+                      AND referenced.incident_id IS NULL
+                )
+                WHERE alert_id IN (
+                    SELECT id FROM home_alerts
+                    WHERE incident_id IS NULL
+                    AND id NOT IN (
+                        SELECT MAX(id) FROM home_alerts
+                        WHERE incident_id IS NULL
+                        GROUP BY device_id, alert_type, title
+                    )
+                )
+            """)
 
+            # Step 3: Delete duplicate standalone alerts, keeping only the latest.
+            await db.execute("""
+                DELETE FROM home_alerts
+                WHERE incident_id IS NULL
+                AND id NOT IN (
+                    SELECT MAX(id) FROM home_alerts
+                    WHERE incident_id IS NULL
+                    GROUP BY device_id, alert_type, title
+                )
+            """)
+
+            # Step 4: Clean up pre-existing orphaned insight state.
+            await db.execute("""
+                DELETE FROM security_insight_state
+                WHERE alert_id IS NOT NULL
+                AND alert_id NOT IN (SELECT id FROM home_alerts)
+            """)
+
+        now = datetime.now(UTC).isoformat()
+        await db.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+            (7, now),
+        )
+        await db.execute("RELEASE SAVEPOINT squirrelops_v7")
+        await db.commit()
+    except BaseException:
+        await db.execute("ROLLBACK TO SAVEPOINT squirrelops_v7")
+        await db.execute("RELEASE SAVEPOINT squirrelops_v7")
+        raise
+
+    if dup_count > 0:
         logger.info(
             "V7 migration: removed %d duplicate alerts, keeping latest per condition",
             dup_count,
         )
 
-    now = datetime.now(UTC).isoformat()
-    await db.execute(
-        "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
-        (7, now),
-    )
-    await db.commit()
 
-
-async def _apply_v8(db: aiosqlite.Connection) -> None:
+async def _apply_v8_steps(db: aiosqlite.Connection) -> None:
     """V8: Alert grouping by issue type.
 
     Adds columns for grouped alerts (issue_key, affected_devices, device_count,
@@ -284,18 +316,17 @@ async def _apply_v8(db: aiosqlite.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_alerts_issue_key "
         "ON home_alerts(issue_key) WHERE issue_key IS NOT NULL"
     )
-    await db.commit()
 
     # -- Data migration: consolidate per-device alerts into grouped alerts --
     cursor = await db.execute(
         "SELECT * FROM home_alerts WHERE alert_type = 'security.port_risk' "
         "AND issue_key IS NULL ORDER BY created_at DESC"
     )
-    rows = await cursor.fetchall()
+    rows = list(await cursor.fetchall())
+    groups: dict[str, list[dict]] = {}
 
     if rows:
         # Group alerts by (port, service_name) extracted from detail JSON
-        groups: dict[str, list[dict]] = {}
         for row in rows:
             detail = row["detail"]
             if isinstance(detail, str):
@@ -387,21 +418,14 @@ async def _apply_v8(db: aiosqlite.Connection) -> None:
             if non_winner_ids:
                 placeholders = ",".join("?" * len(non_winner_ids))
                 await db.execute(
-                    f"DELETE FROM home_alerts WHERE id IN ({placeholders})",
-                    non_winner_ids,
-                )
-                await db.execute(
                     f"UPDATE security_insight_state SET alert_id = ? "
                     f"WHERE alert_id IN ({placeholders})",
                     [winner_id] + non_winner_ids,
                 )
-
-        await db.commit()
-        logger.info(
-            "V8 migration: consolidated %d per-device alerts into %d grouped alerts",
-            len(rows),
-            len(groups),
-        )
+                await db.execute(
+                    f"DELETE FROM home_alerts WHERE id IN ({placeholders})",
+                    non_winner_ids,
+                )
 
     # -- Clean stale alert events from the events replay table --
     # Old alert.new/alert.updated events referencing deleted alerts would
@@ -410,14 +434,31 @@ async def _apply_v8(db: aiosqlite.Connection) -> None:
         "DELETE FROM events WHERE event_type IN ('alert.new', 'alert.updated') "
         "AND json_extract(payload, '$.id') NOT IN (SELECT id FROM home_alerts)"
     )
-    await db.commit()
 
     now = datetime.now(UTC).isoformat()
     await db.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
         (8, now),
     )
-    await db.commit()
+    if rows:
+        logger.info(
+            "V8 migration: consolidated %d per-device alerts into %d grouped alerts",
+            len(rows),
+            len(groups),
+        )
+
+
+async def _apply_v8(db: aiosqlite.Connection) -> None:
+    """Apply the V8 schema and data migration atomically."""
+    await db.execute("SAVEPOINT squirrelops_v8")
+    try:
+        await _apply_v8_steps(db)
+        await db.execute("RELEASE SAVEPOINT squirrelops_v8")
+        await db.commit()
+    except BaseException:
+        await db.execute("ROLLBACK TO SAVEPOINT squirrelops_v8")
+        await db.execute("RELEASE SAVEPOINT squirrelops_v8")
+        raise
 
 
 def _v9_hostname(raw: object, bind_address: str) -> str:
@@ -1717,9 +1758,236 @@ async def _apply_v9(db: aiosqlite.Connection) -> None:
         )
         await db.execute("RELEASE SAVEPOINT squirrelops_v9")
         await db.commit()
-    except Exception:
+    except BaseException:
         await db.execute("ROLLBACK TO SAVEPOINT squirrelops_v9")
         await db.execute("RELEASE SAVEPOINT squirrelops_v9")
+        raise
+
+
+def _v10_canonical_hostname(raw: object, bind_address: str) -> str:
+    """Return a supported durable hostname for a legacy V9 row."""
+    from squirrelops_home_sensor.decoys.identity import canonicalize_decoy_hostname
+
+    try:
+        return canonicalize_decoy_hostname(str(raw or ""))
+    except ValueError:
+        # V9 normally guarantees a valid ``.local`` hostname. Keep the upgrade
+        # fail-safe for manually edited/corrupt rows by reusing its deterministic
+        # address-based fallback rather than leaving an unindexable identity.
+        return _v9_hostname(raw, bind_address)
+
+
+def _v10_unique_hostname(
+    canonical: str,
+    host_id: int,
+    used_labels: set[str],
+    reserved_labels: set[str],
+) -> str:
+    """Preserve the first identity and deterministically rename later collisions."""
+    from squirrelops_home_sensor.decoys.identity import mdns_label
+
+    label = mdns_label(canonical)
+    suffix = canonical[len(label):]
+    if label not in used_labels:
+        used_labels.add(label)
+        return canonical
+
+    attempt = 1
+    while True:
+        discriminator = (
+            f"-{host_id}"
+            if attempt == 1
+            else f"-{host_id}-{attempt}"
+        )
+        base = label[: 63 - len(discriminator)].rstrip("-") or "decoy"
+        candidate_label = f"{base}{discriminator}"
+        if (
+            candidate_label not in used_labels
+            and candidate_label not in reserved_labels
+        ):
+            used_labels.add(candidate_label)
+            return f"{candidate_label}{suffix}"
+        attempt += 1
+
+
+async def _apply_v10(db: aiosqlite.Connection) -> None:
+    """V10: enforce one active durable host per normalized mDNS label.
+
+    V9 only made the complete hostname unique. Once bare and ``.localdomain``
+    forms became valid, ``server``, ``server.local``, and
+    ``server.localdomain`` could bypass that index while all advertising the
+    same ``server.local`` mDNS identity. Preserve the oldest active host and
+    deterministically suffix later collisions before adding an expression
+    index over the normalized label.
+    """
+    import json
+
+    from squirrelops_home_sensor.decoys.identity import mdns_label
+    from squirrelops_home_sensor.decoys.tls_identity import (
+        generate_host_tls_identity,
+    )
+
+    await db.execute("SAVEPOINT squirrelops_v10")
+    try:
+        cursor = await db.execute(
+            """SELECT id, hostname, bind_address, tls_cert_pem, tls_key_pem
+               FROM decoy_hosts
+               WHERE retired_at IS NULL
+               ORDER BY id"""
+        )
+        rows = list(await cursor.fetchall())
+        canonical_rows = [
+            (
+                row,
+                _v10_canonical_hostname(
+                    row["hostname"],
+                    str(row["bind_address"]),
+                ),
+            )
+            for row in rows
+        ]
+        reserved_labels = {
+            mdns_label(canonical)
+            for _row, canonical in canonical_rows
+        }
+        used_labels: set[str] = set()
+        reconciled_rows: list[tuple[aiosqlite.Row, str]] = []
+        now = datetime.now(UTC).isoformat()
+
+        for row, canonical in canonical_rows:
+            host_id = int(row["id"])
+            reconciled = _v10_unique_hostname(
+                canonical,
+                host_id,
+                used_labels,
+                reserved_labels,
+            )
+            reconciled_rows.append((row, reconciled))
+
+        # Move every changed row through a unique temporary label first. This
+        # prevents the existing V9 full-hostname index from rejecting a valid
+        # reconciliation when one row's final name is still occupied by a row
+        # that will itself be renamed later in this migration.
+        occupied_hostnames = {
+            str(row["hostname"]).casefold()
+            for row in rows
+        }
+        for row, reconciled in reconciled_rows:
+            if reconciled == row["hostname"]:
+                continue
+            host_id = int(row["id"])
+            attempt = 1
+            while True:
+                discriminator = (
+                    f"{host_id}"
+                    if attempt == 1
+                    else f"{host_id}-{attempt}"
+                )
+                temporary = f"squirrelops-v10-migration-{discriminator}.local"
+                if temporary.casefold() not in occupied_hostnames:
+                    occupied_hostnames.add(temporary.casefold())
+                    break
+                attempt += 1
+            await db.execute(
+                "UPDATE decoy_hosts SET hostname = ? WHERE id = ?",
+                (temporary, host_id),
+            )
+
+        for row, reconciled in reconciled_rows:
+            if reconciled == row["hostname"]:
+                continue
+            host_id = int(row["id"])
+            bind_address = str(row["bind_address"])
+            cert_pem = row["tls_cert_pem"]
+            key_pem = row["tls_key_pem"]
+            if cert_pem is not None or key_pem is not None:
+                cert_pem, key_pem = generate_host_tls_identity(
+                    reconciled,
+                    bind_address,
+                )
+
+            await db.execute(
+                """UPDATE decoy_hosts
+                   SET hostname = ?,
+                       tls_cert_pem = ?,
+                       tls_key_pem = ?,
+                       updated_at = ?
+                   WHERE id = ?""",
+                (
+                    reconciled,
+                    cert_pem,
+                    key_pem,
+                    now,
+                    host_id,
+                ),
+            )
+
+            service_cursor = await db.execute(
+                """SELECT id, config
+                   FROM decoys
+                   WHERE host_id = ?
+                     AND retired_at IS NULL
+                   ORDER BY id""",
+                (host_id,),
+            )
+            for service in await service_cursor.fetchall():
+                try:
+                    decoded = json.loads(service["config"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    decoded = {}
+                config = dict(decoded) if isinstance(decoded, dict) else {}
+                config["mdns_hostname"] = mdns_label(reconciled)
+                await db.execute(
+                    """UPDATE decoys
+                       SET name = ?, config = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (
+                        reconciled,
+                        json.dumps(config),
+                        now,
+                        service["id"],
+                    ),
+                )
+
+        # Normalize whitespace, a terminal root dot, the two supported durable
+        # suffixes, and case in the database itself. This remains authoritative
+        # even if another process or future write path bypasses the orchestrator.
+        await db.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS
+               idx_decoy_hosts_active_mdns_label_nocase
+               ON decoy_hosts (
+                   lower(
+                       CASE
+                           WHEN lower(rtrim(trim(hostname), '.'))
+                                LIKE '%.localdomain'
+                           THEN substr(
+                               rtrim(trim(hostname), '.'),
+                               1,
+                               length(rtrim(trim(hostname), '.')) - 12
+                           )
+                           WHEN lower(rtrim(trim(hostname), '.'))
+                                LIKE '%.local'
+                           THEN substr(
+                               rtrim(trim(hostname), '.'),
+                               1,
+                               length(rtrim(trim(hostname), '.')) - 6
+                           )
+                           ELSE rtrim(trim(hostname), '.')
+                       END
+                   )
+               )
+               WHERE retired_at IS NULL"""
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO schema_version (version, applied_at) "
+            "VALUES (?, ?)",
+            (10, now),
+        )
+        await db.execute("RELEASE SAVEPOINT squirrelops_v10")
+        await db.commit()
+    except BaseException:
+        await db.execute("ROLLBACK TO SAVEPOINT squirrelops_v10")
+        await db.execute("RELEASE SAVEPOINT squirrelops_v10")
         raise
 
 
@@ -1734,6 +2002,7 @@ _MIGRATIONS: list[tuple[int, callable]] = [
     (7, _apply_v7),
     (8, _apply_v8),
     (9, _apply_v9),
+    (10, _apply_v10),
 ]
 
 

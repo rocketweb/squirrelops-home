@@ -660,6 +660,74 @@ struct ModelsTests {
         #expect(groups[0].credentialTripCount == 1)
     }
 
+    @Test("Operational decoy inventory excludes stopped records everywhere")
+    func operationalDecoyInventoryExcludesStoppedRecords() {
+        func decoy(
+            id: Int,
+            type: String,
+            address: String,
+            status: String,
+            hostId: Int? = nil
+        ) -> DecoySummary {
+            DecoySummary(
+                id: id,
+                name: "decoy-\(id)",
+                decoyType: type,
+                bindAddress: address,
+                port: 8_000 + id,
+                status: status,
+                connectionCount: 0,
+                credentialTripCount: 0,
+                createdAt: "2026-07-26T00:00:00Z",
+                updatedAt: "2026-07-26T00:00:00Z",
+                hostId: hostId
+            )
+        }
+
+        let inventory = OperationalDecoyInventory([
+            decoy(
+                id: 1,
+                type: "mimic",
+                address: "192.168.1.200",
+                status: "active",
+                hostId: 10
+            ),
+            decoy(
+                id: 2,
+                type: "mimic",
+                address: "192.168.1.201",
+                status: "degraded",
+                hostId: 11
+            ),
+            decoy(
+                id: 3,
+                type: "mimic",
+                address: "192.168.1.202",
+                status: "stopped",
+                hostId: 12
+            ),
+            decoy(
+                id: 4,
+                type: "dev_server",
+                address: "0.0.0.0",
+                status: "active"
+            ),
+            decoy(
+                id: 5,
+                type: "file_share",
+                address: "0.0.0.0",
+                status: "stopped"
+            ),
+        ])
+
+        #expect(inventory.decoys.map(\.id) == [1, 2, 4])
+        #expect(inventory.mimicGroups.flatMap(\.services).map(\.id) == [1, 2])
+        #expect(inventory.hostListeners.map(\.id) == [4])
+        #expect(inventory.summary.fakeHostCount == 2)
+        #expect(inventory.summary.serviceDecoyCount == 2)
+        #expect(inventory.summary.hostListenerCount == 1)
+    }
+
     @Test("Mimic summaries decode host identity and group per service")
     func mimicServicesDecodeAndGroup() throws {
         let json = """
@@ -709,6 +777,103 @@ struct ModelsTests {
         #expect(groups[0].connectionCount == 5)
     }
 
+    @Test("Mimic deployment breakdown separates active and stopped counts")
+    func mimicDeploymentBreakdownSeparatesRuntimeState() throws {
+        let json = """
+        [
+          {
+            "id": 20,
+            "name": "printer",
+            "bind_address": "192.168.1.205",
+            "port": 80,
+            "status": "active",
+            "connection_count": 0,
+            "created_at": "2026-07-24T00:00:00Z",
+            "host_id": 8
+          },
+          {
+            "id": 21,
+            "name": "printer",
+            "bind_address": "192.168.1.205",
+            "port": 9100,
+            "status": "active",
+            "connection_count": 0,
+            "created_at": "2026-07-24T00:00:00Z",
+            "host_id": 8
+          },
+          {
+            "id": 30,
+            "name": "old-camera",
+            "bind_address": "192.168.1.206",
+            "port": 554,
+            "status": "stopped",
+            "connection_count": 0,
+            "created_at": "2026-07-23T00:00:00Z",
+            "host_id": 9
+          }
+        ]
+        """.data(using: .utf8)!
+        let mimics = try JSONDecoder().decode(
+            [MimicDecoySummary].self,
+            from: json
+        )
+
+        let breakdown = MimicDeploymentBreakdown(mimics)
+
+        #expect(breakdown.activeHostCount == 1)
+        #expect(breakdown.activeServiceCount == 2)
+        #expect(breakdown.stoppedHostCount == 1)
+        #expect(breakdown.stoppedServiceCount == 1)
+        #expect(
+            breakdown.activeLabel
+                == "1 active fake host · 2 active service decoys"
+        )
+        #expect(
+            breakdown.stoppedLabel
+                == "1 stopped fake host · 1 stopped service decoy"
+        )
+    }
+
+    @Test("Operational mimic grouping excludes stopped fake hosts")
+    func operationalMimicGroupingExcludesStoppedHosts() {
+        let active = MimicDecoySummary(
+            id: 1,
+            name: "files.local",
+            bindAddress: "192.168.1.200",
+            port: 80,
+            status: "active",
+            connectionCount: 0,
+            createdAt: "2026-07-25T12:00:00Z",
+            hostId: 10
+        )
+        let degraded = MimicDecoySummary(
+            id: 2,
+            name: "media.local",
+            bindAddress: "192.168.1.201",
+            port: 443,
+            status: "degraded",
+            connectionCount: 0,
+            createdAt: "2026-07-25T12:00:00Z",
+            hostId: 11
+        )
+        let stopped = MimicDecoySummary(
+            id: 3,
+            name: "office.local",
+            bindAddress: "192.168.1.202",
+            port: 22,
+            status: "stopped",
+            connectionCount: 0,
+            createdAt: "2026-07-25T12:00:00Z",
+            hostId: 12
+        )
+
+        let groups = MimicHostGroup.operationalGrouping([
+            stopped, degraded, active,
+        ])
+
+        #expect(groups.map(\.hostId) == [10, 11])
+    }
+
     @Test("Mimic hostname presentation canonicalizes mDNS suffixes")
     func mimicHostnamePresentationCanonicalizesLocalSuffix() {
         let mimic = MimicDecoySummary(
@@ -723,6 +888,35 @@ struct ModelsTests {
         )
 
         #expect(mimic.displayHostname == "Living-Room.local")
+    }
+
+    @Test("Durable mimic hostname preserves localdomain and a bare name")
+    func mimicHostnamePresentationPreservesDurableName() {
+        let localdomain = MimicDecoySummary(
+            id: 31,
+            name: "Server",
+            bindAddress: "192.168.1.207",
+            port: 22,
+            status: "active",
+            connectionCount: 0,
+            createdAt: "2026-07-24T00:00:00Z",
+            mdnsHostname: "ignored-mdns-label",
+            hostname: "server.localdomain"
+        )
+        let bare = MimicDecoySummary(
+            id: 32,
+            name: "Printer",
+            bindAddress: "192.168.1.208",
+            port: 9100,
+            status: "active",
+            connectionCount: 0,
+            createdAt: "2026-07-24T00:00:00Z",
+            mdnsHostname: "ignored-mdns-label",
+            hostname: "printer"
+        )
+
+        #expect(localdomain.displayHostname == "server.localdomain")
+        #expect(bare.displayHostname == "printer")
     }
 
     @Test("Hostname update response identifies every changed service")
@@ -857,9 +1051,9 @@ struct ModelsTests {
             "max_decoys": 3,
             "llm_classification": "local_llm",
             "scout_interval_minutes": 30,
-            "max_mimic_decoys": 30,
-            "max_virtual_ips": 30,
-            "total_decoy_capacity": 33
+            "max_mimic_decoys": 10,
+            "max_virtual_ips": 10,
+            "total_decoy_capacity": 13
         }
         """.data(using: .utf8)!
 
@@ -867,14 +1061,19 @@ struct ModelsTests {
 
         #expect(profile.profile == "full")
         #expect(profile.maxDecoys == 3)
-        #expect(profile.maxMimicDecoys == 30)
-        #expect(profile.totalDecoyCapacity == 33)
+        #expect(profile.maxMimicDecoys == 10)
+        #expect(profile.totalDecoyCapacity == 13)
         #expect(
             profile.userSummary.contains(
-                "3 classic decoys + 30 fake hosts (33 deployed identities)"
+                "Up to 10 fake hosts and 3 host listeners"
             )
         )
-        #expect(profile.userSummary.contains("per-port service decoys"))
+        #expect(
+            profile.userSummary.contains(
+                "Actual deployment depends on eligible discovered services"
+            )
+        )
+        #expect(!profile.userSummary.contains("deployed identities"))
         #expect(profile.userSummary.contains("Scouts every 30 min"))
     }
 
@@ -901,6 +1100,7 @@ struct ModelsTests {
         {
             "enabled": true,
             "is_running": false,
+            "lifecycle_busy": true,
             "last_scout_at": "2026-07-24T10:38:53.374407Z",
             "last_scout_duration_ms": 1250,
             "total_profiles": 8,
@@ -916,6 +1116,8 @@ struct ModelsTests {
 
         #expect(status.fakeHostCount == 3)
         #expect(status.serviceDecoyCount == 11)
+        #expect(status.lifecycleBusy == true)
+        #expect(status.activityLabel == "Updating")
     }
 
     @Test("Alert history clear response decodes backup result")

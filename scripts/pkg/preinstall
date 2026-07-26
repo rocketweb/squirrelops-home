@@ -17,6 +17,24 @@ SENSOR_DB="$DATA_DIR/squirrelops.db"
 CONFIG_FILE="$INSTALL_DIR/config.yaml"
 LOG_DIR="$INSTALL_DIR/logs"
 BACKUP_ROOT="/Library/SquirrelOps/backups"
+UPGRADE_SNAPSHOTS_TO_KEEP=3
+INCOMPLETE_BACKUP_DIR=""
+SENSOR_USER="_squirrelops"
+SENSOR_GROUP="_squirrelops"
+SENSOR_UID=""
+SENSOR_GID=""
+
+cleanup_incomplete_snapshot() {
+    if [ -z "$INCOMPLETE_BACKUP_DIR" ]; then
+        return
+    fi
+    case "$INCOMPLETE_BACKUP_DIR" in
+        "$BACKUP_ROOT"/preinstall.*) ;;
+        *) return ;;
+    esac
+    rm -rf -- "$INCOMPLETE_BACKUP_DIR"
+}
+trap cleanup_incomplete_snapshot EXIT
 
 service_is_loaded() {
     local label="$1"
@@ -50,6 +68,288 @@ stop_service_and_verify() {
     done
 }
 
+directory_service_value() {
+    local record="$1"
+    local key="$2"
+    local value
+    if ! value=$(
+        /usr/bin/dscl . -read "$record" "$key" 2>/dev/null \
+            | /usr/bin/awk \
+                -v expected="${key}:" \
+                -v native_hidden="dsAttrTypeNative:IsHidden:" '
+                ($1 == expected \
+                    || (expected == "IsHidden:" && $1 == native_hidden)) \
+                    && NF == 2 {
+                    value = $2
+                    count++
+                }
+                END {
+                    if (count != 1) {
+                        exit 1
+                    }
+                    print value
+                }
+            '
+    ); then
+        return 1
+    fi
+    printf '%s\n' "$value"
+}
+
+validate_service_identity() {
+    local unique_uid_owner
+    local unique_gid_owner
+    local shell
+    local home
+    local hidden
+
+    SENSOR_UID=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "UniqueID") || return 1
+    SENSOR_GID=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "PrimaryGroupID") || return 1
+    shell=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "UserShell") || return 1
+    home=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "NFSHomeDirectory") || return 1
+    hidden=$(directory_service_value \
+        "/Users/${SENSOR_USER}" "IsHidden") || return 1
+
+    [[ "$SENSOR_UID" =~ ^[0-9]+$ ]] \
+        && [[ "$SENSOR_GID" =~ ^[0-9]+$ ]] \
+        && [ "$SENSOR_UID" -ge 300 ] && [ "$SENSOR_UID" -le 499 ] \
+        && [ "$SENSOR_GID" = "$SENSOR_UID" ] \
+        && [ "$shell" = "/usr/bin/false" ] \
+        && [ "$home" = "/var/empty" ] \
+        && [ "$hidden" = "1" ] \
+        || return 1
+    [ "$(directory_service_value \
+        "/Groups/${SENSOR_GROUP}" "PrimaryGroupID")" = "$SENSOR_GID" ] \
+        || return 1
+
+    unique_uid_owner=$(
+        /usr/bin/dscl . -list /Users UniqueID 2>/dev/null \
+            | /usr/bin/awk -v expected_uid="$SENSOR_UID" '
+                $2 == expected_uid { owner = $1; count++ }
+                END {
+                    if (count == 1) {
+                        print owner
+                    }
+                }
+            '
+    ) || return 1
+    unique_gid_owner=$(
+        /usr/bin/dscl . -list /Groups PrimaryGroupID 2>/dev/null \
+            | /usr/bin/awk -v expected_gid="$SENSOR_GID" '
+                $2 == expected_gid { owner = $1; count++ }
+                END {
+                    if (count == 1) {
+                        print owner
+                    }
+                }
+            '
+    ) || return 1
+    [ "$unique_uid_owner" = "$SENSOR_USER" ] \
+        && [ "$unique_gid_owner" = "$SENSOR_GROUP" ]
+}
+
+sensor_processes_are_running() {
+    /usr/bin/pgrep -u "$SENSOR_UID" '.*' >/dev/null 2>&1 \
+        || /usr/bin/pgrep -U "$SENSOR_UID" '.*' >/dev/null 2>&1
+}
+
+terminate_sensor_processes() {
+    local attempts=0
+    if ! sensor_processes_are_running; then
+        return 0
+    fi
+
+    /usr/bin/pkill -TERM -u "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    /usr/bin/pkill -TERM -U "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    while sensor_processes_are_running && [ "$attempts" -lt 5 ]; do
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    if sensor_processes_are_running; then
+        /usr/bin/pkill -KILL -u "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+        /usr/bin/pkill -KILL -U "$SENSOR_UID" '.*' >/dev/null 2>&1 || true
+    fi
+    attempts=0
+    while sensor_processes_are_running && [ "$attempts" -lt 5 ]; do
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+    ! sensor_processes_are_running
+}
+
+remove_sensor_crontab() {
+    if /usr/bin/crontab -u "$SENSOR_USER" -l >/dev/null 2>&1; then
+        /usr/bin/crontab -u "$SENSOR_USER" -r >/dev/null 2>&1 \
+            || return 1
+    fi
+    ! /usr/bin/crontab -u "$SENSOR_USER" -l >/dev/null 2>&1
+}
+
+validate_mutable_tree() {
+    local root="$1"
+    [ -d "$root" ] && [ ! -L "$root" ] || return 1
+    path_has_no_extended_acl "$root" || return 1
+
+    /usr/bin/find "$root" -xdev -mindepth 1 -print0 \
+        | while IFS= read -r -d '' entry; do
+            local metadata
+            local owner
+            local group
+            local kind
+            local links
+
+            [ ! -L "$entry" ] || return 1
+            path_has_no_extended_acl "$entry" || return 1
+            metadata=$(
+                /usr/bin/stat -f '%Su|%Sg|%HT|%l' "$entry" 2>/dev/null
+            ) || return 1
+            IFS='|' read -r owner group kind links <<< "$metadata"
+            [ "$owner" = "$SENSOR_USER" ] \
+                && [ "$group" = "$SENSOR_GROUP" ] \
+                || return 1
+            case "$kind" in
+                Directory) ;;
+                "Regular File")
+                    [ "$links" = "1" ] || return 1
+                    ;;
+                *) return 1 ;;
+            esac
+        done
+}
+
+path_has_no_extended_acl() {
+    local path="$1"
+    /bin/ls -lde "$path" 2>/dev/null \
+        | /usr/bin/awk '
+            NR > 1 { extra = 1 }
+            END { exit !(NR == 1 && extra == 0) }
+        '
+}
+
+strip_validated_mutable_tree_acls() {
+    local root="$1"
+    /usr/bin/find "$root" -xdev -mindepth 1 -print0 \
+        | while IFS= read -r -d '' entry; do
+            local metadata
+            local owner
+            local group
+            local kind
+            local links
+
+            [ ! -L "$entry" ] || return 1
+            metadata=$(
+                /usr/bin/stat -f '%Su|%Sg|%HT|%l' "$entry" 2>/dev/null
+            ) || return 1
+            IFS='|' read -r owner group kind links <<< "$metadata"
+            [ "$owner" = "$SENSOR_USER" ] \
+                && [ "$group" = "$SENSOR_GROUP" ] \
+                || return 1
+            case "$kind" in
+                Directory) ;;
+                "Regular File")
+                    [ "$links" = "1" ] || return 1
+                    ;;
+                *) return 1 ;;
+            esac
+            /bin/chmod -N "$entry" || return 1
+            path_has_no_extended_acl "$entry" || return 1
+        done
+}
+
+snapshot_tree_is_private() {
+    local root="$1"
+    path_has_no_extended_acl "$root" || return 1
+    /usr/bin/find "$root" -xdev -mindepth 1 -print0 \
+        | while IFS= read -r -d '' entry; do
+            local metadata
+            local kind
+            local mode
+            local mode_decimal
+            [ ! -L "$entry" ] || return 1
+            metadata=$(
+                /usr/bin/stat -f '%HT|%Lp' "$entry" 2>/dev/null
+            ) || return 1
+            IFS='|' read -r kind mode <<< "$metadata"
+            case "$kind" in
+                Directory|"Regular File") ;;
+                *) return 1 ;;
+            esac
+            [[ "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+            mode_decimal=$((8#$mode))
+            [ "$((mode_decimal & 8#077))" -eq 0 ] \
+                && path_has_no_extended_acl "$entry" \
+                || return 1
+        done
+}
+
+quarantine_mutable_tree() {
+    local root="$1"
+    if [ -L "$root" ] || [ ! -d "$root" ]; then
+        return 1
+    fi
+    if ! /usr/sbin/chown root:wheel "$root" \
+        || ! /bin/chmod -N "$root" \
+        || ! /bin/chmod 700 "$root"
+    then
+        return 1
+    fi
+    [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' "$root")" = "root:wheel:700" ] \
+        && path_has_no_extended_acl "$root" \
+        && strip_validated_mutable_tree_acls "$root"
+}
+
+prepare_existing_mutable_state() {
+    if [ ! -e "$DATA_DIR" ] && [ ! -e "$LOG_DIR" ]; then
+        return 0
+    fi
+    if ! /usr/bin/dscl . -read "/Users/${SENSOR_USER}" >/dev/null 2>&1; then
+        # Recover a first install interrupted before account creation, but only
+        # when its mutable directories are empty. No untrusted identity exists
+        # to authorize non-root helper access or to own durable state.
+        for mutable_root in "$DATA_DIR" "$LOG_DIR"; do
+            [ -e "$mutable_root" ] || continue
+            if ! quarantine_mutable_tree "$mutable_root" \
+                || [ -n "$(/usr/bin/find "$mutable_root" \
+                    -xdev -mindepth 1 -print -quit)" ]
+            then
+                echo "[preinstall] Partial install has mutable state without a valid service account; aborting upgrade." >&2
+                return 1
+            fi
+        done
+        return 0
+    fi
+    if ! validate_service_identity; then
+        echo "[preinstall] Existing sensor account identity is unsafe; aborting upgrade." >&2
+        return 1
+    fi
+    if ! terminate_sensor_processes; then
+        echo "[preinstall] Processes remain under the sensor service UID; aborting upgrade." >&2
+        return 1
+    fi
+    for mutable_root in "$DATA_DIR" "$LOG_DIR"; do
+        [ -e "$mutable_root" ] || continue
+        if ! quarantine_mutable_tree "$mutable_root"; then
+            echo "[preinstall] Cannot quarantine mutable sensor storage: ${mutable_root}" >&2
+            return 1
+        fi
+    done
+    if ! remove_sensor_crontab || ! terminate_sensor_processes; then
+        echo "[preinstall] Sensor UID persistence could not be quiesced; aborting upgrade." >&2
+        return 1
+    fi
+    for mutable_root in "$DATA_DIR" "$LOG_DIR"; do
+        [ -e "$mutable_root" ] || continue
+        if ! validate_mutable_tree "$mutable_root"; then
+            echo "[preinstall] Mutable sensor storage contains unsafe ownership, links, or file types: ${mutable_root}" >&2
+            return 1
+        fi
+    done
+}
+
 create_upgrade_snapshot() {
     local backup_dir
     local database_check
@@ -60,14 +360,28 @@ create_upgrade_snapshot() {
     fi
 
     umask 077
-    mkdir -p "$BACKUP_ROOT"
-    chmod 700 "$BACKUP_ROOT"
+    if [ -L "$BACKUP_ROOT" ] \
+        || { [ -e "$BACKUP_ROOT" ] && [ ! -d "$BACKUP_ROOT" ]; }
+    then
+        echo "[preinstall] Upgrade backup path has an unsafe file type." >&2
+        return 1
+    fi
+    if ! /usr/bin/install -d -o root -g wheel -m 700 "$BACKUP_ROOT" \
+        || ! /bin/chmod -N "$BACKUP_ROOT" \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' "$BACKUP_ROOT")" \
+            != "root:wheel:700" ] \
+        || ! path_has_no_extended_acl "$BACKUP_ROOT"
+    then
+        echo "[preinstall] Cannot secure the upgrade backup directory." >&2
+        return 1
+    fi
     if ! backup_dir=$(
         /usr/bin/mktemp -d "$BACKUP_ROOT/preinstall.XXXXXXXX"
     ); then
         echo "[preinstall] Cannot create the upgrade backup directory." >&2
         return 1
     fi
+    INCOMPLETE_BACKUP_DIR="$backup_dir"
 
     echo "[preinstall] Creating durable upgrade snapshot at ${backup_dir}..."
     if [ -d "$DATA_DIR" ]; then
@@ -85,44 +399,117 @@ create_upgrade_snapshot() {
             return 1
         fi
         if ! database_check=$(
-            /usr/bin/sqlite3 "$SENSOR_DB" "PRAGMA quick_check;"
+            /usr/bin/sqlite3 -bail -batch -nofollow -readonly \
+                "$SENSOR_DB" \
+                "PRAGMA trusted_schema=OFF; PRAGMA quick_check(1);"
         ) || [ "$database_check" != "ok" ]; then
             echo "[preinstall] Sensor database integrity check failed; aborting upgrade." >&2
             return 1
         fi
 
-        rm -f \
+        if ! rm -f \
             "$backup_dir/data/squirrelops.db" \
             "$backup_dir/data/squirrelops.db-wal" \
             "$backup_dir/data/squirrelops.db-shm"
-        if ! /usr/bin/sqlite3 "$SENSOR_DB" \
+        then
+            echo "[preinstall] Cannot prepare the SQLite rollback path." >&2
+            return 1
+        fi
+        if ! /usr/bin/sqlite3 -bail -batch -nofollow -readonly \
+            -cmd "PRAGMA trusted_schema=OFF;" "$SENSOR_DB" \
             ".backup '$backup_dir/data/squirrelops.db'"; then
             echo "[preinstall] Cannot create the SQLite rollback backup; aborting upgrade." >&2
             return 1
         fi
         if ! backup_database_check=$(
-            /usr/bin/sqlite3 "$backup_dir/data/squirrelops.db" \
-                "PRAGMA quick_check;"
+            /usr/bin/sqlite3 -bail -batch -nofollow -readonly \
+                "$backup_dir/data/squirrelops.db" \
+                "PRAGMA trusted_schema=OFF; PRAGMA quick_check(1);"
         ) || [ "$backup_database_check" != "ok" ]; then
             echo "[preinstall] Rollback database verification failed; aborting upgrade." >&2
             return 1
         fi
-        chmod 600 "$backup_dir/data/squirrelops.db"
+        if ! chmod 600 "$backup_dir/data/squirrelops.db"; then
+            echo "[preinstall] Cannot secure the SQLite rollback backup." >&2
+            return 1
+        fi
     fi
 
     if [ -f "$CONFIG_FILE" ]; then
-        cp -p "$CONFIG_FILE" "$backup_dir/config.yaml"
+        if ! cp -p "$CONFIG_FILE" "$backup_dir/config.yaml"; then
+            echo "[preinstall] Cannot copy config into the rollback snapshot." >&2
+            return 1
+        fi
     fi
     if [ -f "$INSTALL_DIR/VERSION" ]; then
-        cp -p "$INSTALL_DIR/VERSION" "$backup_dir/VERSION"
+        if ! cp -p "$INSTALL_DIR/VERSION" "$backup_dir/VERSION"; then
+            echo "[preinstall] Cannot copy VERSION into the rollback snapshot." >&2
+            return 1
+        fi
     fi
 
-    {
+    if ! {
         printf 'created_at=%s\n' "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
         printf 'source=%s\n' "$INSTALL_DIR"
     } > "$backup_dir/COMPLETE"
-    chmod -R go-rwx "$backup_dir"
+    then
+        echo "[preinstall] Cannot finalize the rollback snapshot." >&2
+        return 1
+    fi
+    if ! /bin/chmod -RN "$backup_dir" \
+        || ! /bin/chmod -R go-rwx "$backup_dir" \
+        || ! snapshot_tree_is_private "$backup_dir"
+    then
+        echo "[preinstall] Cannot secure the rollback snapshot." >&2
+        return 1
+    fi
     echo "[preinstall] Verified upgrade snapshot: ${backup_dir}"
+    INCOMPLETE_BACKUP_DIR=""
+}
+
+prune_upgrade_snapshots() {
+    local snapshot_records
+    local record
+    local snapshot
+    local verified_count=0
+
+    [ -d "$BACKUP_ROOT" ] || return 0
+    if ! snapshot_records=$(
+        /usr/bin/find "$BACKUP_ROOT" \
+            -mindepth 1 -maxdepth 1 -type d -name 'preinstall.*' \
+            -exec /usr/bin/stat -f '%m|%N' {} \;
+    ); then
+        echo "[preinstall] Cannot enumerate upgrade snapshots for pruning." >&2
+        return 1
+    fi
+
+    while IFS= read -r record; do
+        [ -n "$record" ] || continue
+        snapshot="${record#*|}"
+        case "$snapshot" in
+            "$BACKUP_ROOT"/preinstall.*) ;;
+            *)
+                echo "[preinstall] Refusing unsafe snapshot prune target." >&2
+                return 1
+                ;;
+        esac
+
+        if [ ! -f "$snapshot/COMPLETE" ]; then
+            if ! rm -rf -- "$snapshot"; then
+                echo "[preinstall] Cannot remove incomplete snapshot ${snapshot}." >&2
+                return 1
+            fi
+            continue
+        fi
+
+        verified_count=$((verified_count + 1))
+        if [ "$verified_count" -gt "$UPGRADE_SNAPSHOTS_TO_KEEP" ]; then
+            if ! rm -rf -- "$snapshot"; then
+                echo "[preinstall] Cannot prune old snapshot ${snapshot}." >&2
+                return 1
+            fi
+        fi
+    done <<< "$(printf '%s\n' "$snapshot_records" | /usr/bin/sort -t '|' -k1,1nr)"
 }
 
 # ---------------------------------------------------------------------------
@@ -133,14 +520,24 @@ if ! stop_service_and_verify "$PLIST_NAME" "sensor service"; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: Create a verified rollback snapshot
+# Step 2: Quiesce and quarantine mutable sensor storage
 # ---------------------------------------------------------------------------
-if ! create_upgrade_snapshot; then
+if ! prepare_existing_mutable_state; then
     exit 1
 fi
 
 # ---------------------------------------------------------------------------
-# Step 3: Back up config if it exists
+# Step 3: Create a verified rollback snapshot
+# ---------------------------------------------------------------------------
+if ! create_upgrade_snapshot; then
+    exit 1
+fi
+if ! prune_upgrade_snapshots; then
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Step 4: Back up config if it exists
 # ---------------------------------------------------------------------------
 if [ -f "$CONFIG_FILE" ]; then
     echo "[preinstall] Backing up config.yaml -> config.yaml.bak"

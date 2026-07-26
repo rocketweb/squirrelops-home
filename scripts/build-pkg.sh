@@ -9,7 +9,12 @@
 #   bash scripts/build-pkg.sh
 #
 # Environment variables:
-#   SQUIRRELOPS_VERSION   Optional assertion; must match the VERSION file
+#   SQUIRRELOPS_DISTRIBUTION_VERSION
+#                         Optional assertion; must match the VERSION file
+#   SQUIRRELOPS_APP_VERSION
+#                         Optional assertion; must match APP_VERSION
+#   SQUIRRELOPS_SENSOR_VERSION
+#                         Optional assertion; must match sensor/pyproject.toml
 #   BUILD_ARCH            Architecture: "arm64" or "x86_64"
 #                         (default: current architecture)
 #   SIGNING_IDENTITY      App signing identity (default: "Developer ID Application")
@@ -52,7 +57,20 @@ step()  { echo ""; echo -e "${BOLD}=== $* ===${NC}"; }
 # ---------------------------------------------------------------------------
 # Configuration and release invariants
 # ---------------------------------------------------------------------------
-VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
+DISTRIBUTION_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/VERSION")"
+APP_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/APP_VERSION")"
+SENSOR_VERSION=$(
+    /usr/bin/awk -F'"' '/^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' \
+        "$REPO_ROOT/sensor/pyproject.toml"
+)
+SENSOR_API_PROTOCOL=$(
+    /usr/bin/awk '/^SENSOR_API_PROTOCOL_VERSION = [0-9]+$/ { print $3; exit }' \
+        "$REPO_ROOT/sensor/src/squirrelops_home_sensor/compatibility.py"
+)
+APP_SENSOR_API_PROTOCOL=$(
+    /usr/bin/awk '/static let current = [0-9]+/ { print $5; exit }' \
+        "$REPO_ROOT/app/Sources/SquirrelOpsHome/Connection/SensorAPICompatibility.swift"
+)
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-Developer ID Application}"
 INSTALLER_IDENTITY="${INSTALLER_IDENTITY:-Developer ID Installer}"
@@ -79,27 +97,38 @@ if [ "$RELEASE_BUILD" = "1" ]; then
     fi
 fi
 
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [[ ! "$DISTRIBUTION_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     error "VERSION must contain a semantic version (for example, 1.2.3)."
 fi
-if [ -n "${SQUIRRELOPS_VERSION:-}" ] \
-    && [ "$SQUIRRELOPS_VERSION" != "$VERSION" ]; then
-    error "SQUIRRELOPS_VERSION does not match authoritative VERSION ($VERSION)."
+if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    error "APP_VERSION must contain a semantic version (for example, 1.2.3)."
+fi
+if [[ ! "$SENSOR_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    error "sensor/pyproject.toml must contain a semantic version."
+fi
+if [[ ! "$SENSOR_API_PROTOCOL" =~ ^[1-9][0-9]*$ ]] \
+    || [ "$APP_SENSOR_API_PROTOCOL" != "$SENSOR_API_PROTOCOL" ]; then
+    error "App and sensor API protocol contracts do not match."
+fi
+if [ -n "${SQUIRRELOPS_DISTRIBUTION_VERSION:-}" ] \
+    && [ "$SQUIRRELOPS_DISTRIBUTION_VERSION" != "$DISTRIBUTION_VERSION" ]; then
+    error "SQUIRRELOPS_DISTRIBUTION_VERSION does not match authoritative VERSION ($DISTRIBUTION_VERSION)."
+fi
+if [ -n "${SQUIRRELOPS_APP_VERSION:-}" ] \
+    && [ "$SQUIRRELOPS_APP_VERSION" != "$APP_VERSION" ]; then
+    error "SQUIRRELOPS_APP_VERSION does not match authoritative APP_VERSION ($APP_VERSION)."
+fi
+if [ -n "${SQUIRRELOPS_SENSOR_VERSION:-}" ] \
+    && [ "$SQUIRRELOPS_SENSOR_VERSION" != "$SENSOR_VERSION" ]; then
+    error "SQUIRRELOPS_SENSOR_VERSION does not match sensor/pyproject.toml ($SENSOR_VERSION)."
 fi
 
-PYPROJECT_VERSION=$(
-    /usr/bin/awk -F'"' '/^version = "[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' \
-        "$REPO_ROOT/sensor/pyproject.toml"
-)
 INSTALL_SCRIPT_VERSION=$(
-    /usr/bin/awk -F'"' '/^SQUIRRELOPS_VERSION="[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' \
+    /usr/bin/awk -F'"' '/^SQUIRRELOPS_SENSOR_VERSION="[0-9]+\.[0-9]+\.[0-9]+"$/ { print $2; exit }' \
         "$REPO_ROOT/scripts/install.sh"
 )
-if [ "$PYPROJECT_VERSION" != "$VERSION" ]; then
-    error "sensor/pyproject.toml version ($PYPROJECT_VERSION) does not match VERSION ($VERSION)."
-fi
-if [ "$INSTALL_SCRIPT_VERSION" != "$VERSION" ]; then
-    error "scripts/install.sh version ($INSTALL_SCRIPT_VERSION) does not match VERSION ($VERSION)."
+if [ "$INSTALL_SCRIPT_VERSION" != "$SENSOR_VERSION" ]; then
+    error "scripts/install.sh sensor version ($INSTALL_SCRIPT_VERSION) does not match sensor/pyproject.toml ($SENSOR_VERSION)."
 fi
 
 case "$BUILD_ARCH" in
@@ -136,11 +165,13 @@ SENSOR_ROOT="$BUILD_DIR/sensor-root"
 COMPONENTS_DIR="$BUILD_DIR/components"
 OUTPUT_DIR="$BUILD_DIR/output"
 
-PKG_NAME="SquirrelOpsHome-${VERSION}.pkg"
+PKG_NAME="SquirrelOpsHome-${DISTRIBUTION_VERSION}.pkg"
 
 echo ""
 echo -e "${BOLD}SquirrelOps Home — .pkg Builder${NC}"
-echo -e "  Version:  $VERSION"
+echo -e "  Distribution: $DISTRIBUTION_VERSION"
+echo -e "  App:          $APP_VERSION"
+echo -e "  Sensor:       $SENSOR_VERSION"
 echo -e "  Arch:     $BUILD_ARCH"
 echo ""
 
@@ -231,8 +262,8 @@ BUILT_SENSOR_VERSION=$(
     PYTHONDONTWRITEBYTECODE=1 "$SENSOR_PYTHON_BIN" -c \
         'from importlib.metadata import version; print(version("squirrelops-home-sensor"))'
 )
-if [ "$BUILT_SENSOR_VERSION" != "$VERSION" ]; then
-    error "Embedded sensor reports $BUILT_SENSOR_VERSION, expected $VERSION."
+if [ "$BUILT_SENSOR_VERSION" != "$SENSOR_VERSION" ]; then
+    error "Embedded sensor reports $BUILT_SENSOR_VERSION, expected $SENSOR_VERSION."
 fi
 
 if security find-identity -v -p codesigning 2>/dev/null \
@@ -321,7 +352,16 @@ cp -R "$SENSOR_BUILD_DIR/python" "$SENSOR_INSTALL/python"
 # Write the mode marker into the install payload so postinstall knows which
 # Python path to use in the LaunchDaemon plist.
 echo "$SENSOR_PYTHON_MODE" > "$SENSOR_INSTALL/.python-mode"
-printf '%s\n' "$VERSION" > "$SENSOR_INSTALL/VERSION"
+printf '%s\n' "$SENSOR_VERSION" > "$SENSOR_INSTALL/VERSION"
+cat > "$SENSOR_INSTALL/release-components.json" <<EOF
+{
+  "schema_version": 1,
+  "distribution_version": "$DISTRIBUTION_VERSION",
+  "app_version": "$APP_VERSION",
+  "sensor_version": "$SENSOR_VERSION",
+  "sensor_api_protocol": $SENSOR_API_PROTOCOL
+}
+EOF
 
 info "Copying launchd plist template..."
 cp "$SENSOR_BUILD_DIR/com.squirrelops.sensor.plist" "$SENSOR_INSTALL/"
@@ -369,7 +409,7 @@ pkgbuild \
     --root "$APP_ROOT" \
     --install-location / \
     --identifier com.squirrelops.home.app \
-    --version "$VERSION" \
+    --version "$APP_VERSION" \
     --scripts "$SCRIPT_DIR/pkg/app-scripts" \
     --component-plist "$APP_COMPONENT_PLIST" \
     "$COMPONENTS_DIR/app.pkg"
@@ -380,7 +420,7 @@ pkgbuild \
     --root "$SENSOR_ROOT" \
     --install-location / \
     --identifier com.squirrelops.home.sensor \
-    --version "$VERSION" \
+    --version "$SENSOR_VERSION" \
     --scripts "$SCRIPT_DIR/pkg" \
     "$COMPONENTS_DIR/sensor.pkg"
 
@@ -392,7 +432,9 @@ step "Step 6: Build Product Archive"
 # Generate distribution.xml with version and size placeholders filled
 DIST_XML="$BUILD_DIR/distribution.xml"
 sed \
-    -e "s|__VERSION__|${VERSION}|g" \
+    -e "s|__DISTRIBUTION_VERSION__|${DISTRIBUTION_VERSION}|g" \
+    -e "s|__APP_VERSION__|${APP_VERSION}|g" \
+    -e "s|__SENSOR_VERSION__|${SENSOR_VERSION}|g" \
     -e "s|__APP_SIZE__|${APP_SIZE}|g" \
     -e "s|__SENSOR_SIZE__|${SENSOR_SIZE}|g" \
     -e "s|__HOST_ARCH__|${BUILD_ARCH}|g" \
@@ -536,10 +578,12 @@ echo -e "${BOLD}=========================================${NC}"
 echo -e "${BOLD}  .pkg Build Complete${NC}"
 echo -e "${BOLD}=========================================${NC}"
 echo ""
-echo "  Version:    $VERSION"
-echo "  Arch:       $BUILD_ARCH"
-echo "  Output:     $OUTPUT_DIR/$PKG_NAME"
-echo "  Checksum:   $CHECKSUM_FILE"
+echo "  Distribution: $DISTRIBUTION_VERSION"
+echo "  App:          $APP_VERSION"
+echo "  Sensor:       $SENSOR_VERSION"
+echo "  Arch:         $BUILD_ARCH"
+echo "  Output:       $OUTPUT_DIR/$PKG_NAME"
+echo "  Checksum:     $CHECKSUM_FILE"
 PKG_SIZE=$(du -sh "$OUTPUT_DIR/$PKG_NAME" | cut -f1)
 echo "  Size:       $PKG_SIZE"
 echo ""

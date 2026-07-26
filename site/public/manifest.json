@@ -1,10 +1,12 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "latest": {
+    "distribution": "1.1.14",
     "sensor": "1.1.14",
     "app": "1.1.14"
   },
   "min_supported": {
+    "distribution": "1.0.0",
     "sensor": "1.0.0",
     "app": "1.0.0"
   },
@@ -19,6 +21,12 @@
     "checksum_sha256": ""
   },
   "updated_at": "2026-07-24T15:40:24Z",
+  "distribution": {
+    "latest_version": "1.1.14",
+    "app_version": "1.1.14",
+    "sensor_version": "1.1.14",
+    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.14"
+  },
   "sensor": {
     "latest_version": "1.1.14",
     "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.14"

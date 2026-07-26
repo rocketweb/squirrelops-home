@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from unittest.mock import patch
 
 import httpx
@@ -22,7 +23,25 @@ from squirrelops_home_sensor.integrations.home_assistant import (
 # ---------------------------------------------------------------------------
 
 HA_URL = "http://homeassistant.local:8123"
+PINNED_HA_URL = "http://192.168.1.20:8123"
 HA_TOKEN = "test-long-lived-access-token"
+
+
+@pytest.fixture(autouse=True)
+def private_mdns_resolution(monkeypatch) -> None:
+    """Resolve the configured mDNS host to a deterministic private address."""
+    monkeypatch.setattr(
+        "squirrelops_home_sensor.netvalidation.socket.getaddrinfo",
+        lambda host, port, **_kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("192.168.1.20", port),
+            )
+        ],
+    )
 
 
 @pytest.fixture
@@ -282,7 +301,7 @@ class TestHomeAssistantClient:
         self, client: HomeAssistantClient, httpx_mock: HTTPXMock
     ) -> None:
         httpx_mock.add_response(
-            url=f"{HA_URL}/api/",
+            url=f"{PINNED_HA_URL}/api/",
             json={"message": "API running."},
             status_code=200,
         )
@@ -292,7 +311,7 @@ class TestHomeAssistantClient:
         self, client: HomeAssistantClient, httpx_mock: HTTPXMock
     ) -> None:
         httpx_mock.add_response(
-            url=f"{HA_URL}/api/",
+            url=f"{PINNED_HA_URL}/api/",
             status_code=401,
         )
         assert await client.test_connection() is False
@@ -302,7 +321,7 @@ class TestHomeAssistantClient:
     ) -> None:
         httpx_mock.add_exception(
             httpx.ConnectError("Connection refused"),
-            url=f"{HA_URL}/api/",
+            url=f"{PINNED_HA_URL}/api/",
         )
         assert await client.test_connection() is False
 
@@ -310,13 +329,42 @@ class TestHomeAssistantClient:
         self, client: HomeAssistantClient, httpx_mock: HTTPXMock
     ) -> None:
         httpx_mock.add_response(
-            url=f"{HA_URL}/api/",
+            url=f"{PINNED_HA_URL}/api/",
             json={"message": "API running."},
         )
         await client.test_connection()
         request = httpx_mock.get_request()
         assert request is not None
         assert request.headers["authorization"] == f"Bearer {HA_TOKEN}"
+        assert request.headers["host"] == "homeassistant.local:8123"
+        assert str(request.url) == f"{PINNED_HA_URL}/api/"
+
+    async def test_connection_rejects_mixed_private_public_dns(
+        self,
+        client: HomeAssistantClient,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "squirrelops_home_sensor.netvalidation.socket.getaddrinfo",
+            lambda host, port, **_kwargs: [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    socket.IPPROTO_TCP,
+                    "",
+                    ("192.168.1.20", port),
+                ),
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    socket.IPPROTO_TCP,
+                    "",
+                    ("8.8.8.8", port),
+                ),
+            ],
+        )
+
+        assert await client.test_connection() is False
 
     # -- get_devices (WebSocket) --
 
@@ -350,11 +398,22 @@ class TestHomeAssistantClient:
                 ],
             },
         ])
-        with patch("squirrelops_home_sensor.integrations.home_assistant.websockets.connect", return_value=fake_ws):
+        with patch(
+            "squirrelops_home_sensor.integrations.home_assistant.websockets.connect",
+            return_value=fake_ws,
+        ) as connect:
             devices = await client.get_devices()
         assert len(devices) == 1
         assert devices[0].id == "dev1"
         assert devices[0].mac_addresses == frozenset({"aa:bb:cc:dd:ee:ff"})
+        connect.assert_called_once_with(
+            f"{HA_URL.replace('http://', 'ws://')}/api/websocket",
+            host="192.168.1.20",
+            port=8123,
+            proxy=None,
+            open_timeout=5.0,
+            close_timeout=5.0,
+        )
 
     async def test_get_devices_sends_correct_ws_command(
         self, client: HomeAssistantClient

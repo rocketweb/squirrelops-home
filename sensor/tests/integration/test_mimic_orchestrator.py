@@ -159,6 +159,7 @@ async def mimic_setup(db, monkeypatch):
         max_mimics=1,
         mdns_advertiser=mdns,
         port_forward_manager=port_forward,
+        sensor_hostnames={"sensor-box.local."},
     )
     return SimpleNamespace(
         orchestrator=orchestrator,
@@ -304,6 +305,56 @@ async def test_full_profile_capacity_never_repeats_source_hosts(
     assert len({row["mdns_hostname"] for row in rows}) == 2
     assert len({(row["bind_address"], row["port"]) for row in rows}) == 2
     assert {row["source_device_id"] for row in rows} == {1, 2}
+
+
+@pytest.mark.asyncio
+async def test_ai_advisor_names_only_part_of_a_new_batch(
+    mimic_setup,
+    db,
+):
+    await _configure_distinct_sources(mimic_setup, db, 2)
+    mimic_setup.ip_manager.allocate_verified.side_effect = [
+        ["192.168.1.200"],
+        ["192.168.1.201"],
+    ]
+    advisor = AsyncMock()
+    advisor.suggest_decoy_hostnames.return_value = ["starbase-files"]
+    mimic_setup.orchestrator.set_hostname_advisor(advisor)
+    mimic_setup.orchestrator.set_max_mimics(2)
+
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 2
+
+    advisor.suggest_decoy_hostnames.assert_awaited_once()
+    request = advisor.suggest_decoy_hostnames.await_args.kwargs
+    assert {"source", "source-2"} <= set(request["existing_hostnames"])
+    assert request["count"] == 1
+    rows = list(await (
+        await db.execute(
+            "SELECT hostname FROM decoy_hosts ORDER BY id"
+        )
+    ).fetchall())
+    assert rows[0]["hostname"] == "starbase-files.local"
+    assert rows[1]["hostname"] != "starbase-files.local"
+    assert not rows[1]["hostname"].removesuffix(".local").rsplit("-", 1)[-1].isdigit()
+
+
+@pytest.mark.asyncio
+async def test_ai_naming_failure_uses_deterministic_fallback(
+    mimic_setup,
+    db,
+):
+    advisor = AsyncMock()
+    advisor.suggest_decoy_hostnames.side_effect = RuntimeError("model offline")
+    mimic_setup.orchestrator.set_hostname_advisor(advisor)
+
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+
+    row = await (
+        await db.execute("SELECT hostname FROM decoy_hosts")
+    ).fetchone()
+    label = row["hostname"].removesuffix(".local")
+    assert label in {"camera", "security", "garage-cam", "porch-cam"}
+    assert not label.endswith(("a6d6", "0001"))
 
 
 @pytest.mark.asyncio
@@ -670,11 +721,212 @@ async def test_concurrent_deploy_triggers_create_only_one_mimic(
 
 
 @pytest.mark.asyncio
+async def test_user_remove_fails_fast_while_lifecycle_is_busy(mimic_setup):
+    from squirrelops_home_sensor.scouts.orchestrator import (
+        MimicLifecycleBusyError,
+    )
+
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_lifecycle():
+        async with mimic_setup.orchestrator._lifecycle_lock:
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_lifecycle())
+    await entered.wait()
+    try:
+        with pytest.raises(
+            MimicLifecycleBusyError,
+            match="lifecycle is busy",
+        ):
+            await asyncio.wait_for(
+                mimic_setup.orchestrator.remove_mimic(1),
+                timeout=0.1,
+            )
+    finally:
+        release.set()
+        await holder
+
+
+@pytest.mark.asyncio
+async def test_user_restart_fails_fast_while_lifecycle_is_busy(mimic_setup):
+    from squirrelops_home_sensor.scouts.orchestrator import (
+        MimicLifecycleBusyError,
+    )
+
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_lifecycle():
+        async with mimic_setup.orchestrator._lifecycle_lock:
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_lifecycle())
+    await entered.wait()
+    try:
+        with pytest.raises(
+            MimicLifecycleBusyError,
+            match="lifecycle is busy",
+        ):
+            await asyncio.wait_for(
+                mimic_setup.orchestrator.restart_mimic(1),
+                timeout=0.1,
+            )
+    finally:
+        release.set()
+        await holder
+
+
+@pytest.mark.asyncio
+async def test_routine_conflict_check_skips_instead_of_queueing_behind_lifecycle(
+    mimic_setup,
+):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_lifecycle():
+        async with mimic_setup.orchestrator._lifecycle_lock:
+            entered.set()
+            await release.wait()
+
+    holder = asyncio.create_task(hold_lifecycle())
+    await entered.wait()
+    try:
+        result = await asyncio.wait_for(
+            mimic_setup.orchestrator.reconcile_ip_conflicts(
+                [("192.168.1.10", "00:11:22:33:44:55")]
+            ),
+            timeout=0.1,
+        )
+        assert result == 0
+        mimic_setup.ip_manager.find_conflicts.assert_not_awaited()
+    finally:
+        release.set()
+        await holder
+
+
+@pytest.mark.asyncio
+async def test_stale_removal_target_does_not_follow_recycled_generation(
+    mimic_setup,
+    db,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    original = mimic_setup.orchestrator._active_mimics[1]
+    original_row = await (
+        await db.execute(
+            """SELECT d.host_id, dh.template_id
+               FROM decoys d
+               JOIN decoy_hosts dh ON dh.id = d.host_id
+               WHERE d.id = 1"""
+        )
+    ).fetchone()
+    assert original_row is not None
+
+    mimic_setup.port_forward.quarantine_endpoints.reset_mock()
+    mimic_setup.ip_manager.remove_alias.reset_mock()
+    mimic_setup.port_forward.remove_forwards.reset_mock()
+
+    target = await mimic_setup.orchestrator._capture_mimic_removal_target(1)
+    assert target is not None
+
+    retired_at = "2026-01-02T00:00:00Z"
+    await db.execute(
+        """UPDATE decoy_hosts
+           SET retired_at = ?,
+               retirement_reason = 'replaced',
+               updated_at = ?
+           WHERE id = ?""",
+        (retired_at, retired_at, original_row["host_id"]),
+    )
+    new_host_cursor = await db.execute(
+        """INSERT INTO decoy_hosts
+           (hostname, bind_address, source_device_id, template_id,
+            created_at, updated_at)
+           VALUES ('replacement.local', '192.168.1.201', 1, ?, ?, ?)""",
+        (original_row["template_id"], retired_at, retired_at),
+    )
+    new_host_id = new_host_cursor.lastrowid
+    assert new_host_id is not None
+    await db.execute(
+        """UPDATE decoys
+           SET name = 'replacement.local',
+               bind_address = '192.168.1.201',
+               status = 'active',
+               created_at = ?,
+               updated_at = ?,
+               host_id = ?,
+               retired_at = NULL,
+               retirement_reason = NULL
+           WHERE id = 1""",
+        (retired_at, retired_at, new_host_id),
+    )
+    await db.execute(
+        """UPDATE virtual_ips
+           SET ip_address = '192.168.1.201'
+           WHERE decoy_id = 1"""
+    )
+    await db.commit()
+
+    replacement = FakeMimic(
+        decoy_id=1,
+        name="replacement.local",
+        bind_address="192.168.1.201",
+        port_configs=original.port_configs,
+        port_remaps={8080: 0},
+    )
+    await replacement.start()
+    mimic_setup.orchestrator._active_mimics[1] = replacement
+    mimic_setup.orchestrator._service_to_primary[1] = 1
+
+    assert (
+        await mimic_setup.orchestrator._revalidate_mimic_removal_target(
+            target
+        )
+        is None
+    )
+    assert replacement.started is True
+    assert mimic_setup.orchestrator._active_mimics[1] is replacement
+    mimic_setup.port_forward.quarantine_endpoints.assert_not_awaited()
+    mimic_setup.ip_manager.remove_alias.assert_not_awaited()
+    mimic_setup.port_forward.remove_forwards.assert_not_awaited()
+    current = await (
+        await db.execute(
+            """SELECT status, bind_address, host_id, retired_at
+               FROM decoys
+               WHERE id = 1"""
+        )
+    ).fetchone()
+    assert tuple(current) == (
+        "active",
+        "192.168.1.201",
+        new_host_id,
+        None,
+    )
+    original_host = await (
+        await db.execute(
+            "SELECT retired_at FROM decoy_hosts WHERE id = ?",
+            (original_row["host_id"],),
+        )
+    ).fetchone()
+    assert original_host["retired_at"] == retired_at
+
+
+@pytest.mark.asyncio
 async def test_durable_host_identity_is_not_regenerated_from_stale_row_config(
     mimic_setup,
     db,
 ):
     assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    durable = await (
+        await db.execute("SELECT hostname FROM decoy_hosts WHERE id = 1")
+    ).fetchone()
     await db.execute(
         """UPDATE decoys
            SET name = 'camera.local',
@@ -694,13 +946,16 @@ async def test_durable_host_identity_is_not_regenerated_from_stale_row_config(
         bind_address="192.168.1.200",
     )
 
-    assert hostname == "source-a6d6"
-    assert name == "source-a6d6.local"
+    assert hostname == durable["hostname"].removesuffix(".local")
+    assert name == durable["hostname"]
     row = await (
         await db.execute("SELECT name, config FROM decoys WHERE id = 1")
     ).fetchone()
-    assert row["name"] == "source-a6d6.local"
-    assert '"mdns_hostname": "source-a6d6"' in row["config"]
+    assert row["name"] == durable["hostname"]
+    assert (
+        f'"mdns_hostname": "{durable["hostname"].removesuffix(".local")}"'
+        in row["config"]
+    )
 
 
 @pytest.mark.asyncio
@@ -895,6 +1150,210 @@ async def test_resume_uses_durable_ports_after_source_profiles_disappear(
     mimic_setup.engine.get_profiles_for_device.assert_not_awaited()
     active = mimic_setup.orchestrator._active_mimics[1]
     assert {config["port"] for config in active.port_configs} == {22, 8080}
+
+
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        ("Lab-Server.localdomain", "lab-server.localdomain"),
+        ("Lab-Server", "lab-server"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_hostname_update_preserves_supported_durable_form_and_mdns_label(
+    mimic_setup,
+    db,
+    requested,
+    expected,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    primary = await (
+        await db.execute(
+            """SELECT d.id, d.host_id
+               FROM decoys d
+               WHERE d.is_primary = 1
+                 AND d.retired_at IS NULL"""
+        )
+    ).fetchone()
+    mimic_setup.mdns.register.reset_mock()
+    mimic_setup.mdns.unregister.reset_mock()
+
+    result = await mimic_setup.orchestrator.update_mimic_hostname(
+        primary["id"],
+        requested,
+    )
+
+    assert result["hostname"] == expected
+    host = await (
+        await db.execute(
+            "SELECT hostname FROM decoy_hosts WHERE id = ?",
+            (primary["host_id"],),
+        )
+    ).fetchone()
+    assert host["hostname"] == expected
+    services = list(
+        await (
+            await db.execute(
+                """SELECT name, config
+                   FROM decoys
+                   WHERE host_id = ?
+                     AND retired_at IS NULL""",
+                (primary["host_id"],),
+            )
+        ).fetchall()
+    )
+    assert services
+    assert {row["name"] for row in services} == {expected}
+    assert {
+        json.loads(row["config"])["mdns_hostname"]
+        for row in services
+    } == {"lab-server"}
+    assert mimic_setup.orchestrator._active_mimics[primary["id"]].name == expected
+    assert mimic_setup.mdns.unregister.await_count == 1
+    assert mimic_setup.mdns.register.await_count >= 1
+    assert {
+        registration.kwargs["hostname"]
+        for registration in mimic_setup.mdns.register.await_args_list
+    } == {"lab-server"}
+
+
+@pytest.mark.parametrize("durable_suffix", ["", ".localdomain"])
+@pytest.mark.asyncio
+async def test_suffix_only_hostname_update_does_not_churn_mdns_and_survives_resume(
+    mimic_setup,
+    db,
+    durable_suffix,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    primary = await (
+        await db.execute(
+            """SELECT d.id, d.host_id, dh.hostname
+               FROM decoys d
+               JOIN decoy_hosts dh ON dh.id = d.host_id
+               WHERE d.is_primary = 1
+                 AND d.retired_at IS NULL"""
+        )
+    ).fetchone()
+    label = primary["hostname"].removesuffix(".local")
+    requested = f"{label}{durable_suffix}"
+    mimic_setup.mdns.register.reset_mock()
+    mimic_setup.mdns.unregister.reset_mock()
+
+    result = await mimic_setup.orchestrator.update_mimic_hostname(
+        primary["id"],
+        requested,
+    )
+
+    assert result["hostname"] == requested
+    mimic_setup.mdns.unregister.assert_not_awaited()
+    mimic_setup.mdns.register.assert_not_awaited()
+    saved = await (
+        await db.execute(
+            "SELECT hostname FROM decoy_hosts WHERE id = ?",
+            (primary["host_id"],),
+        )
+    ).fetchone()
+    assert saved["hostname"] == requested
+
+    await mimic_setup.orchestrator.stop_all()
+    mimic_setup.mdns.register.reset_mock()
+    mimic_setup.mdns.unregister.reset_mock()
+    assert await mimic_setup.orchestrator.resume_active() == 1
+    assert (
+        mimic_setup.orchestrator._active_mimics[primary["id"]].name
+        == requested
+    )
+    assert {
+        registration.kwargs["hostname"]
+        for registration in mimic_setup.mdns.register.await_args_list
+    } == {label}
+
+
+@pytest.mark.parametrize(
+    ("device_hostname", "fingerprint_hostname", "requested"),
+    [
+        ("Router.localdomain", None, "router"),
+        (None, "Printer.LOCAL.", "printer.localdomain"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_hostname_update_rejects_observed_real_device_label(
+    mimic_setup,
+    db,
+    device_hostname,
+    fingerprint_hostname,
+    requested,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    primary = await (
+        await db.execute(
+            """SELECT d.id, d.host_id, dh.hostname
+               FROM decoys d
+               JOIN decoy_hosts dh ON dh.id = d.host_id
+               WHERE d.is_primary = 1
+                 AND d.retired_at IS NULL"""
+        )
+    ).fetchone()
+    if device_hostname is not None:
+        await db.execute(
+            "UPDATE devices SET hostname = ? WHERE id = 1",
+            (device_hostname,),
+        )
+    if fingerprint_hostname is not None:
+        await db.execute(
+            """INSERT INTO device_fingerprints
+               (device_id, mdns_hostname, signal_count, first_seen, last_seen)
+               VALUES (1, ?, 1, '2026-01-01T00:00:00Z',
+                       '2026-01-01T00:00:00Z')""",
+            (fingerprint_hostname,),
+        )
+    await db.commit()
+    mimic_setup.mdns.register.reset_mock()
+    mimic_setup.mdns.unregister.reset_mock()
+
+    with pytest.raises(RuntimeError, match="real device or the sensor host"):
+        await mimic_setup.orchestrator.update_mimic_hostname(
+            primary["id"],
+            requested,
+        )
+
+    saved = await (
+        await db.execute(
+            "SELECT hostname FROM decoy_hosts WHERE id = ?",
+            (primary["host_id"],),
+        )
+    ).fetchone()
+    assert saved["hostname"] == primary["hostname"]
+    mimic_setup.mdns.unregister.assert_not_awaited()
+    mimic_setup.mdns.register.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hostname_update_rejects_sensor_mdns_label(mimic_setup, db):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    primary = await (
+        await db.execute(
+            """SELECT d.id, d.host_id, dh.hostname
+               FROM decoys d
+               JOIN decoy_hosts dh ON dh.id = d.host_id
+               WHERE d.is_primary = 1
+                 AND d.retired_at IS NULL"""
+        )
+    ).fetchone()
+
+    with pytest.raises(RuntimeError, match="real device or the sensor host"):
+        await mimic_setup.orchestrator.update_mimic_hostname(
+            primary["id"],
+            "SENSOR-BOX.localdomain.",
+        )
+
+    saved = await (
+        await db.execute(
+            "SELECT hostname FROM decoy_hosts WHERE id = ?",
+            (primary["host_id"],),
+        )
+    ).fetchone()
+    assert saved["hostname"] == primary["hostname"]
 
 
 @pytest.mark.asyncio
@@ -1524,7 +1983,7 @@ async def test_startup_quarantines_complete_persisted_set_before_orphan_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_startup_preserves_intentionally_stopped_mimic_after_cleanup(
+async def test_startup_retires_stopped_mimic_after_verified_cleanup(
     mimic_setup,
     db,
 ):
@@ -1544,12 +2003,14 @@ async def test_startup_preserves_intentionally_stopped_mimic_after_cleanup(
     mimic_setup.port_forward.remove_forwards.assert_awaited_once_with(decoy_id)
     stopped = await (
         await db.execute(
-            "SELECT retired_at FROM decoys WHERE id = ?",
+            """SELECT retired_at, retirement_reason
+               FROM decoys WHERE id = ?""",
             (decoy_id,),
         )
     ).fetchone()
     assert stopped is not None
-    assert stopped["retired_at"] is None
+    assert stopped["retired_at"] is not None
+    assert stopped["retirement_reason"] == "stopped_after_network_cleanup"
     assert await (
         await db.execute(
             "SELECT id FROM mimic_templates WHERE id = ?",
@@ -1562,6 +2023,57 @@ async def test_startup_preserves_intentionally_stopped_mimic_after_cleanup(
             (credential_id,),
         )
     ).fetchone() is not None
+
+
+@pytest.mark.asyncio
+async def test_startup_retires_stopped_host_and_releases_hostname_after_cleanup(
+    mimic_setup,
+    db,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    renamed = await mimic_setup.orchestrator.update_mimic_hostname(
+        1,
+        "files.localdomain",
+    )
+    original_host_id = renamed["host_id"]
+    assert await mimic_setup.orchestrator.disable_mimic(1) is True
+
+    mimic_setup.port_forward.quarantine_endpoints.reset_mock()
+    mimic_setup.ip_manager.remove_alias.reset_mock()
+    mimic_setup.port_forward.remove_forwards.reset_mock()
+
+    assert await mimic_setup.orchestrator.prepare_persisted_network() == 1
+
+    retired_service = await (
+        await db.execute(
+            "SELECT retired_at FROM decoys WHERE id = 1",
+        )
+    ).fetchone()
+    retired_host = await (
+        await db.execute(
+            "SELECT retired_at FROM decoy_hosts WHERE id = ?",
+            (original_host_id,),
+        )
+    ).fetchone()
+    assert retired_service["retired_at"] is not None
+    assert retired_host["retired_at"] is not None
+
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    replacement = await (
+        await db.execute(
+            """SELECT id
+               FROM decoys
+               WHERE decoy_type = 'mimic'
+                 AND status = 'active'
+                 AND retired_at IS NULL
+                 AND is_primary = 1"""
+        )
+    ).fetchone()
+    result = await mimic_setup.orchestrator.update_mimic_hostname(
+        replacement["id"],
+        "files",
+    )
+    assert result["hostname"] == "files"
 
 
 @pytest.mark.asyncio
@@ -1734,12 +2246,27 @@ async def test_restart_does_not_replace_isolation_when_alias_removal_fails(
 
 
 @pytest.mark.asyncio
+async def test_restart_reports_unavailable_helper_when_quarantine_fails(
+    mimic_setup,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    assert await mimic_setup.orchestrator.disable_mimic(1) is True
+    mimic_setup.port_forward.quarantine_endpoints.return_value = False
+
+    with pytest.raises(
+        HelperUnavailableError,
+        match="Could not confirm quarantine",
+    ):
+        await mimic_setup.orchestrator.restart_mimic(1)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "removal_failure",
     [False, RuntimeError("prior alias state is unknown")],
     ids=["false-result", "exception"],
 )
-async def test_stopped_restart_with_possibly_active_ip_stays_quarantined(
+async def test_stopped_restart_with_unknown_alias_reports_helper_unavailable(
     mimic_setup,
     removal_failure,
 ):
@@ -1763,7 +2290,11 @@ async def test_stopped_restart_with_possibly_active_ip_stays_quarantined(
     mimic_setup.port_forward.quarantine_endpoints.reset_mock()
     mimic_setup.port_forward.add_forwards.reset_mock()
 
-    assert await mimic_setup.orchestrator.restart_mimic(1) is False
+    with pytest.raises(
+        HelperUnavailableError,
+        match="Could not withdraw alias",
+    ):
+        await mimic_setup.orchestrator.restart_mimic(1)
 
     mimic_setup.port_forward.quarantine_endpoints.assert_awaited_once_with(
         {1: "192.168.1.200"}

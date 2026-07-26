@@ -12,13 +12,17 @@ Pipeline stages:
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import aiosqlite
 
-from squirrelops_home_sensor.devices.classifier import DeviceClassifier
+from squirrelops_home_sensor.devices.classifier import (
+    DeviceClassificationEvidence,
+    DeviceClassifier,
+)
 from squirrelops_home_sensor.devices.decoy_filter import DECOY_DEVICE_FILTER, is_decoy_device_ip
 from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.events.types import EventType
@@ -117,6 +121,90 @@ class DeviceManager:
         self._classifier = classifier
         self._config = config
         self._known_devices: list[TrackedDevice] = []
+        self._classification_evidence: dict[int, DeviceClassificationEvidence] = {}
+        self._pending_ai_classification_ids: set[int] = set()
+
+    @staticmethod
+    def _evidence_from_scan(
+        scan: ScanResult,
+        fingerprint: CompositeFingerprint,
+    ) -> DeviceClassificationEvidence:
+        """Extract useful AI evidence without retaining network destinations."""
+        mac_oui = (
+            fingerprint.mac_address[:8]
+            if fingerprint.mac_address is not None
+            else None
+        )
+        open_ports = tuple(sorted({
+            int(port)
+            for port in (scan.open_ports or [])
+            if not isinstance(port, bool) and 1 <= int(port) <= 65535
+        }))
+        dhcp_options = tuple(dict.fromkeys(
+            int(option)
+            for option in (scan.dhcp_options or [])
+            if not isinstance(option, bool) and 0 <= int(option) <= 255
+        ))
+        return DeviceClassificationEvidence(
+            mac_oui=mac_oui,
+            dns_hostname=scan.hostname,
+            mdns_hostname=scan.mdns_hostname,
+            open_ports=open_ports,
+            dhcp_options=dhcp_options,
+        )
+
+    def _merge_classification_evidence(
+        self,
+        device_id: int,
+        *,
+        dns_hostname: str | None = None,
+        mdns_hostname: str | None = None,
+        open_ports: Collection[int] = (),
+        detected_services: Collection[str] = (),
+        dhcp_options: Collection[int] = (),
+        mdns_service_types: Collection[str] = (),
+        upnp_friendly_name: str | None = None,
+        upnp_manufacturer: str | None = None,
+        upnp_model_name: str | None = None,
+        upnp_server_header: str | None = None,
+    ) -> None:
+        """Merge evidence collected across scan phases for one new device."""
+        if (
+            device_id not in self._pending_ai_classification_ids
+            and device_id not in self._classification_evidence
+        ):
+            return
+        current = self._classification_evidence.get(
+            device_id,
+            DeviceClassificationEvidence(),
+        )
+        self._classification_evidence[device_id] = DeviceClassificationEvidence(
+            mac_oui=current.mac_oui,
+            dns_hostname=dns_hostname or current.dns_hostname,
+            mdns_hostname=mdns_hostname or current.mdns_hostname,
+            open_ports=tuple(sorted(set(current.open_ports).union(open_ports))),
+            detected_services=tuple(sorted(
+                set(current.detected_services).union(
+                    str(value) for value in detected_services if str(value).strip()
+                )
+            )),
+            dhcp_options=tuple(dict.fromkeys(
+                (*current.dhcp_options, *(
+                    int(value)
+                    for value in dhcp_options
+                    if not isinstance(value, bool)
+                ))
+            )),
+            mdns_service_types=tuple(sorted(
+                set(current.mdns_service_types).union(
+                    str(value) for value in mdns_service_types if str(value).strip()
+                )
+            )),
+            upnp_friendly_name=upnp_friendly_name or current.upnp_friendly_name,
+            upnp_manufacturer=upnp_manufacturer or current.upnp_manufacturer,
+            upnp_model_name=upnp_model_name or current.upnp_model_name,
+            upnp_server_header=upnp_server_header or current.upnp_server_header,
+        )
 
     def _fingerprint_config(self) -> dict[str, Any]:
         if self._config is None:
@@ -300,7 +388,10 @@ class DeviceManager:
         for td in self._known_devices:
             if td.vendor == "Unknown" and td.mac_address is not None:
                 fp = CompositeFingerprint(mac_address=td.mac_address)
-                classification = await self._classifier.classify(fp)
+                classification = await self._classifier.classify(
+                    fp,
+                    allow_llm=False,
+                )
                 if classification.manufacturer != "Unknown":
                     await self._db.execute(
                         "UPDATE devices SET vendor = ?, device_type = ? WHERE id = ?",
@@ -453,15 +544,24 @@ class DeviceManager:
         now_iso: str,
     ) -> int:
         """Handle a newly-discovered device."""
-        # Classify
-        classification = await self._classifier.classify(fp)
+        # Run deterministic signatures now. Optional AI waits until the port
+        # and discovery phases have supplied useful, interpretable evidence.
+        evidence = self._evidence_from_scan(scan, fp)
+        classification = await self._classifier.classify(
+            fp,
+            evidence,
+            allow_llm=False,
+        )
 
         # Store in database — let SQLite auto-assign the ID
         cursor = await self._db.execute(
-            "INSERT INTO devices (ip_address, mac_address, hostname, vendor, first_seen, last_seen) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO devices "
+            "(ip_address, mac_address, hostname, vendor, device_type, "
+            "model_name, first_seen, last_seen) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (scan.ip_address, fp.mac_address, scan.hostname,
-             classification.manufacturer, now_iso, now_iso),
+             classification.manufacturer, classification.device_type,
+             classification.model, now_iso, now_iso),
         )
         device_id = cursor.lastrowid
         if device_id is None:
@@ -488,6 +588,7 @@ class DeviceManager:
             hostname=scan.hostname,
             vendor=classification.manufacturer,
             device_type=classification.device_type,
+            model_name=classification.model,
             fingerprint=fp,
             connection_destinations=conn_dests,
             open_ports=ports_set,
@@ -496,6 +597,12 @@ class DeviceManager:
             is_online=True,
         )
         self._known_devices.append(tracked)
+        if (
+            classification.source == "fallback"
+            or classification.device_type == "unknown"
+        ):
+            self._pending_ai_classification_ids.add(device_id)
+            self._classification_evidence[device_id] = evidence
 
         # Publish event with full device summary for WebSocket clients
         await self._bus.publish(
@@ -674,12 +781,18 @@ class DeviceManager:
         return list(self._known_devices)
 
     async def _persist_open_ports(
-        self, device_id: int, port_results: list[Any]
+        self,
+        device_id: int,
+        port_results: list[Any],
+        *,
+        preserve_ports: Collection[int] = frozenset(),
     ) -> None:
         """Persist individual open port numbers with service metadata to the database.
 
         Accepts either a list of PortResult objects (with service_name/banner)
-        or a frozenset/list of plain ints (backward compatible).
+        or a frozenset/list of plain ints (backward compatible). Ports whose
+        latest probe was inconclusive are retained without refreshing their
+        metadata or last-seen timestamp.
         """
         from squirrelops_home_sensor.scanner.port_scanner import PortResult
 
@@ -692,13 +805,14 @@ class DeviceManager:
                 port, svc, banner = int(item), None, None
             normalized.append((port, svc, banner))
 
-        current_ports = sorted({port for port, _, _ in normalized})
-        if current_ports:
-            placeholders = ",".join("?" for _ in current_ports)
+        current_ports = {port for port, _, _ in normalized}
+        retained_ports = sorted(current_ports.union(preserve_ports))
+        if retained_ports:
+            placeholders = ",".join("?" for _ in retained_ports)
             await self._db.execute(
                 f"""DELETE FROM device_open_ports
                     WHERE device_id = ? AND port NOT IN ({placeholders})""",
-                (device_id, *current_ports),
+                (device_id, *retained_ports),
             )
         else:
             await self._db.execute(
@@ -726,6 +840,7 @@ class DeviceManager:
         port_data: list[Any],
         *,
         device_id: int | None = None,
+        inconclusive_ports: Collection[int] = frozenset(),
     ) -> None:
         """Enrich a known device with open port data from a port scan.
 
@@ -742,6 +857,10 @@ class DeviceManager:
             IP address of the device to enrich.
         port_data:
             List of PortResult objects or plain port numbers.
+        inconclusive_ports:
+            Ports whose current probe timed out or hit a network error. Only
+            ports already known open are retained, without treating the failed
+            probe as a new observation.
         """
         from squirrelops_home_sensor.scanner.port_scanner import PortResult
 
@@ -763,10 +882,25 @@ class DeviceManager:
             r.port if isinstance(r, PortResult) else int(r)
             for r in port_data
         ]
-        ports_set = frozenset(port_numbers)
+        detected_services = [
+            r.service_name
+            for r in port_data
+            if isinstance(r, PortResult) and r.service_name
+        ]
+        self._merge_classification_evidence(
+            tracked.device_id,
+            open_ports=port_numbers,
+            detected_services=detected_services,
+        )
+        preserved_ports = tracked.open_ports.intersection(inconclusive_ports)
+        ports_set = frozenset(port_numbers).union(preserved_ports)
         if ports_set == tracked.open_ports:
             # Even if port set unchanged, persist to update service_name/banner
-            await self._persist_open_ports(tracked.device_id, port_data)
+            await self._persist_open_ports(
+                tracked.device_id,
+                port_data,
+                preserve_ports=preserved_ports,
+            )
             return
 
         tracked.open_ports = ports_set
@@ -780,7 +914,7 @@ class DeviceManager:
             mdns_hostname=tracked.fingerprint.mdns_hostname,
             dhcp_options=None,
             connections=None,
-            open_ports=port_numbers,
+            open_ports=sorted(ports_set),
         )
         fp = CompositeFingerprint(
             mac_address=refreshed_port_fp.mac_address,
@@ -810,7 +944,11 @@ class DeviceManager:
         await self._db.commit()
 
         # Persist individual port numbers with service metadata
-        await self._persist_open_ports(tracked.device_id, port_data)
+        await self._persist_open_ports(
+            tracked.device_id,
+            port_data,
+            preserve_ports=preserved_ports,
+        )
 
         # Publish device.updated with full summary
         await self._bus.publish(
@@ -823,9 +961,11 @@ class DeviceManager:
         self,
         ip_address: str,
         mdns_hostname: str | None = None,
+        mdns_service_types: Collection[str] = (),
         upnp_friendly_name: str | None = None,
         upnp_manufacturer: str | None = None,
         upnp_model_name: str | None = None,
+        upnp_server_header: str | None = None,
         *,
         device_id: int | None = None,
     ) -> None:
@@ -853,6 +993,16 @@ class DeviceManager:
         )
         if tracked is None:
             return
+
+        self._merge_classification_evidence(
+            tracked.device_id,
+            mdns_hostname=mdns_hostname,
+            mdns_service_types=mdns_service_types,
+            upnp_friendly_name=upnp_friendly_name,
+            upnp_manufacturer=upnp_manufacturer,
+            upnp_model_name=upnp_model_name,
+            upnp_server_header=upnp_server_header,
+        )
 
         # Determine what changed
         changed = False
@@ -930,6 +1080,88 @@ class DeviceManager:
             await self._build_device_payload(tracked, now_iso),
             source_id=str(tracked.device_id),
         )
+
+    async def finalize_pending_classifications(
+        self,
+        observed_device_ids: Collection[int],
+    ) -> int:
+        """Classify newly unknown devices after scan enrichment is complete.
+
+        Evidence stays pending while AI is disabled, allowing a provider
+        enabled later in the same sensor session to handle the next scan. Once
+        a configured provider is attempted, the evidence is discarded so an
+        unavailable or uncertain model is not called repeatedly every cycle.
+        """
+        if not self._classifier.has_llm:
+            return 0
+
+        candidates = sorted(
+            self._pending_ai_classification_ids.intersection(observed_device_ids)
+        )
+        updated = 0
+        for device_id in candidates:
+            self._pending_ai_classification_ids.discard(device_id)
+            evidence = self._classification_evidence.pop(device_id, None)
+            tracked = next(
+                (
+                    device
+                    for device in self._known_devices
+                    if device.device_id == device_id
+                ),
+                None,
+            )
+            if tracked is None or evidence is None:
+                continue
+
+            classification = await self._classifier.classify(
+                tracked.fingerprint,
+                evidence,
+                allow_local=False,
+            )
+            if classification.source != "llm":
+                continue
+
+            current_vendor = str(tracked.vendor or "").strip().lower()
+            current_type = str(tracked.device_type or "").strip().lower()
+            if current_vendor in {"", "unknown"}:
+                tracked.vendor = classification.manufacturer
+            if current_type in {"", "unknown"}:
+                tracked.device_type = classification.device_type
+            if not tracked.model_name and classification.model:
+                tracked.model_name = classification.model
+
+            now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            await self._db.execute(
+                """UPDATE devices
+                   SET vendor = ?, device_type = ?, model_name = ?, last_seen = ?
+                   WHERE id = ?""",
+                (
+                    tracked.vendor,
+                    tracked.device_type,
+                    tracked.model_name,
+                    now_iso,
+                    tracked.device_id,
+                ),
+            )
+            await self._db.execute(
+                """UPDATE device_fingerprints
+                   SET confidence = ?, last_seen = ?
+                   WHERE id = (
+                       SELECT id FROM device_fingerprints
+                       WHERE device_id = ?
+                       ORDER BY id DESC LIMIT 1
+                   )""",
+                (classification.confidence, now_iso, tracked.device_id),
+            )
+            await self._db.commit()
+            await self._bus.publish(
+                "device.updated",
+                await self._build_device_payload(tracked, now_iso),
+                source_id=str(tracked.device_id),
+            )
+            updated += 1
+
+        return updated
 
     async def enrich_device_ha(
         self,

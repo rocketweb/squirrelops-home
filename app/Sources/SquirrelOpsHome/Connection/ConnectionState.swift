@@ -10,6 +10,7 @@ import Foundation
 ///
 /// connecting -> [health OK, status 403] -> authFailed
 /// authFailed -> [user taps Re-pair]     -> disconnected -> SetupFlow
+/// syncing -> [API protocol mismatch]    -> incompatible
 /// ```
 public enum ConnectionState: String, Sendable {
     case disconnected
@@ -20,6 +21,9 @@ public enum ConnectionState: String, Sendable {
     /// Sensor is reachable but our credentials were rejected (pairing lost).
     /// Terminal state — no reconnect. User must re-pair.
     case authFailed
+    /// App and sensor component versions may differ, but their explicit API
+    /// protocol contracts must match. Terminal state; no blind reconnect.
+    case incompatible
 
     /// Whether the connection is in a usable state where REST requests can be made.
     /// Returns true for `.connected`, `.syncing`, and `.live`.
@@ -27,7 +31,7 @@ public enum ConnectionState: String, Sendable {
         switch self {
         case .connected, .syncing, .live:
             return true
-        case .disconnected, .connecting, .authFailed:
+        case .disconnected, .connecting, .authFailed, .incompatible:
             return false
         }
     }

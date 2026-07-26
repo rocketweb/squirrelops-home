@@ -23,6 +23,9 @@ from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnection
 
 logger = logging.getLogger(__name__)
 
+_MAX_CREDENTIAL_AUTH_SIZE = 8 * 1024
+_MAX_DECODED_CREDENTIAL_SIZE = 4 * 1024
+
 
 def _build_directory_listing_html(password_filename: str = "passwords.txt") -> str:
     """Build an nginx autoindex-style directory listing page."""
@@ -149,13 +152,29 @@ class FileShareDecoy(BaseDecoy):
         Returns the decoded 'username:password' string, or None if
         the header is not valid Basic auth.
         """
-        if not auth_header.startswith("Basic "):
+        if len(auth_header) > _MAX_CREDENTIAL_AUTH_SIZE:
             return None
+
+        scheme = auth_header[:5]
+        separator = auth_header[5:6]
+        encoded = auth_header[5:].lstrip(" \t")
+        if (
+            scheme.casefold() != "basic"
+            or separator not in {" ", "\t"}
+            or not encoded
+            or any(char.isspace() for char in encoded)
+        ):
+            return None
+
         try:
-            encoded = auth_header[6:].strip()
-            decoded = base64.b64decode(encoded).decode("utf-8", errors="replace")
-            return decoded
-        except Exception:
+            decoded_bytes = base64.b64decode(
+                encoded.encode("ascii"),
+                validate=True,
+            )
+            if len(decoded_bytes) > _MAX_DECODED_CREDENTIAL_SIZE:
+                return None
+            return decoded_bytes.decode("utf-8", errors="strict")
+        except (UnicodeDecodeError, UnicodeEncodeError, ValueError):
             return None
 
     def _check_credential_in_request(
@@ -168,17 +187,23 @@ class FileShareDecoy(BaseDecoy):
         Checks both Basic auth (decoded) and Bearer token headers,
         plus the raw header value against planted credential values.
         """
-        auth = headers.get("Authorization", "") or headers.get("authorization", "")
+        auth_values = [
+            auth_value
+            for key, value in headers.items()
+            if key.casefold() == "authorization"
+            for auth_value in value.splitlines()
+        ]
 
-        # Check Basic auth: decode and compare
-        decoded = self._decode_basic_auth(auth)
-        if decoded and decoded in self._credential_values:
-            return decoded
+        for auth in auth_values:
+            # Check Basic auth: decode and compare
+            decoded = self._decode_basic_auth(auth)
+            if decoded and decoded in self._credential_values:
+                return decoded
 
-        # Check Bearer and raw header for planted values
-        for cred_val in self._credential_values:
-            if cred_val in auth:
-                return cred_val
+            # Check Bearer and raw header for planted values
+            for cred_val in self._credential_values:
+                if cred_val in auth:
+                    return cred_val
 
         # Check body
         if body:

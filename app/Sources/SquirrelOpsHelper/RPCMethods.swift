@@ -9,6 +9,7 @@ func registerMethods(router: RPCRouter) {
     // serialized with every PF mutation. It is intentionally process-local:
     // after a helper restart the first ruleset update cleans every endpoint.
     var pfEndpointStateCache = PFEndpointStateCache()
+    let virtualIPOwnership = VirtualIPOwnershipStore()
 
     router.handlers["ping"] = { _ in
         [
@@ -26,7 +27,33 @@ func registerMethods(router: RPCRouter) {
         guard let subnet = params["subnet"] as? String else {
             throw RPCError.internalError("Missing 'subnet' parameter")
         }
-        return try ARPScanner.scan(subnet: subnet)
+        let route = try observeIPv4DefaultRoute { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
+        let interfaceResult = try runCommand(
+            executable: "/sbin/ifconfig",
+            arguments: [route.interface]
+        )
+        guard interfaceResult.status == 0 else {
+            throw RPCError.internalError(
+                "Could not inspect the default-route interface"
+            )
+        }
+        let networks = try interfaceIPv4Networks(
+            from: interfaceResult.stdout
+        )
+        try validateARPScanCIDR(
+            subnet,
+            interface: route.interface,
+            networks: networks,
+            gateway: route.gateway,
+            hasEthernetAddress:
+                ethernetAddressFromIfconfig(interfaceResult.stdout) != nil
+        )
+        return try ARPScanner.scan(
+            subnet: subnet,
+            interface: route.interface
+        )
     }
 
     router.handlers["addIPAlias"] = { params in
@@ -53,6 +80,32 @@ func registerMethods(router: RPCRouter) {
             )
         }
 
+        let interfaceInfo = try runCommand(
+            executable: "/sbin/ifconfig",
+            arguments: [interface]
+        )
+        guard interfaceInfo.status == 0 else {
+            throw RPCError.internalError(
+                "Could not inspect selected interface \(interface): "
+                    + interfaceInfo.stderr
+            )
+        }
+        let networks = try interfaceIPv4Networks(from: interfaceInfo.stdout)
+        let route = try observeIPv4DefaultRoute { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
+        guard route.interface == interface else {
+            throw RPCError.internalError(
+                "Virtual IP interface must be the IPv4 default route"
+            )
+        }
+        try validateVirtualIPAddress(
+            ip,
+            interface: interface,
+            networks: networks,
+            gateway: route.gateway
+        )
+
         guard let interfaceAddresses = ipv4InterfaceAddresses() else {
             throw RPCError.internalError(
                 "Could not enumerate local IPv4 addresses"
@@ -71,28 +124,110 @@ func registerMethods(router: RPCRouter) {
             physicalAddressPresent: hasPhysicalAddress,
             loopbackAddressPresent: hasLoopbackAddress
         )
+        try requireUnusedVirtualIPAddress(
+            ip: ip,
+            interface: interface
+        ) { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
 
-        let interfaceInfo = try runCommand(
-            executable: "/sbin/ifconfig",
-            arguments: [interface]
-        )
-        guard interfaceInfo.status == 0,
-              let ethernetAddress = ethernetAddressFromIfconfig(
-                  interfaceInfo.stdout
-              ) else {
+        guard let ethernetAddress = ethernetAddressFromIfconfig(
+            interfaceInfo.stdout
+        ) else {
             throw RPCError.internalError(
                 "Could not determine hardware address for \(interface): "
                     + interfaceInfo.stderr
             )
         }
 
-        try publishVirtualIP(
+        try requirePFProtectedVirtualIP(
             ip: ip,
             interface: interface,
-            prefixLength: prefixLength,
-            ethernetAddress: ethernetAddress
+            stateCache: pfEndpointStateCache
+        )
+        let currentRouteInfo = try runCommand(
+            executable: "/sbin/route",
+            arguments: ipv4DefaultRouteCommandArguments
+        )
+        let currentInterfaceInfo = try runCommand(
+            executable: "/sbin/ifconfig",
+            arguments: [interface]
+        )
+        try requireUnchangedPFNetworkContext(
+            expectedRoute: route,
+            expectedNetworks: networks,
+            routeResult: currentRouteInfo,
+            interfaceResult: currentInterfaceInfo
+        )
+        try requirePacketFilteringEnabled(
+            phase: "before virtual-IP publication"
+        ) { arguments, input in
+            try runPFCTL(arguments: arguments, input: input)
+        }
+        guard let publicationAddresses = ipv4InterfaceAddresses() else {
+            throw RPCError.internalError(
+                "Could not re-enumerate local IPv4 addresses before publication"
+            )
+        }
+        try validateAliasAddition(
+            ip: ip,
+            interface: interface,
+            physicalAddressPresent: physicalInterfaceHasIPv4Address(
+                ip,
+                interfaceAddresses: publicationAddresses
+            ),
+            loopbackAddressPresent: publicationAddresses.contains {
+                $0.interface == "lo0" && $0.address == ip
+            }
+        )
+        try requireUnusedVirtualIPAddress(
+            ip: ip,
+            interface: interface
         ) { executable, arguments in
             try runCommand(executable: executable, arguments: arguments)
+        }
+
+        // Record conservative ownership before the first OS mutation. A crash
+        // can leave a stale claim, but cannot leave an untracked root-owned
+        // alias that a compromised sensor can later abuse.
+        try virtualIPOwnership.insert(ip: ip, interface: interface)
+        do {
+            try publishVirtualIP(
+                ip: ip,
+                interface: interface,
+                prefixLength: prefixLength,
+                ethernetAddress: ethernetAddress
+            ) { executable, arguments in
+                try runCommand(executable: executable, arguments: arguments)
+            }
+        } catch {
+            // Publication already performs best-effort rollback. Prove both
+            // halves absent before releasing the durable ownership claim.
+            if let addresses = ipv4InterfaceAddresses() {
+                let hadLoopbackAlias = addresses.contains {
+                    $0.interface == "lo0" && $0.address == ip
+                }
+                if (try? withdrawVirtualIP(
+                    ip: ip,
+                    interface: interface,
+                    hadLoopbackAlias: hadLoopbackAlias,
+                    using: { executable, arguments in
+                        try runCommand(
+                            executable: executable,
+                            arguments: arguments
+                        )
+                    },
+                    interfaceAddresses: ipv4InterfaceAddresses
+                )) != nil {
+                    // A failure to update the ledger is safe: the stale claim
+                    // continues to authorize only this exact scoped cleanup.
+                    try? virtualIPOwnership.remove(
+                        ip: ip,
+                        interface: interface
+                    )
+                }
+            }
+            throw error
         }
         return [
             "success": true,
@@ -109,6 +244,33 @@ func registerMethods(router: RPCRouter) {
             (params["protected_endpoints"] as? [[String: Any]]) ?? []
         let interface = (params["interface"] as? String) ?? "en0"
 
+        let route = try observeIPv4DefaultRoute { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
+        let interfaceResult = try runCommand(
+            executable: "/sbin/ifconfig",
+            arguments: [route.interface]
+        )
+        guard interfaceResult.status == 0 else {
+            throw RPCError.internalError(
+                "Could not inspect the PF default-route interface"
+            )
+        }
+        let networks = try interfaceIPv4Networks(from: interfaceResult.stdout)
+        guard let initialInterfaceAddresses = ipv4InterfaceAddresses() else {
+            throw RPCError.internalError(
+                "Could not enumerate local IPv4 addresses for PF isolation"
+            )
+        }
+        let backendListeners = try validatePortForwardRequest(
+            forwardingRules: rules,
+            protectedEndpoints: protectedEndpoints,
+            interface: interface,
+            route: route,
+            networks: networks,
+            interfaceAddresses: initialInterfaceAddresses,
+            ownedEntries: try virtualIPOwnership.allEntries()
+        )
         let pfRules = try buildPFRules(
             forwardingRules: rules,
             protectedEndpoints: protectedEndpoints,
@@ -124,6 +286,11 @@ func registerMethods(router: RPCRouter) {
         )
 
         if pfRules.isEmpty {
+            guard try virtualIPOwnership.allEntries().isEmpty else {
+                throw RPCError.internalError(
+                    "Cannot clear PF while helper-owned aliases exist"
+                )
+            }
             // No rules — flush the anchor
             let flush = try runPFCTL(
                 arguments: ["-a", "com.apple/squirrelops", "-F", "all"]
@@ -167,6 +334,58 @@ func registerMethods(router: RPCRouter) {
             try runPFCTL(arguments: arguments, input: input)
         }
 
+        let currentOwnedEntries = try virtualIPOwnership.allEntries()
+        try revalidatePortForwardOwnership(
+            forwardingRules: rules,
+            protectedEndpoints: protectedEndpoints,
+            interface: interface,
+            ownedEntries: currentOwnedEntries
+        )
+        if !backendListeners.isEmpty {
+            guard let sensorUID = serviceAccountUID() else {
+                throw RPCError.internalError(
+                    "Sensor service account is unavailable"
+                )
+            }
+            for listener in backendListeners {
+                try requireSensorOwnedListener(
+                    listener,
+                    serviceUID: sensorUID
+                ) { executable, arguments in
+                    try runCommand(
+                        executable: executable,
+                        arguments: arguments
+                    )
+                }
+            }
+        }
+
+        let currentRouteResult = try runCommand(
+            executable: "/sbin/route",
+            arguments: ipv4DefaultRouteCommandArguments
+        )
+        let currentInterfaceResult = try runCommand(
+            executable: "/sbin/ifconfig",
+            arguments: [interface]
+        )
+        try requireUnchangedPFNetworkContext(
+            expectedRoute: route,
+            expectedNetworks: networks,
+            routeResult: currentRouteResult,
+            interfaceResult: currentInterfaceResult
+        )
+        guard let currentInterfaceAddresses = ipv4InterfaceAddresses() else {
+            throw RPCError.internalError(
+                "Could not re-enumerate local IPv4 addresses before PF load"
+            )
+        }
+        try requireNoLocalAddressConflictsForPreAliasQuarantine(
+            protectedEndpoints: protectedEndpoints,
+            interface: interface,
+            ownedEntries: try virtualIPOwnership.allEntries(),
+            interfaceAddresses: currentInterfaceAddresses
+        )
+
         // Loading a complete anchor ruleset is atomic.
         let load = try runPFCTL(
             arguments: ["-a", "com.apple/squirrelops", "-f", "-"],
@@ -175,6 +394,35 @@ func registerMethods(router: RPCRouter) {
 
         if load.status != 0 {
             throw RPCError.internalError("pfctl anchor load failed: \(load.stderr)")
+        }
+        if !backendListeners.isEmpty {
+            do {
+                guard let sensorUID = serviceAccountUID() else {
+                    throw RPCError.internalError(
+                        "Sensor service account disappeared"
+                    )
+                }
+                for listener in backendListeners {
+                    try requireSensorOwnedListener(
+                        listener,
+                        serviceUID: sensorUID
+                    ) { executable, arguments in
+                        try runCommand(
+                            executable: executable,
+                            arguments: arguments
+                        )
+                    }
+                }
+            } catch {
+                try quarantinePortForwardingAfterListenerRace(
+                    protectedEndpoints: protectedEndpoints,
+                    interface: interface,
+                    stateCache: &pfEndpointStateCache
+                ) { arguments, input in
+                    try runPFCTL(arguments: arguments, input: input)
+                }
+                throw error
+            }
         }
         pfEndpointStateCache.recordSuccessfulLiveMutation(
             endpointSignatures,
@@ -203,6 +451,11 @@ func registerMethods(router: RPCRouter) {
     }
 
     router.handlers["clearPortForwards"] = { _ in
+        guard try virtualIPOwnership.allEntries().isEmpty else {
+            throw RPCError.internalError(
+                "Cannot clear PF while helper-owned aliases exist"
+            )
+        }
         let stateCleanupIPs = pfEndpointStateCache.cleanupIPs(for: [:])
         let flush = try runPFCTL(
             arguments: ["-a", "com.apple/squirrelops", "-F", "all"]
@@ -237,12 +490,31 @@ func registerMethods(router: RPCRouter) {
         guard isValidIPv4(ip) else {
             throw RPCError.internalError("Invalid IP address: \(ip)")
         }
+        let isOwned = try virtualIPOwnership.contains(
+            ip: ip,
+            interface: interface
+        )
 
         guard let interfaceAddresses = ipv4InterfaceAddresses() else {
             throw RPCError.internalError(
                 "Could not enumerate local IPv4 addresses"
             )
         }
+        let removalDisposition = try authorizeVirtualIPRemoval(
+            ip: ip,
+            interface: interface,
+            isOwned: isOwned,
+            interfaceAddresses: interfaceAddresses
+        ) { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
+        if removalDisposition == .alreadyAbsent {
+            return [
+                "success": true,
+                "already_absent": true,
+            ]
+        }
+
         let hadLoopbackAlias = interfaceAddresses.contains {
             $0.interface == "lo0" && $0.address == ip
         }
@@ -264,6 +536,9 @@ func registerMethods(router: RPCRouter) {
             },
             interfaceAddresses: ipv4InterfaceAddresses
         )
+        // Remove durable authority only after the OS proves that both the
+        // scoped proxy entry and loopback alias are absent.
+        try virtualIPOwnership.remove(ip: ip, interface: interface)
         return ["success": true]
     }
 }
@@ -351,6 +626,56 @@ typealias AliasCommandRunner = (
 
 typealias IPv4InterfaceAddressProvider = (
 ) -> [(interface: String, address: String)]?
+
+enum VirtualIPRemovalDisposition: Equatable {
+    case withdrawOwned
+    case alreadyAbsent
+}
+
+/// Authorize withdrawal only from root-owned state.
+///
+/// A legacy install has no helper ownership ledger. Its graceful shutdown
+/// withdraws every alias before the ledger-aware helper is installed, while
+/// retaining the sensor's durable mimic rows. Treating that proven-absent
+/// state as an idempotent success lets startup republish through `addIPAlias`,
+/// which records root ownership before mutation. Any local address or
+/// published proxy-ARP entry still fails closed; an unowned request never
+/// reaches a mutating command.
+func authorizeVirtualIPRemoval(
+    ip: String,
+    interface: String,
+    isOwned: Bool,
+    interfaceAddresses: [(interface: String, address: String)],
+    using runner: AliasCommandRunner
+) throws -> VirtualIPRemovalDisposition {
+    if isOwned {
+        return .withdrawOwned
+    }
+
+    guard !interfaceAddresses.contains(where: { $0.address == ip }) else {
+        throw RPCError.internalError(
+            "Refusing to remove an unowned virtual IP"
+        )
+    }
+
+    let scopedLookup = try runner(
+        "/usr/sbin/arp",
+        proxyARPLookupArguments(ip: ip, interface: interface)
+    )
+    guard proxyARPEntryIsAbsent(scopedLookup, ip: ip) else {
+        throw RPCError.internalError(
+            "Refusing to remove an unowned virtual IP"
+        )
+    }
+
+    let globalLookup = try runner("/usr/sbin/arp", ["-an"])
+    guard globalProxyARPEntryIsAbsent(globalLookup, ip: ip) else {
+        throw RPCError.internalError(
+            "Refusing to remove an unowned virtual IP"
+        )
+    }
+    return .alreadyAbsent
+}
 
 /// Owns a virtual IP on loopback and publishes it on the selected LAN.
 ///
@@ -640,6 +965,36 @@ func proxyARPEntryIsAbsent(_ result: CommandResult, ip: String) -> Bool {
     return sawExactNoEntry || (result.status == 0 && sawExactEntry)
 }
 
+/// Whether a complete ARP-table read proves no published entry for one IP.
+///
+/// Bound parsing so unexpectedly large output fails closed rather than turning
+/// a compromised sensor request into expensive root-helper work.
+func globalProxyARPEntryIsAbsent(
+    _ result: CommandResult,
+    ip: String
+) -> Bool {
+    guard result.status == 0 else {
+        return false
+    }
+    let lines = (result.stdout + result.stderr)
+        .split(whereSeparator: \.isNewline)
+    guard lines.count <= 16_384 else {
+        return false
+    }
+    for line in lines {
+        let fields = line.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard fields.contains("(\(ip))") else {
+            continue
+        }
+        if fields.contains(where: {
+            $0.caseInsensitiveCompare("published") == .orderedSame
+        }) {
+            return false
+        }
+    }
+    return true
+}
+
 /// Refuse to mutate any address already assigned to a physical interface.
 ///
 /// Runtime helper calls have no provenance proving that a secondary address
@@ -744,6 +1099,387 @@ func physicalInterfaceHasIPv4Address(
 func interfaceHasIPv4Address(_ interface: String, address: String) -> Bool {
     (ipv4InterfaceAddresses() ?? []).contains {
         $0.interface == interface && $0.address == address
+    }
+}
+
+private let maximumPFForwardingRules = 512
+private let maximumPFProtectedEndpoints = 256
+// Crash recovery can include stopped or orphaned history beyond the current
+// profile. The validated helper-owned candidate pool is exactly offsets
+// .200...250, so 51 is the complete bounded set the sensor may reconcile.
+private let maximumPFQuarantineCandidates = 51
+private let maximumLSOFOutputBytes = 65_536
+private let maximumLSOFRecords = 64
+
+struct PFBackendListener: Hashable, Comparable {
+    let ip: String
+    let port: Int
+
+    static func < (lhs: PFBackendListener, rhs: PFBackendListener) -> Bool {
+        if lhs.ip != rhs.ip {
+            return lhs.ip < rhs.ip
+        }
+        return lhs.port < rhs.port
+    }
+}
+
+private struct PFPublishedPort: Hashable {
+    let ip: String
+    let port: Int
+}
+
+struct LSOFListenerRecord: Hashable {
+    let pid: Int32
+    let uid: uid_t
+    let endpoint: String
+}
+
+/// Validates the authority boundary for a complete PF anchor replacement.
+///
+/// The sensor may quarantine a bounded number of policy-valid candidates
+/// before alias creation, but it may advertise redirects only for aliases
+/// already present in the root-owned ownership ledger.
+func validatePortForwardRequest(
+    forwardingRules: [[String: Any]],
+    protectedEndpoints: [[String: Any]],
+    interface: String,
+    route: IPv4DefaultRoute,
+    networks: [IPv4InterfaceNetwork],
+    interfaceAddresses: [(interface: String, address: String)],
+    ownedEntries: Set<OwnedVirtualIP>
+) throws -> [PFBackendListener] {
+    guard interface == route.interface,
+          !interface.isEmpty,
+          interface.count <= 32,
+          interface.allSatisfy({ $0.isLetter || $0.isNumber }) else {
+        throw RPCError.internalError(
+            "PF interface must match the observed default route"
+        )
+    }
+    guard forwardingRules.count <= maximumPFForwardingRules,
+          protectedEndpoints.count <= maximumPFProtectedEndpoints else {
+        throw RPCError.internalError("PF request exceeds safe rule limits")
+    }
+
+    let entriesOnInterface = ownedEntries.filter {
+        $0.interface == interface
+    }
+    guard entriesOnInterface.count == ownedEntries.count else {
+        throw RPCError.internalError(
+            "Owned aliases span an unsupported PF interface"
+        )
+    }
+    let ownedIPs = Set(entriesOnInterface.map(\.ip))
+
+    var endpointIPs = Set<String>()
+    for endpoint in protectedEndpoints {
+        guard let ip = endpoint["ip"] as? String,
+              isValidIPv4(ip),
+              let directPorts = endpoint["direct_ports"] as? [Int],
+              directPorts.isEmpty,
+              endpointIPs.insert(ip).inserted else {
+            throw RPCError.internalError(
+                "Protected PF endpoints must be unique VIPs with no direct ports"
+            )
+        }
+    }
+    guard ownedIPs.isSubset(of: endpointIPs) else {
+        throw RPCError.internalError(
+            "PF replacement omits a helper-owned virtual IP"
+        )
+    }
+
+    let quarantineCandidates = endpointIPs.subtracting(ownedIPs)
+    guard quarantineCandidates.count <= maximumPFQuarantineCandidates else {
+        throw RPCError.internalError(
+            "PF request has too many pre-alias quarantine candidates"
+        )
+    }
+    for candidate in quarantineCandidates {
+        try validateVirtualIPAddress(
+            candidate,
+            interface: interface,
+            networks: networks,
+            gateway: route.gateway
+        )
+    }
+    try requireNoLocalIPv4AddressConflicts(
+        quarantineCandidates,
+        interfaceAddresses: interfaceAddresses
+    )
+
+    var publishedPorts = Set<PFPublishedPort>()
+    var backendListeners = Set<PFBackendListener>()
+    for rule in forwardingRules {
+        guard let fromIP = rule["from_ip"] as? String,
+              let fromPort = rule["from_port"] as? Int,
+              let toIP = rule["to_ip"] as? String,
+              let toPort = rule["to_port"] as? Int,
+              isValidIPv4(fromIP),
+              isValidIPv4(toIP),
+              (1...65535).contains(fromPort),
+              (1...65535).contains(toPort) else {
+            throw RPCError.internalError("Invalid PF forwarding rule")
+        }
+        guard fromIP == toIP,
+              ownedIPs.contains(fromIP),
+              endpointIPs.contains(fromIP) else {
+            throw RPCError.internalError(
+                "PF redirects require a protected helper-owned VIP"
+            )
+        }
+        guard publishedPorts.insert(
+            PFPublishedPort(ip: fromIP, port: fromPort)
+        ).inserted else {
+            throw RPCError.internalError(
+                "PF request contains duplicate advertised ports"
+            )
+        }
+        guard backendListeners.insert(
+            PFBackendListener(ip: toIP, port: toPort)
+        ).inserted else {
+            throw RPCError.internalError(
+                "PF request contains duplicate backend listeners"
+            )
+        }
+    }
+    return backendListeners.sorted()
+}
+
+/// Refuse to install block-only PF quarantine for an address already assigned
+/// anywhere on the host. The selected default-route interface is insufficient:
+/// a real address can live on another physical, tunnel, bridge, or loopback
+/// interface while still falling inside the helper candidate pool.
+func requireNoLocalIPv4AddressConflicts(
+    _ quarantineCandidates: Set<String>,
+    interfaceAddresses: [(interface: String, address: String)]
+) throws {
+    let localAddresses = Set(interfaceAddresses.map(\.address))
+    guard quarantineCandidates.isDisjoint(with: localAddresses) else {
+        throw RPCError.internalError(
+            "PF quarantine candidate is already assigned to a local interface"
+        )
+    }
+}
+
+/// Recompute unowned quarantine candidates against fresh ownership and global
+/// address observations immediately before loading the live PF anchor.
+func requireNoLocalAddressConflictsForPreAliasQuarantine(
+    protectedEndpoints: [[String: Any]],
+    interface: String,
+    ownedEntries: Set<OwnedVirtualIP>,
+    interfaceAddresses: [(interface: String, address: String)]
+) throws {
+    let ownedOnInterface = ownedEntries.filter {
+        $0.interface == interface
+    }
+    guard ownedOnInterface.count == ownedEntries.count else {
+        throw RPCError.internalError(
+            "Owned aliases changed to an unsupported PF interface"
+        )
+    }
+    let ownedIPs = Set(ownedOnInterface.map(\.ip))
+    var endpointIPs = Set<String>()
+    for endpoint in protectedEndpoints {
+        guard let ip = endpoint["ip"] as? String,
+              isValidIPv4(ip),
+              endpointIPs.insert(ip).inserted else {
+            throw RPCError.internalError(
+                "Protected PF endpoint changed during local-address revalidation"
+            )
+        }
+    }
+    try requireNoLocalIPv4AddressConflicts(
+        endpointIPs.subtracting(ownedIPs),
+        interfaceAddresses: interfaceAddresses
+    )
+}
+
+func revalidatePortForwardOwnership(
+    forwardingRules: [[String: Any]],
+    protectedEndpoints: [[String: Any]],
+    interface: String,
+    ownedEntries: Set<OwnedVirtualIP>
+) throws {
+    let ownedOnInterface = ownedEntries.filter {
+        $0.interface == interface
+    }
+    guard ownedOnInterface.count == ownedEntries.count else {
+        throw RPCError.internalError(
+            "Owned aliases changed to an unsupported PF interface"
+        )
+    }
+    let ownedIPs = Set(ownedOnInterface.map(\.ip))
+    let endpointIPs = Set(
+        try protectedEndpoints.map { endpoint in
+            guard let ip = endpoint["ip"] as? String else {
+                throw RPCError.internalError(
+                    "Protected PF endpoint changed during validation"
+                )
+            }
+            return ip
+        }
+    )
+    let forwardingIPs = Set(
+        try forwardingRules.map { rule in
+            guard let ip = rule["from_ip"] as? String else {
+                throw RPCError.internalError(
+                    "PF forwarding rule changed during validation"
+                )
+            }
+            return ip
+        }
+    )
+    guard ownedIPs.isSubset(of: endpointIPs),
+          forwardingIPs.isSubset(of: ownedIPs) else {
+        throw RPCError.internalError(
+            "PF ownership changed before live anchor mutation"
+        )
+    }
+}
+
+/// Re-observes the network authority boundary immediately before a PF or
+/// virtual-IP mutation. A route or address change invalidates the earlier
+/// policy decision instead of applying it to a different LAN.
+func requireUnchangedPFNetworkContext(
+    expectedRoute: IPv4DefaultRoute,
+    expectedNetworks: [IPv4InterfaceNetwork],
+    routeResult: CommandResult,
+    interfaceResult: CommandResult
+) throws {
+    guard routeResult.status == 0,
+          interfaceResult.status == 0,
+          let currentRoute = ipv4DefaultRoute(from: routeResult.stdout),
+          currentRoute == expectedRoute else {
+        throw RPCError.internalError(
+            "Default-route context changed before privileged network mutation"
+        )
+    }
+    let currentNetworks = try interfaceIPv4Networks(
+        from: interfaceResult.stdout
+    )
+    guard currentNetworks.count == expectedNetworks.count,
+          currentNetworks.allSatisfy(expectedNetworks.contains) else {
+        throw RPCError.internalError(
+            "Interface network changed before privileged network mutation"
+        )
+    }
+}
+
+/// Parses bounded `lsof -Fpun` output for TCP listener ownership.
+func parseLSOFListeners(_ output: String) throws -> Set<LSOFListenerRecord> {
+    guard output.utf8.count <= maximumLSOFOutputBytes else {
+        throw RPCError.internalError("Listener ownership output is oversized")
+    }
+
+    var currentPID: Int32?
+    var currentUID: uid_t?
+    var currentHasEndpoint = false
+    var records = Set<LSOFListenerRecord>()
+    var fieldCount = 0
+    for rawLine in output.split(
+        separator: "\n",
+        omittingEmptySubsequences: true
+    ) {
+        fieldCount += 1
+        guard fieldCount <= maximumLSOFRecords * 4,
+              let prefix = rawLine.first else {
+            throw RPCError.internalError(
+                "Listener ownership output has too many fields"
+            )
+        }
+        let value = String(rawLine.dropFirst())
+        switch prefix {
+        case "p":
+            guard currentPID == nil
+                    || (currentUID != nil && currentHasEndpoint) else {
+                throw RPCError.internalError(
+                    "Listener ownership output has an incomplete process record"
+                )
+            }
+            guard let pid = Int32(value), pid > 0 else {
+                throw RPCError.internalError(
+                    "Listener ownership output has an invalid PID"
+                )
+            }
+            currentPID = pid
+            currentUID = nil
+            currentHasEndpoint = false
+        case "u":
+            guard currentPID != nil,
+                  let parsedUID = UInt32(value) else {
+                throw RPCError.internalError(
+                    "Listener ownership output has an invalid UID"
+                )
+            }
+            currentUID = uid_t(parsedUID)
+        case "n":
+            guard let pid = currentPID,
+                  let uid = currentUID,
+                  !value.isEmpty else {
+                throw RPCError.internalError(
+                    "Listener ownership output is incomplete"
+                )
+            }
+            records.insert(
+                LSOFListenerRecord(pid: pid, uid: uid, endpoint: value)
+            )
+            currentHasEndpoint = true
+            guard records.count <= maximumLSOFRecords else {
+                throw RPCError.internalError(
+                    "Listener ownership output has too many records"
+                )
+            }
+        case "f":
+            continue
+        default:
+            throw RPCError.internalError(
+                "Listener ownership output has an unexpected field"
+            )
+        }
+    }
+    guard currentPID == nil
+            || (currentUID != nil && currentHasEndpoint) else {
+        throw RPCError.internalError(
+            "Listener ownership output has an incomplete process record"
+        )
+    }
+    return records
+}
+
+func requireSensorOwnedListener(
+    _ listener: PFBackendListener,
+    serviceUID: uid_t,
+    run: (String, [String]) throws -> CommandResult
+) throws {
+    let result = try run(
+        "/usr/sbin/lsof",
+        [
+            "-n",
+            "-P",
+            "-l",
+            "-a",
+            "-iTCP:\(listener.port)",
+            "-sTCP:LISTEN",
+            "-Fpun",
+        ]
+    )
+    guard result.status == 0,
+          result.stderr.utf8.count <= maximumLSOFOutputBytes else {
+        throw RPCError.internalError(
+            "Could not verify mimic backend listener ownership"
+        )
+    }
+    let records = try parseLSOFListeners(result.stdout)
+    let expectedEndpoint = "\(listener.ip):\(listener.port)"
+    guard !records.isEmpty,
+          records.allSatisfy({
+              $0.uid == serviceUID && $0.endpoint == expectedEndpoint
+          }),
+          Set(records.map(\.pid)).count == 1 else {
+        throw RPCError.internalError(
+            "Mimic backend listener is not an exact sensor-owned VIP bind"
+        )
     }
 }
 
@@ -959,6 +1695,14 @@ struct PFEndpointStateCache {
         .sorted()
     }
 
+    func protectsVirtualIP(ip: String, interface: String) -> Bool {
+        guard let signature = live?[ip] else {
+            return false
+        }
+        return signature.interface == interface
+            && signature.directPorts.isEmpty
+    }
+
     mutating func recordSuccessfulLiveMutation(
         _ current: [String: PFEndpointStateSignature],
         cleanupIPs: [String]
@@ -972,11 +1716,44 @@ struct PFEndpointStateCache {
     }
 }
 
+func requirePFProtectedVirtualIP(
+    ip: String,
+    interface: String,
+    stateCache: PFEndpointStateCache
+) throws {
+    guard stateCache.protectsVirtualIP(ip: ip, interface: interface) else {
+        throw RPCError.internalError(
+            "Virtual IP must be quarantined by PF before publication"
+        )
+    }
+}
+
 struct CommandResult {
     let status: Int32
     let stdout: String
     let stderr: String
 }
+
+enum CommandExecutionError: Error, Equatable, LocalizedError {
+    case invalidLimits
+    case inputFailed
+    case timedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidLimits:
+            return "Command execution limits are invalid"
+        case .inputFailed:
+            return "Command input failed"
+        case .timedOut:
+            return "Command execution timed out"
+        }
+    }
+}
+
+let commandTimeoutSeconds: TimeInterval = 15
+let commandOutputLimitBytes = 1_048_576
+private let commandTerminationGraceSeconds: TimeInterval = 1
 
 typealias PFCommandRunner = (
     _ arguments: [String],
@@ -1092,12 +1869,77 @@ func requirePacketFilteringEnabled(
     }
 }
 
+/// Replaces a just-loaded redirect ruleset with block-only quarantine if the
+/// exact sensor listener changes during the load window. Existing PF states
+/// are killed for every changed, removed, or still-protected endpoint before
+/// the original request is allowed to fail.
+func quarantinePortForwardingAfterListenerRace(
+    protectedEndpoints: [[String: Any]],
+    interface: String,
+    stateCache: inout PFEndpointStateCache,
+    using runner: PFCommandRunner
+) throws {
+    let quarantineRules = try buildPFRules(
+        forwardingRules: [],
+        protectedEndpoints: protectedEndpoints,
+        interface: interface
+    )
+    let quarantineSignatures = try pfEndpointStateSignatures(
+        forwardingRules: [],
+        protectedEndpoints: protectedEndpoints,
+        interface: interface
+    )
+    // The redirect rules were briefly live even when the cache still describes
+    // an identical pre-alias quarantine. Kill every current endpoint
+    // unconditionally so a state created in that window cannot survive the
+    // block-only replacement.
+    let cleanupIPs = Set(
+        stateCache.cleanupIPs(for: quarantineSignatures)
+    )
+    .union(quarantineSignatures.keys)
+    .sorted()
+    let quarantineData = Data(
+        (quarantineRules.joined(separator: "\n") + "\n").utf8
+    )
+    let load = try runner(
+        ["-a", "com.apple/squirrelops", "-f", "-"],
+        quarantineData
+    )
+    guard load.status == 0 else {
+        throw RPCError.internalError(
+            "Listener ownership changed and PF quarantine failed"
+        )
+    }
+    stateCache.recordSuccessfulLiveMutation(
+        quarantineSignatures,
+        cleanupIPs: cleanupIPs
+    )
+
+    try ensurePacketFilteringEnabled(using: runner)
+    try cleanupPFStates(for: cleanupIPs, using: runner)
+    try requirePacketFilteringEnabled(
+        phase: "after listener-race quarantine",
+        using: runner
+    )
+    stateCache.completeCleanup()
+}
+
 /// Runs an absolute executable without invoking a shell.
 func runCommand(
     executable: String,
     arguments: [String],
-    input: Data? = nil
+    input: Data? = nil,
+    timeoutSeconds: TimeInterval = commandTimeoutSeconds,
+    outputLimitBytes: Int = commandOutputLimitBytes
 ) throws -> CommandResult {
+    guard timeoutSeconds.isFinite,
+          timeoutSeconds > 0,
+          timeoutSeconds < Double(UInt64.max) / 1_000_000_000,
+          outputLimitBytes > 0 else {
+        throw CommandExecutionError.invalidLimits
+    }
+    let timeoutNanoseconds = UInt64(timeoutSeconds * 1_000_000_000)
+
     let process = Process()
     process.executableURL = URL(fileURLWithPath: executable)
     process.arguments = arguments
@@ -1115,27 +1957,235 @@ func runCommand(
     } else {
         inputPipe = nil
     }
+    defer {
+        try? stdoutPipe.fileHandleForReading.close()
+        try? stdoutPipe.fileHandleForWriting.close()
+        try? stderrPipe.fileHandleForReading.close()
+        try? stderrPipe.fileHandleForWriting.close()
+        try? inputPipe?.fileHandleForReading.close()
+        try? inputPipe?.fileHandleForWriting.close()
+    }
 
     try process.run()
-    if let input, let inputPipe {
-        inputPipe.fileHandleForWriting.write(input)
-        try inputPipe.fileHandleForWriting.close()
+    let start = DispatchTime.now().uptimeNanoseconds
+    guard timeoutNanoseconds <= UInt64.max - start else {
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+        }
+        throw CommandExecutionError.invalidLimits
     }
-    process.waitUntilExit()
+    let deadline = start + timeoutNanoseconds
 
-    let stdout = String(
-        data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
-        encoding: .utf8
-    ) ?? ""
-    let stderr = String(
-        data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-        encoding: .utf8
-    ) ?? ""
+    let stdoutBox = CommandOutputBox(limit: outputLimitBytes)
+    let stderrBox = CommandOutputBox(limit: outputLimitBytes)
+    let outputReaders = DispatchGroup()
+    outputReaders.enter()
+    DispatchQueue.global(qos: .utility).async {
+        defer { outputReaders.leave() }
+        drainCommandOutput(
+            stdoutPipe.fileHandleForReading,
+            into: stdoutBox
+        )
+    }
+    outputReaders.enter()
+    DispatchQueue.global(qos: .utility).async {
+        defer { outputReaders.leave() }
+        drainCommandOutput(
+            stderrPipe.fileHandleForReading,
+            into: stderrBox
+        )
+    }
+    var timedOut = false
+    var inputFailed = false
+    if let input, let inputPipe {
+        switch writeCommandInput(
+            input,
+            to: inputPipe.fileHandleForWriting,
+            process: process,
+            deadline: deadline
+        ) {
+        case .complete, .childClosedInput:
+            break
+        case .timedOut:
+            timedOut = true
+        case .failed:
+            inputFailed = true
+        }
+    }
+
+    if !timedOut, !inputFailed {
+        while process.isRunning,
+              DispatchTime.now().uptimeNanoseconds < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        timedOut = process.isRunning
+    }
+
+    if process.isRunning, timedOut || inputFailed {
+        process.terminate()
+        let terminationDeadline =
+            DispatchTime.now().uptimeNanoseconds
+            + UInt64(commandTerminationGraceSeconds * 1_000_000_000)
+        while process.isRunning,
+              DispatchTime.now().uptimeNanoseconds < terminationDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if process.isRunning {
+            _ = kill(process.processIdentifier, SIGKILL)
+        }
+    }
+
+    process.waitUntilExit()
+    if outputReaders.wait(timeout: .now() + 1) == .timedOut {
+        // A descendant could inherit the pipe descriptors after the direct
+        // child exits. Closing our readers keeps that descendant from holding
+        // the synchronous helper indefinitely.
+        try? stdoutPipe.fileHandleForReading.close()
+        try? stderrPipe.fileHandleForReading.close()
+        _ = outputReaders.wait(timeout: .now() + 1)
+    }
+
+    if timedOut {
+        throw CommandExecutionError.timedOut
+    }
+    if inputFailed {
+        throw CommandExecutionError.inputFailed
+    }
+
+    let stdout = String(decoding: stdoutBox.load(), as: UTF8.self)
+    let stderr = String(decoding: stderrBox.load(), as: UTF8.self)
     return CommandResult(
         status: process.terminationStatus,
         stdout: stdout,
         stderr: stderr
     )
+}
+
+private enum CommandInputWriteResult {
+    case complete
+    case childClosedInput
+    case timedOut
+    case failed
+}
+
+/// Feed stdin without allowing a child that stops reading to bypass the
+/// command's absolute deadline.
+private func writeCommandInput(
+    _ input: Data,
+    to handle: FileHandle,
+    process: Process,
+    deadline: UInt64
+) -> CommandInputWriteResult {
+    defer { try? handle.close() }
+
+    let fd = handle.fileDescriptor
+    let flags = fcntl(fd, F_GETFL)
+    guard flags >= 0,
+          fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0,
+          fcntl(fd, F_SETNOSIGPIPE, 1) == 0 else {
+        return .failed
+    }
+
+    return input.withUnsafeBytes { rawBuffer in
+        guard var pointer = rawBuffer.baseAddress else { return .complete }
+        var remaining = rawBuffer.count
+
+        while remaining > 0 {
+            if !process.isRunning {
+                return .childClosedInput
+            }
+
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline else { return .timedOut }
+            let remainingNanoseconds = deadline - now
+            let remainingMilliseconds =
+                (remainingNanoseconds + 999_999) / 1_000_000
+            let pollTimeout = Int32(
+                min(remainingMilliseconds, UInt64(50))
+            )
+
+            var descriptor = pollfd(
+                fd: fd,
+                events: Int16(POLLOUT),
+                revents: 0
+            )
+            let pollResult = poll(&descriptor, 1, pollTimeout)
+            if pollResult == 0 { continue }
+            if pollResult < 0 {
+                if errno == EINTR { continue }
+                return .failed
+            }
+            if descriptor.revents & Int16(POLLNVAL) != 0 {
+                return .failed
+            }
+            if descriptor.revents & Int16(POLLERR | POLLHUP) != 0 {
+                return .childClosedInput
+            }
+
+            let count = Darwin.write(
+                fd,
+                pointer,
+                min(remaining, 16_384)
+            )
+            if count < 0 {
+                if errno == EINTR || errno == EAGAIN
+                    || errno == EWOULDBLOCK {
+                    continue
+                }
+                if errno == EPIPE { return .childClosedInput }
+                return .failed
+            }
+            if count == 0 { return .childClosedInput }
+            pointer = pointer.advanced(by: count)
+            remaining -= count
+        }
+        return .complete
+    }
+}
+
+private final class CommandOutputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private let limit: Int
+    private var data = Data()
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    func append(_ value: Data) {
+        lock.lock()
+        let remaining = limit - data.count
+        if remaining > 0 {
+            data.append(value.prefix(remaining))
+        }
+        lock.unlock()
+    }
+
+    func load() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
+/// Drain the pipe for the lifetime of the child to avoid backpressure while
+/// retaining only the configured prefix in memory.
+private func drainCommandOutput(
+    _ handle: FileHandle,
+    into output: CommandOutputBox
+) {
+    while true {
+        do {
+            guard let chunk = try handle.read(upToCount: 16_384),
+                  !chunk.isEmpty else {
+                return
+            }
+            output.append(chunk)
+        } catch {
+            return
+        }
+    }
 }
 
 /// Runs the system PF controller without invoking a shell.

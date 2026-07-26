@@ -1,9 +1,11 @@
 """Tests for the scout engine — deep service fingerprinting."""
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiosqlite
+import httpx
 import pytest
 
 from squirrelops_home_sensor.scouts.engine import (
@@ -107,6 +109,75 @@ class TestServiceProfile:
 class TestScoutEngineProbes:
     """Verify probe dispatch and HTTP/protocol capture."""
 
+    @pytest.mark.parametrize("max_concurrent", [0, 65, True])
+    def test_rejects_unbounded_concurrency(self, max_concurrent) -> None:
+        with pytest.raises(ValueError, match="max_concurrent"):
+            ScoutEngine(db=MagicMock(), max_concurrent=max_concurrent)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("http_timeout", 0),
+            ("http_timeout", float("inf")),
+            ("probe_deadline", 0),
+            ("probe_deadline", float("nan")),
+            ("probe_deadline", 61),
+        ],
+    )
+    def test_rejects_invalid_probe_deadlines(self, field, value) -> None:
+        kwargs = {field: value}
+        with pytest.raises(ValueError):
+            ScoutEngine(db=MagicMock(), **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_complete_port_probe_has_an_absolute_deadline(self, db) -> None:
+        engine = ScoutEngine(
+            db=db,
+            max_concurrent=1,
+            probe_deadline=0.05,
+        )
+        never = asyncio.Event()
+
+        async def hang(*_args, **_kwargs) -> None:
+            await never.wait()
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with patch.object(engine, "_probe_http", side_effect=hang), \
+             patch.object(engine, "_probe_tls", side_effect=hang):
+            profiles = await asyncio.wait_for(
+                engine.scout_device(1, "192.168.1.100", [443]),
+                timeout=0.5,
+            )
+
+        assert len(profiles) == 1
+        assert loop.time() - started < 0.25
+
+    @pytest.mark.asyncio
+    async def test_device_probe_respects_connection_cap(self, db) -> None:
+        engine = ScoutEngine(db=db, max_concurrent=2)
+        active = 0
+        maximum = 0
+
+        async def tracked_probe(*_args, **_kwargs) -> None:
+            nonlocal active, maximum
+            active += 1
+            maximum = max(maximum, active)
+            try:
+                await asyncio.sleep(0.02)
+            finally:
+                active -= 1
+
+        with patch.object(engine, "_probe_protocol", side_effect=tracked_probe):
+            profiles = await engine.scout_device(
+                1,
+                "192.168.1.100",
+                [9001, 9002, 9003, 9004],
+            )
+
+        assert len(profiles) == 4
+        assert maximum == 2
+
     @pytest.mark.asyncio
     async def test_scout_device_returns_profiles(self, db) -> None:
         """scout_device should return a profile for each port."""
@@ -184,6 +255,157 @@ class TestScoutEngineProbes:
             await engine.scout_device(1, "192.168.1.100", [9999])
         http_mock.assert_not_awaited()
         proto_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_http_probe_stops_reading_after_bounded_body_snippet(
+        self,
+        db,
+    ) -> None:
+        """A hostile response cannot make the scout consume the complete body."""
+
+        class ExplodingBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                for _ in range(3):
+                    yield b"a" * 1024
+                raise AssertionError("probe read beyond its body limit")
+
+        body_stream = ExplodingBody()
+
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/":
+                return httpx.Response(
+                    200,
+                    headers={
+                        "Content-Type": "text/plain; charset=utf-8",
+                        # A hostile service may ignore Accept-Encoding:
+                        # identity. The probe must cap raw bytes without
+                        # invoking an attacker-controlled decompression step.
+                        "Content-Encoding": "gzip",
+                        "Server": "test-device",
+                    },
+                    stream=body_stream,
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handle_request)
+        async_client_class = httpx.AsyncClient
+
+        def make_client(**kwargs):
+            return async_client_class(transport=transport, **kwargs)
+
+        engine = ScoutEngine(db=db, max_concurrent=5)
+        profile = ServiceProfile(
+            device_id=1,
+            ip_address="192.168.1.100",
+            port=80,
+        )
+        with patch(
+            "squirrelops_home_sensor.scouts.engine.httpx.AsyncClient",
+            side_effect=make_client,
+        ):
+            await engine._probe_http(profile, "192.168.1.100", 80)
+
+        assert profile.http_status == 200
+        assert profile.http_server_header == "test-device"
+        assert profile.http_body_snippet == "a" * 2048
+
+    @pytest.mark.asyncio
+    async def test_http_probe_does_not_decode_encoded_favicon(
+        self,
+        db,
+    ) -> None:
+        """A favicon response cannot trigger attacker-controlled expansion."""
+
+        class EncodedBody(httpx.AsyncByteStream):
+            was_read = False
+
+            async def __aiter__(self):
+                self.was_read = True
+                yield b"compressed bytes are intentionally not decoded"
+
+        class PlainBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b"device"
+
+        favicon_stream = EncodedBody()
+
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/":
+                return httpx.Response(200, stream=PlainBody())
+            return httpx.Response(
+                200,
+                headers={"Content-Encoding": "gzip"},
+                stream=favicon_stream,
+            )
+
+        transport = httpx.MockTransport(handle_request)
+        async_client_class = httpx.AsyncClient
+
+        def make_client(**kwargs):
+            return async_client_class(transport=transport, **kwargs)
+
+        engine = ScoutEngine(db=db, max_concurrent=5)
+        profile = ServiceProfile(
+            device_id=1,
+            ip_address="192.168.1.100",
+            port=80,
+        )
+        with patch(
+            "squirrelops_home_sensor.scouts.engine.httpx.AsyncClient",
+            side_effect=make_client,
+        ):
+            await engine._probe_http(profile, "192.168.1.100", 80)
+
+        assert favicon_stream.was_read is False
+        assert profile.favicon_body is None
+        assert profile.favicon_hash is None
+
+    @pytest.mark.asyncio
+    async def test_http_probe_enforces_absolute_stream_deadline(
+        self,
+        db,
+    ) -> None:
+        """A byte-drip response cannot monopolize a scout semaphore slot."""
+
+        class DripBody(httpx.AsyncByteStream):
+            iterations = 0
+
+            async def __aiter__(self):
+                while True:
+                    await asyncio.sleep(0.03)
+                    self.iterations += 1
+                    yield b"x"
+
+        body_stream = DripBody()
+
+        def handle_request(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=body_stream)
+
+        transport = httpx.MockTransport(handle_request)
+        async_client_class = httpx.AsyncClient
+
+        def make_client(**kwargs):
+            return async_client_class(transport=transport, **kwargs)
+
+        engine = ScoutEngine(db=db, max_concurrent=1, http_timeout=0.07)
+        profile = ServiceProfile(
+            device_id=1,
+            ip_address="192.168.1.100",
+            port=80,
+        )
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with patch(
+            "squirrelops_home_sensor.scouts.engine.httpx.AsyncClient",
+            side_effect=make_client,
+        ):
+            await asyncio.wait_for(
+                engine._probe_http(profile, "192.168.1.100", 80),
+                timeout=0.5,
+            )
+
+        assert loop.time() - started < 0.25
+        assert body_stream.iterations < 5
 
 
 class TestScoutEnginePersistence:

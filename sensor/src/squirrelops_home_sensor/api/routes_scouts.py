@@ -18,6 +18,7 @@ router = APIRouter(prefix="/scouts", tags=["scouts"])
 class ScoutStatusResponse(BaseModel):
     enabled: bool
     is_running: bool
+    lifecycle_busy: bool = False
     last_scout_at: str | None = None
     last_scout_duration_ms: int | None = None
     total_profiles: int
@@ -102,6 +103,7 @@ async def get_scout_status(
         return ScoutStatusResponse(
             enabled=False,
             is_running=False,
+            lifecycle_busy=False,
             total_profiles=0,
             interval_minutes=0,
             active_mimics=0,
@@ -129,6 +131,9 @@ async def get_scout_status(
     return ScoutStatusResponse(
         enabled=enabled,
         is_running=getattr(scheduler, "is_scouting", False),
+        lifecycle_busy=bool(
+            getattr(orchestrator, "lifecycle_busy", False)
+        ),
         last_scout_at=scheduler.last_scout_at.isoformat() if scheduler.last_scout_at else None,
         last_scout_duration_ms=scheduler.last_scout_duration_ms,
         total_profiles=total_profiles,
@@ -335,12 +340,28 @@ async def restart_mimic(
     _auth: dict = Depends(verify_client_cert),
 ):
     """Restart a stopped mimic decoy."""
+    from squirrelops_home_sensor.scouts.orchestrator import (
+        HelperUnavailableError,
+        MimicLifecycleBusyError,
+    )
+
     if orchestrator is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Mimic orchestrator not enabled",
         )
-    ok = await orchestrator.restart_mimic(decoy_id)
+    try:
+        ok = await orchestrator.restart_mimic(decoy_id)
+    except HelperUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+    except MimicLifecycleBusyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
     if not ok:
         raise HTTPException(status_code=404, detail="Mimic decoy not found or could not restart")
     return {"restarted": True}
@@ -353,7 +374,10 @@ async def remove_mimic(
     _auth: dict = Depends(verify_client_cert),
 ):
     """Stop and remove a mimic decoy, releasing its virtual IP."""
-    from squirrelops_home_sensor.scouts.orchestrator import MimicCleanupError
+    from squirrelops_home_sensor.scouts.orchestrator import (
+        MimicCleanupError,
+        MimicLifecycleBusyError,
+    )
 
     if orchestrator is None:
         raise HTTPException(
@@ -363,6 +387,11 @@ async def remove_mimic(
     try:
         ok = await orchestrator.remove_mimic(decoy_id)
     except MimicCleanupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+    except MimicLifecycleBusyError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),

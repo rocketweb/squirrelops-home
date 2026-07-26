@@ -10,14 +10,20 @@ enum ARPScanner {
     /// Requires root for raw socket access.
     /// - Parameter subnet: CIDR string (e.g., "192.168.1.0/24")
     /// - Returns: Array of dictionaries with ip and mac keys.
-    static func scan(subnet: String) throws -> [[String: String]] {
+    static func scan(
+        subnet: String,
+        interface: String
+    ) throws -> [[String: String]] {
         _ = try parseCIDR(subnet)
-        return try arpViaCLI(subnet: subnet)
+        return try arpViaCLI(subnet: subnet, interface: interface)
     }
 
     /// Fallback: use the `arp` command to scan.
     /// Sends a ping sweep first to populate the ARP cache, then reads it.
-    static func arpViaCLI(subnet: String) throws -> [[String: String]] {
+    static func arpViaCLI(
+        subnet: String,
+        interface: String
+    ) throws -> [[String: String]] {
         // Ping sweep to populate ARP table
         let (network, prefixLen) = try parseCIDR(subnet)
         let ips = generateIPs(network: network, prefixLen: prefixLen)
@@ -32,7 +38,10 @@ enum ARPScanner {
             for ip in ips[batchStart..<batchEnd] {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/sbin/ping")
-                process.arguments = ["-n", "-c", "1", "-W", "100", ip]
+                process.arguments = [
+                    "-n", "-b", interface, "-c", "1",
+                    "-W", "100", ip,
+                ]
                 process.standardOutput = FileHandle.nullDevice
                 process.standardError = FileHandle.nullDevice
                 do {
@@ -49,34 +58,41 @@ enum ARPScanner {
             }
         }
 
-        // Read ARP table
-        let arpProcess = Process()
-        arpProcess.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
-        arpProcess.arguments = ["-an"]
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        arpProcess.standardOutput = stdoutPipe
-        arpProcess.standardError = stderrPipe
-        try arpProcess.run()
-        arpProcess.waitUntilExit()
+        // Use the shared command runner, which drains stdout and stderr
+        // concurrently. Waiting on a piped child before draining can deadlock
+        // once either pipe reaches its kernel buffer limit.
+        let output = try readARPTable(interface: interface)
+        return parseARPTable(
+            output,
+            subnet: subnet,
+            interface: interface
+        )
+    }
 
-        guard arpProcess.terminationStatus == 0 else {
-            let stderr = String(
-                data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                encoding: .utf8
-            ) ?? ""
-            throw RPCError.internalError("arp table read failed: \(stderr)")
+    static func readARPTable(
+        interface: String,
+        using runner: AliasCommandRunner = { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
         }
-        let output = String(
-            data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        ) ?? ""
-        return parseARPTable(output, subnet: subnet)
+    ) throws -> String {
+        let result = try runner(
+            "/usr/sbin/arp",
+            ["-an", "-i", interface]
+        )
+        guard result.status == 0 else {
+            throw RPCError.internalError(
+                "Scoped ARP table read failed"
+            )
+        }
+        return result.stdout
     }
 
     /// Parse CIDR notation into network address and prefix length.
     static func parseCIDR(_ cidr: String) throws -> (UInt32, Int) {
-        let parts = cidr.split(separator: "/")
+        let parts = cidr.split(
+            separator: "/",
+            omittingEmptySubsequences: false
+        )
         guard parts.count == 2,
               let prefixLen = Int(parts[1]),
               prefixLen >= 0, prefixLen <= 32 else {
@@ -113,7 +129,11 @@ enum ARPScanner {
     }
 
     /// Parse `arp -an` output, filtering to the target subnet.
-    static func parseARPTable(_ output: String, subnet: String) -> [[String: String]] {
+    static func parseARPTable(
+        _ output: String,
+        subnet: String,
+        interface: String? = nil
+    ) -> [[String: String]] {
         // Lines look like: ? (192.168.1.1) at aa:bb:cc:dd:ee:ff on en0 ifscope [ethernet]
         var results: [[String: String]] = []
 
@@ -122,6 +142,16 @@ enum ARPScanner {
 
         for line in output.split(separator: "\n") {
             let str = String(line)
+            let fields = str.split(
+                whereSeparator: \.isWhitespace
+            ).map(String.init)
+            if let interface {
+                guard let onIndex = fields.firstIndex(of: "on"),
+                      fields.indices.contains(onIndex + 1),
+                      fields[onIndex + 1] == interface else {
+                    continue
+                }
+            }
             // Extract IP from parentheses
             guard let ipStart = str.firstIndex(of: "("),
                   let ipEnd = str.firstIndex(of: ")"),

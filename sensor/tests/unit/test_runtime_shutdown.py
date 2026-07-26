@@ -6,6 +6,7 @@ import asyncio
 import io
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -38,6 +39,48 @@ async def test_scan_wrapper_cancels_task_that_misses_shutdown_deadline(
     assert task.cancelled()
     assert cancelled.is_set()
     assert wrapper._task is None
+
+
+@pytest.mark.asyncio
+async def test_scan_wrapper_closes_replaced_and_active_llm_clients() -> None:
+    import squirrelops_home_sensor.__main__ as entry
+
+    class CloseableLLM:
+        def __init__(self) -> None:
+            self.closed = asyncio.Event()
+
+        async def aclose(self) -> None:
+            self.closed.set()
+
+    class Classifier:
+        def __init__(self, llm) -> None:
+            self.llm = llm
+
+        def set_llm(self, llm):
+            previous = self.llm
+            self.llm = llm
+            return previous
+
+    first = CloseableLLM()
+    second = CloseableLLM()
+    classifier = Classifier(first)
+    loop = SimpleNamespace(
+        _manager=SimpleNamespace(_classifier=classifier),
+    )
+    wrapper = entry._ScanLoopWrapper(loop, llm=first)
+    naming_target = MagicMock()
+    wrapper.set_hostname_advisor_target(naming_target)
+    naming_target.set_hostname_advisor.assert_called_once_with(first)
+
+    wrapper._replace_llm(second)
+    naming_target.set_hostname_advisor.assert_called_with(second)
+    await first.closed.wait()
+    await wrapper.stop()
+
+    assert second.closed.is_set()
+    assert classifier.llm is None
+    naming_target.set_hostname_advisor.assert_called_with(None)
+    assert not wrapper._llm_close_tasks
 
 
 @pytest.mark.asyncio

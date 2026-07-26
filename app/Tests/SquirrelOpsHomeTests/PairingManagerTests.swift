@@ -359,6 +359,32 @@ struct PairingManagerTests {
         #expect(loaded == nil)
     }
 
+    @Test("Missing paired CA fails closed instead of returning TOFU input")
+    func missingPairedCAThrows() throws {
+        let credentialIdentifier = "missing-ca-\(UUID().uuidString)"
+        let sensor = PairingManager.PairedSensor(
+            id: 101,
+            name: "Missing CA",
+            baseURL: URL(string: "https://192.168.1.50:8443")!,
+            certFingerprint: "sha256:missing",
+            credentialIdentifier: credentialIdentifier
+        )
+        let label = "io.squirrelops.home.ca.\(credentialIdentifier)"
+        try? KeychainStore.deleteCertificate(label: label)
+
+        do {
+            _ = try PairingManager.loadCACertificateData(for: sensor)
+            Issue.record("Expected missing paired CA to throw")
+        } catch let error as KeychainError {
+            guard case .itemNotFound = error else {
+                Issue.record("Expected itemNotFound, got \(error)")
+                return
+            }
+        } catch {
+            Issue.record("Expected KeychainError, got \(error)")
+        }
+    }
+
     @Test("deletePairedSensor removes persisted data")
     func deletePairedSensorRemoves() throws {
         let account = useIsolatedPairedSensorAccount()

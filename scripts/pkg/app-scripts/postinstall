@@ -12,9 +12,33 @@ set -euo pipefail
 
 APP_PATH="/Applications/SquirrelOps Home.app"
 HELPER_BUNDLE_ID="com.squirrelops.helper"
+EXPECTED_TEAM_ID="PSQ5HK5U65"
 HELPER_SRC="$APP_PATH/Contents/Library/LaunchServices/$HELPER_BUNDLE_ID"
 HELPER_DEST="/Library/PrivilegedHelperTools/$HELPER_BUNDLE_ID"
 PLIST_DEST="/Library/LaunchDaemons/${HELPER_BUNDLE_ID}.plist"
+HELPER_STATE_DIR="/var/db/com.squirrelops.helper"
+HELPER_REQUIREMENT="identifier \"${HELPER_BUNDLE_ID}\" and anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_TEAM_ID}\""
+HELPER_TEMP=""
+PLIST_TEMP=""
+
+cleanup_staged_files() {
+    if [ -n "$HELPER_TEMP" ]; then
+        rm -f -- "$HELPER_TEMP"
+    fi
+    if [ -n "$PLIST_TEMP" ]; then
+        rm -f -- "$PLIST_TEMP"
+    fi
+}
+trap cleanup_staged_files EXIT
+
+path_has_no_extended_acl() {
+    local path="$1"
+    /bin/ls -lde "$path" 2>/dev/null \
+        | /usr/bin/awk '
+            NR > 1 { extra = 1 }
+            END { exit !(NR == 1 && extra == 0) }
+        '
+}
 
 # ---------------------------------------------------------------------------
 # Step 1: Install helper binary
@@ -25,12 +49,96 @@ if [ ! -x "$HELPER_SRC" ]; then
 fi
 
 echo "[app-postinstall] Installing privileged helper daemon..."
-mkdir -p /Library/PrivilegedHelperTools
-cp "$HELPER_SRC" "$HELPER_DEST"
-chown root:wheel "$HELPER_DEST"
-chmod 755 "$HELPER_DEST"
+if [ -L "/Library/PrivilegedHelperTools" ] \
+    || { [ -e "/Library/PrivilegedHelperTools" ] \
+        && [ ! -d "/Library/PrivilegedHelperTools" ]; }
+then
+    echo "[app-postinstall] Privileged helper directory is unsafe." >&2
+    exit 1
+fi
+if ! /usr/bin/install -d -o root -g wheel -m 755 \
+        /Library/PrivilegedHelperTools \
+    || ! /bin/chmod -N /Library/PrivilegedHelperTools \
+    || ! path_has_no_extended_acl /Library/PrivilegedHelperTools \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' \
+        /Library/PrivilegedHelperTools)" != "root:wheel:755" ]
+then
+    echo "[app-postinstall] Cannot secure the privileged helper directory." >&2
+    exit 1
+fi
+if ! HELPER_TEMP=$(
+    /usr/bin/mktemp \
+        "/Library/PrivilegedHelperTools/.${HELPER_BUNDLE_ID}.XXXXXXXX"
+); then
+    echo "[app-postinstall] Cannot stage the privileged helper." >&2
+    exit 1
+fi
+if ! /bin/cp "$HELPER_SRC" "$HELPER_TEMP"; then
+    echo "[app-postinstall] Cannot copy the privileged helper." >&2
+    exit 1
+fi
+if ! /usr/sbin/chown root:wheel "$HELPER_TEMP" \
+    || ! /bin/chmod 755 "$HELPER_TEMP" \
+    || ! /bin/chmod -N "$HELPER_TEMP" \
+    || ! path_has_no_extended_acl "$HELPER_TEMP" \
+    || [ -L "$HELPER_TEMP" ] || [ ! -f "$HELPER_TEMP" ] \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l' "$HELPER_TEMP")" \
+        != "root:wheel:755:1" ]
+then
+    echo "[app-postinstall] Cannot secure the staged privileged helper." >&2
+    exit 1
+fi
+if ! /usr/bin/codesign --verify --strict --verbose=2 \
+    -R "=${HELPER_REQUIREMENT}" "$HELPER_TEMP"
+then
+    echo "[app-postinstall] Staged helper has an untrusted code signature." >&2
+    exit 1
+fi
+if ! /bin/mv -fh "$HELPER_TEMP" "$HELPER_DEST"; then
+    echo "[app-postinstall] Cannot install the verified helper." >&2
+    exit 1
+fi
+HELPER_TEMP=""
+if ! /bin/chmod -N "$HELPER_DEST" \
+    || ! path_has_no_extended_acl "$HELPER_DEST" \
+    || [ -L "$HELPER_DEST" ] || [ ! -f "$HELPER_DEST" ] \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l' "$HELPER_DEST")" \
+        != "root:wheel:755:1" ]
+then
+    echo "[app-postinstall] Installed helper ownership or file type is unsafe." >&2
+    exit 1
+fi
+if ! /usr/bin/codesign --verify --strict --verbose=2 \
+    -R "=${HELPER_REQUIREMENT}" "$HELPER_DEST"
+then
+    echo "[app-postinstall] Installed helper signature verification failed." >&2
+    exit 1
+fi
 if [ ! -x "$HELPER_DEST" ]; then
     echo "[app-postinstall] Installed helper is not executable." >&2
+    exit 1
+fi
+
+# Initialize a permanent root-owned marker for the ledger-aware helper. This
+# prevents sensor database rows from ever becoming cleanup authority again,
+# even before the first virtual IP causes the ledger file itself to be written.
+if [ -e "$HELPER_STATE_DIR" ] || [ -L "$HELPER_STATE_DIR" ]; then
+    if [ -L "$HELPER_STATE_DIR" ] || [ ! -d "$HELPER_STATE_DIR" ]; then
+        echo "[app-postinstall] Helper alias ownership directory has an unsafe file type." >&2
+        exit 1
+    fi
+fi
+if ! /usr/bin/install -d -o root -g wheel -m 700 "$HELPER_STATE_DIR" \
+    || ! /bin/chmod -N "$HELPER_STATE_DIR" \
+    || ! path_has_no_extended_acl "$HELPER_STATE_DIR"
+then
+    echo "[app-postinstall] Cannot initialize helper alias ownership state." >&2
+    exit 1
+fi
+if [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' "$HELPER_STATE_DIR")" \
+    != "root:wheel:700" ]
+then
+    echo "[app-postinstall] Helper alias ownership state permissions are unsafe." >&2
     exit 1
 fi
 
@@ -38,7 +146,28 @@ fi
 # Step 2: Install launchd plist
 # ---------------------------------------------------------------------------
 echo "[app-postinstall] Installing helper launchd plist..."
-cat > "$PLIST_DEST" << 'PLIST'
+if [ -L "/Library/LaunchDaemons" ] \
+    || [ ! -d "/Library/LaunchDaemons" ] \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp' /Library/LaunchDaemons)" \
+        != "root:wheel:755" ]
+then
+    echo "[app-postinstall] LaunchDaemon directory is unsafe." >&2
+    exit 1
+fi
+if ! /bin/chmod -N /Library/LaunchDaemons \
+    || ! path_has_no_extended_acl /Library/LaunchDaemons
+then
+    echo "[app-postinstall] Cannot secure the LaunchDaemon directory." >&2
+    exit 1
+fi
+if ! PLIST_TEMP=$(
+    /usr/bin/mktemp \
+        "/Library/LaunchDaemons/.${HELPER_BUNDLE_ID}.plist.XXXXXXXX"
+); then
+    echo "[app-postinstall] Cannot stage the helper launchd plist." >&2
+    exit 1
+fi
+/bin/cat > "$PLIST_TEMP" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -59,8 +188,29 @@ cat > "$PLIST_DEST" << 'PLIST'
 </plist>
 PLIST
 
-chown root:wheel "$PLIST_DEST"
-chmod 644 "$PLIST_DEST"
+if ! /usr/sbin/chown root:wheel "$PLIST_TEMP" \
+    || ! /bin/chmod 644 "$PLIST_TEMP" \
+    || ! /bin/chmod -N "$PLIST_TEMP" \
+    || ! path_has_no_extended_acl "$PLIST_TEMP" \
+    || [ -L "$PLIST_TEMP" ] || [ ! -f "$PLIST_TEMP" ] \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l' "$PLIST_TEMP")" \
+        != "root:wheel:644:1" ] \
+    || ! /usr/bin/plutil -lint "$PLIST_TEMP" >/dev/null \
+    || ! /bin/mv -fh "$PLIST_TEMP" "$PLIST_DEST"
+then
+    echo "[app-postinstall] Cannot install the verified helper launchd plist." >&2
+    exit 1
+fi
+PLIST_TEMP=""
+if ! /bin/chmod -N "$PLIST_DEST" \
+    || ! path_has_no_extended_acl "$PLIST_DEST" \
+    || [ -L "$PLIST_DEST" ] || [ ! -f "$PLIST_DEST" ] \
+    || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l' "$PLIST_DEST")" \
+        != "root:wheel:644:1" ]
+then
+    echo "[app-postinstall] Installed helper launchd plist is unsafe." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Step 3: Load the helper daemon

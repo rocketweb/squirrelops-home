@@ -12,22 +12,23 @@ SquirrelOps Home is a local-first home network security platform. It passively m
 4. When something connects to a decoy, you get a high-confidence alert with the connection preserved as forensic evidence.
 5. The sensor also monitors for **new devices** joining your network and **behavioral anomalies** after a 48-hour learning period
 
-**What stays local:** All data is stored in a local SQLite database on the sensor. No telemetry. No cloud dependency. The only things that leave your network are the ones you explicitly enable (push notifications, cloud LLM classification, Slack webhooks, update checks).
+**What stays local:** All data is stored in a local SQLite database on the sensor. No telemetry. No cloud dependency. The only things that leave your network are the ones you explicitly enable (push notifications, cloud AI device classification and decoy naming, Slack webhooks, update checks).
 
 ---
 
 ## System Requirements
 
-### Docker on Linux/NAS (recommended for always-on monitoring)
+### Docker on Linux/NAS (publication on hold)
 
 - Docker Engine and Docker Compose v2
 - Linux ARM64 (Raspberry Pi 3/4/5) or x86_64 (NAS, general Linux)
 - Network access: the container runs with host networking and `NET_RAW`/`NET_ADMIN` capabilities
+- Do not use the v1.1.14 installer for a new deployment. A compromised sensor
+  would inherit broad authority over the host network.
 
 ### macOS Native Sensor
 
 - macOS 14 (Sonoma) or later
-- Python 3.11+
 - Local network access permission
 
 ### macOS App (control plane)
@@ -39,89 +40,55 @@ SquirrelOps Home is a local-first home network security platform. It passively m
 
 ## Installation
 
-There are three installation paths. Choose the one that fits your setup.
+The supported release installation is the signed macOS package.
 
 ### Path A: Docker on Linux/NAS
 
-This is the recommended path if you have an always-on Linux device (Raspberry Pi, NAS, server). This installs the sensor only. The dashboard/control plane is always the macOS app and must be installed separately on a Mac.
+Linux release installation is paused. The current architecture gives the
+sensor container host networking and network-administration capabilities.
+Publication remains blocked until those operations move to a constrained
+companion service, or the product is explicitly reviewed as macOS-only.
+Existing experimental operators should stop the container when it is not
+needed and follow [Release security](RELEASE_SECURITY.md) before upgrading.
 
-Download `install.sh` and `install.sh.sha256` from a pinned [GitHub release](https://github.com/rocketweb/squirrelops-home/releases), then verify before running:
+### Path B: macOS App and Native Sensor
 
-```bash
-shasum -a 256 -c install.sh.sha256
-less install.sh
-sudo bash install.sh
-```
+If you don't have a separate always-on device, install the signed and
+notarized `.pkg`. It includes the macOS app, a locked sensor runtime, and the
+privileged helper. It runs the sensor as a dedicated system account.
 
-The script will:
-1. Verify Docker and Docker Compose v2 are installed
-2. Detect your architecture (ARM64 or x86_64)
-3. Create `/opt/squirrelops/` with a `docker-compose.yml`
-4. Pull `ghcr.io/rocketweb/squirrelops-sensor:latest`
-5. Start the sensor container
-
-After installation, view the sensor logs (including your one-time setup key) with:
+Download the versioned `.pkg` and its checksum from a pinned release, then
+verify both the checksum and Apple signature before opening it:
 
 ```bash
-docker compose -f /opt/squirrelops/docker-compose.yml logs -f
+shasum -a 256 -c SquirrelOpsHome-X.Y.Z.pkg.sha256
+pkgutil --check-signature SquirrelOpsHome-X.Y.Z.pkg
+spctl --assess --type install --verbose=2 SquirrelOpsHome-X.Y.Z.pkg
+open SquirrelOpsHome-X.Y.Z.pkg
 ```
 
-**Useful commands:**
+For future hardened immutable releases, download and attest
+`RELEASE-VERIFICATION.md`, then use the commands in that canonical asset.
+GitHub's release description is editable and is only a pointer. The legacy
+standalone `install-macos.sh` release asset is not supported because a
+standalone copy cannot carry the locked source project it installs.
 
-| Action | Command |
-|--------|---------|
-| View logs | `docker compose -f /opt/squirrelops/docker-compose.yml logs -f` |
-| Stop sensor | `docker compose -f /opt/squirrelops/docker-compose.yml down` |
-| Update sensor | Re-run the install script |
+The package will:
 
-### Path B: macOS Native Sensor
-
-If you don't have a separate always-on device, the sensor can run directly on your Mac as a background launchd service.
-
-Download `install-macos.sh` and `install-macos.sh.sha256` from a pinned release, then verify before running:
-
-```bash
-shasum -a 256 -c install-macos.sh.sha256
-less install-macos.sh
-bash install-macos.sh
-```
-
-The script will:
-1. Find Python 3.11+ on your system
-2. Create `~/.squirrelops/sensor/` with data, config, and log directories
-3. Create a Python virtual environment and install the sensor package
-4. Generate a default `config.yaml` (Standard profile, 5-minute scan interval, 90-day retention)
-5. Install and load a launchd plist at `~/Library/LaunchAgents/com.squirrelops.sensor.plist`
-
-The sensor starts automatically on login and restarts if it crashes.
-
-**Useful commands:**
-
-| Action | Command |
-|--------|---------|
-| View logs | `tail -f ~/.squirrelops/sensor/logs/squirrelops-sensor.log` |
-| Check status | `launchctl print gui/$(id -u)/com.squirrelops.sensor` |
-| Stop sensor | `launchctl bootout gui/$(id -u)/com.squirrelops.sensor` |
-| Start sensor | `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.squirrelops.sensor.plist` |
-
-**File locations:**
-
-| Item | Path |
-|------|------|
-| Install directory | `~/.squirrelops/sensor/` |
-| Configuration | `~/.squirrelops/sensor/config/config.yaml` |
-| Data (SQLite) | `~/.squirrelops/sensor/data/` |
-| Logs | `~/.squirrelops/sensor/logs/squirrelops-sensor.log` |
-| Python venv | `~/.squirrelops/sensor/venv/` |
-| launchd plist | `~/Library/LaunchAgents/com.squirrelops.sensor.plist` |
+1. Verify its signed payload through macOS Installer
+2. Install the app in `/Applications`
+3. Install the locked sensor under `/Library/SquirrelOps/sensor`
+4. Create the `_squirrelops` service account and private data directories
+5. Install and start the sensor and privileged helper services
 
 ### Privileged Helper (required for macOS)
 
 On macOS, ARP network scanning, virtual IP aliases, and port forwarding require root privileges. Rather than running the entire sensor as root, these operations are handled by a lightweight privileged helper daemon (`com.squirrelops.helper`) that runs in the background.
 
-**If you install via the .pkg installer (recommended):** The helper is bundled inside the macOS app. On first launch, the app prompts for your admin password and installs the helper automatically via macOS system services. It persists across reboots.
-
-**If you install the sensor standalone (Path B):** It runs as your login user and cannot call the root helper. The sensor can start, but ARP scanning, virtual IP aliases, mimic decoys, and port forwarding are unavailable. Use the signed `.pkg` for the full macOS feature set; it runs the sensor as the dedicated `_squirrelops` service account authorized by the helper.
+**If you install via the .pkg installer (recommended):** The helper is bundled
+inside the signed macOS app and installed by the package. It persists across
+reboots. Source-checkout development installs do not have privileged helper
+access unless the helper is built and installed separately.
 
 **Helper file locations:**
 
@@ -173,33 +140,35 @@ Or view the full banner by scrolling through recent logs:
 docker compose -f /opt/squirrelops/docker-compose.yml logs --tail 50
 ```
 
-**macOS native sensor (Path B):**
+**Packaged macOS sensor (Path B):**
 
-Use the built-in CLI command. The key is stored mode `0600` inside the sensor data directory, never in `/tmp`:
-
-```bash
-~/.squirrelops/sensor/venv/bin/python -m squirrelops_home_sensor --show-pairing-code
-```
-
-The key also appears in the startup banner captured by the sensor log:
+Packaged installs require the administrator-only CLI. The key is stored mode
+`0600` inside the private sensor data directory, never in `/tmp`:
 
 ```bash
-grep "Setup Key" ~/.squirrelops/sensor/logs/squirrelops-sensor.log
+sudo -u _squirrelops \
+  /Library/SquirrelOps/sensor/python/bin/python3 \
+  -m squirrelops_home_sensor \
+  --config /Library/SquirrelOps/sensor/config.yaml \
+  --show-pairing-code
 ```
 
-For a `.pkg` system install, automatic local pairing is preferred. An administrator can retrieve the key with the packaged Python executable and `--show-pairing-code`. If the key has expired, restart the sensor to generate a new one. For Docker, use `docker compose restart`. For standalone macOS, use `launchctl kickstart gui/$(id -u)/com.squirrelops.sensor`.
+If the key has expired, restart the sensor to generate a new one. For Docker,
+use `docker compose restart`. For packaged macOS, use
+`sudo launchctl kickstart -k system/com.squirrelops.sensor`.
 
 After successful pairing, the app stores the sensor's TLS certificate in your macOS Keychain. All subsequent connections are authenticated automatically.
 
 ### Pairing and Local Trust Configuration
 
-Production defaults are fail-closed. The local pairing socket accepts only the exact installed SquirrelOps app binary after code-signature verification. The default socket is a sibling of the private data directory, for example `/Library/SquirrelOps/sensor/run/pairing.sock` or `~/.squirrelops/sensor/run/pairing.sock`.
+Production does not start a local setup-key socket. Peer credentials identify
+the process that connected, but cannot prove which process later uses a passed
+file descriptor. A local socket is available only as an explicit source
+development escape hatch:
 
 ```yaml
 pairing:
   socket_path: null
-  allowed_app_path: "/Applications/SquirrelOps Home.app/Contents/MacOS/SquirrelOpsHome"
-  allowed_app_requirement: 'identifier "com.squirrelops.home" and anchor apple generic'
   allow_unsigned_local: false
 ```
 
@@ -222,17 +191,17 @@ The dashboard shows a progress bar with time remaining. After 48 hours, the sens
 
 The sensor auto-detects your hardware and recommends a profile. You can change it anytime in Settings.
 
-| Profile | Scan Interval | Classic Decoys | Fake-host Ceiling | Classification | Best For |
+| Profile | Scan Interval | Host-listener Ceiling | Fake-host Ceiling | Classification | Best For |
 |---------|--------------|----------------|-------------------|----------------|----------|
 | **Lite** | 15 min | 3 | Disabled | Local signature DB only | Raspberry Pi 3, low-resource devices |
-| **Standard** | 5 min | 3 | Up to 10 | Cloud LLM (your API key) | Raspberry Pi 4, NAS, most setups |
-| **Full** | 1 min | 3 | Up to 30 | Local LLM (LM Studio/Ollama) | Dedicated server, power users |
+| **Standard** | 5 min | 3 | Up to 5 | Optional configured AI | Raspberry Pi 4, NAS, most setups |
+| **Full** | 1 min | 3 | Up to 10 | Optional configured AI | Dedicated server, power users |
 
 The ceiling applies to fake hosts, not service rows. Scouts creates at most one
 active fake host per eligible real source device. A fake host with several open
 ports has one service-decoy row for each port, so its service count can exceed
 the fake-host count. Full mode raises the ceiling; it does not create repeated
-copies of the same source merely to reach 30.
+copies of the same source merely to reach the profile ceiling.
 
 ---
 
@@ -246,7 +215,8 @@ The home view shows two things at a glance:
 
 **System Health** — Connection status, resource profile, and key metrics:
 - Connection indicator: green (live), yellow (syncing), blue (connecting), gray (disconnected)
-- Counts for discovered devices, deployed decoys, and unread alerts
+- Counts for discovered devices, active decoy deployments, and unread alerts
+- A deployment breakdown that keeps fake hosts, their nested service decoys, and host listeners separate
 - Sensor version and uptime
 - Learning mode progress bar (during the first 48 hours)
 
@@ -374,7 +344,13 @@ Squirrel Scouts is an advanced reconnaissance and deception subsystem that makes
 
 1. The **Scout Engine** probes open ports on discovered devices to collect bounded HTTP samples, TLS certificate metadata, protocol banners, and mDNS service types
 2. **Fake-host templates** group the services observed on one source device under one virtual IP and hostname. Every port remains a separate service-decoy record with its own behavior and evidence.
-3. **Virtual IPs** are allocated from verified-free addresses in your subnet (typically .200-.250) and published with proxy ARP
+3. **Virtual IPs** are allocated from verified-free addresses in your subnet and published with proxy ARP. On macOS, the privileged helper independently limits candidates to offsets 200 through 250 from the observed network base. Custom sensor ranges outside that root-enforced pool fail closed.
+
+> **Router setup:** Exclude or reserve the helper-owned `.200`–`.250` pool
+> from DHCP before enabling mimic decoys. The helper rejects an address when it
+> can see an active occupant, but a sleeping or offline device with a live DHCP
+> lease cannot answer the occupancy probe and can later collide.
+
 4. **Port Forwarding** (pfctl on macOS, iptables on Linux) transparently redirects privileged ports to the mimic servers
 5. **mDNS Services** are registered under persistent, device-appropriate hostnames. You can edit a fake host's hostname, and the change applies to every service sharing its IP.
 
@@ -419,7 +395,10 @@ Shows all deployed fake hosts in a card grid. Each card displays:
 
 Each card has host-level **Remove** and, for stopped hosts, **Restart** buttons.
 Editing the hostname updates every service row sharing the virtual IP and
-persists across sensor restarts.
+persists across sensor restarts. A hostname can be a bare label such as
+`fileserver`, or end in `.local` or `.localdomain`. The suffix is preserved
+exactly. Bonjour still advertises the corresponding single label under
+`.local`, because mDNS does not advertise the `.localdomain` namespace.
 
 The **Fill Capacity** button deploys one fake host for each eligible source that
 is not represented yet, up to the active profile ceiling. It does not create
@@ -576,7 +555,7 @@ Choose between **System** (follows macOS setting), **Light**, and **Dark** appea
 ### Resource Profile
 
 Switch between **Lite**, **Standard**, and **Full** profiles. Each profile shows
-its scan interval, classic-decoy count, fake-host ceiling, and classification
+its scan interval, host-listener ceiling, fake-host ceiling, and classification
 method. Changes take effect immediately. Switching from Lite to Standard/Full
 enables Squirrel Scouts. The ceiling does not guarantee that many fake hosts;
 the available count is limited by eligible, uniquely represented source
@@ -626,21 +605,46 @@ at startup with a warning, and runtime attempts to configure them are rejected.
 Credential alerts fire when a planted file or credential endpoint on a decoy is
 accessed.
 
-### LLM Configuration
+### Optional AI Device Classification and Decoy Naming
 
 This section appears only when the resource profile is **Standard** or **Full**.
 
-**Standard mode (Cloud LLM):**
-- Endpoint — Your LLM provider's API URL (e.g., `https://api.openai.com/v1`)
-- Model — Model name (e.g., `gpt-4o-mini`, `claude-haiku-4-5-20251001`)
-- API Key — Your provider's API key
+Choose **None**, **LM Studio**, **Ollama**, **OpenRouter**,
+**Fireworks.ai**, or another OpenAI-compatible endpoint.
 
-**Full mode (Local LLM):**
-- Endpoint — Your local LLM server URL (e.g., `http://localhost:1234/v1` for LM Studio, `http://localhost:11434` for Ollama)
-- Model — Model name (e.g., `llama-3.2-3b`)
-- API Key — Not required for local LLM servers
+- LM Studio defaults to `http://localhost:1234/v1`.
+- Ollama defaults to `http://localhost:11434/v1`.
+- OpenRouter uses its fixed HTTPS API. Enter a model slug such as
+  `provider/model` and your OpenRouter key.
+- Fireworks.ai uses its fixed HTTPS API. Enter a model name such as
+  `accounts/account/models/model` and your Fireworks key.
+- A custom provider requires its OpenAI-compatible base URL.
 
-The sensor uses LLM classification only when the local signature database can't classify a device with confidence above 0.70. Only anonymized signals (manufacturer OUI, DHCP fingerprint hash, mDNS service types, open ports) are sent — no IP addresses, MAC addresses, or hostnames.
+Cloud keys are sent only to the selected provider's canonical HTTPS endpoint.
+Changing providers clears the previous provider's saved key before the new
+configuration is activated. Provider changes take effect immediately without
+restarting the sensor.
+
+The sensor uses AI device classification only when the local signature database
+cannot fully classify a newly discovered device. It waits until the scan's port
+and discovery enrichment is complete, then the prompt can include the device's
+OUI prefix, sanitized DNS and mDNS names, open TCP port numbers, detected
+service names, DHCP option codes, mDNS service types, and available UPnP name,
+manufacturer, model, and server metadata. It does not include fingerprint
+hashes, connection destinations, the device's full MAC address, or any device
+IP address. An accepted response supplies manufacturer, device type, model,
+and confidence. AI does not analyze alerts, inspect packet contents, choose
+decoy targets, or take autonomous action.
+
+Fake hosts use simple home and business names such as `files`, `media`,
+`office`, `backup`, `printer`, and `automation`. SquirrelOps does not add a
+generic numeric or hexadecimal host identifier unless several real hostnames
+show that the network uses terminal identifiers. When AI is configured, the
+sensor sends a bounded, sanitized sample of observed real-device hostnames and
+asks for pattern-aware suggestions for at most half of a new deployment batch.
+Suggestions are validated locally, cannot reuse real or sensor hostnames, and
+never rename an existing fake host. A failed or invalid suggestion falls back
+to deterministic naming without interrupting deployment.
 
 ### Sensor
 
@@ -673,7 +677,7 @@ docker compose -f /opt/squirrelops/docker-compose.yml logs -f
 
 **macOS sensor:**
 ```bash
-tail -f ~/.squirrelops/sensor/logs/squirrelops-sensor.log
+tail -f /Library/SquirrelOps/sensor/logs/squirrelops-sensor.log
 ```
 
 ### Can't Find the Setup Key
@@ -683,7 +687,8 @@ tail -f ~/.squirrelops/sensor/logs/squirrelops-sensor.log
 See [Finding Your Setup Key](#finding-your-setup-key) for detailed instructions. The quickest methods:
 
 - **Docker:** `docker compose -f /opt/squirrelops/docker-compose.yml logs | grep "Setup Key"`
-- **Standalone macOS:** `~/.squirrelops/sensor/venv/bin/python -m squirrelops_home_sensor --show-pairing-code`
+- **Packaged macOS:** use the packaged CLI command in
+  [Finding Your Setup Key](#finding-your-setup-key)
 
 If neither works, the sensor may not be running. Check the sensor status first.
 
@@ -694,7 +699,7 @@ If neither works, the sensor may not be running. Check the sensor status first.
 The setup key expires after 10 minutes or successful use. Restart the sensor to generate a fresh key:
 
 - **Docker:** `docker compose -f /opt/squirrelops/docker-compose.yml restart`
-- **macOS:** `launchctl kickstart gui/$(id -u)/com.squirrelops.sensor`
+- **macOS:** `sudo launchctl kickstart -k system/com.squirrelops.sensor`
 
 Then retrieve the new code using the methods above.
 
@@ -769,8 +774,8 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 - **Helper not running (macOS)** — Fill Capacity returns a "Privileged helper is not running" error. The helper is required for creating isolated virtual IPs. Open the macOS app to install it, or see the [helper documentation](#privileged-helper-required-for-macos) above.
 - **Scouts haven't run yet** — Click **Run Scout** to refresh service profiles and fill available mimic capacity
 - **Profile is Lite** — Mimic decoys require Standard or Full profile. Switch profiles in Settings.
-- **No suitable candidates** — The scout engine needs eligible real devices with observed service ports. It creates one fake host per source, so a Full profile can legitimately have fewer than 30 fake hosts.
-- **Virtual IPs exhausted** — The default range is .200-.250. Every address is checked on the physical LAN before use; real devices are skipped, so fewer slots may be available.
+- **No suitable candidates** — The scout engine needs eligible real devices with observed service ports. It creates one fake host per source, so a Full profile can legitimately have fewer than 10 fake hosts.
+- **Virtual IPs exhausted** — On macOS, the privileged helper always enforces offsets 200 through 250 from the observed network base. Every address is checked on the physical LAN before use; real devices are skipped, so fewer slots may be available.
 
 ### Settings Won't Save
 
@@ -780,16 +785,17 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 - The sensor is disconnected — changes are sent to the sensor via the API and require an active connection
 - Check the sensor logs for API errors
 
-### Cloud LLM Classification Not Working
+### Cloud AI Classification or Decoy Naming Not Working
 
 **Symptoms:** Devices show as "Unknown Device" even in Standard mode.
 
 **Possible causes:**
-- No API key configured — go to Settings > LLM Configuration and enter your API key
+- No API key configured — go to Settings > Optional AI Device Classification and Decoy Naming and enter your API key
 - Invalid API key — the sensor falls back silently to the local signature database
-- The cloud LLM endpoint is unreachable — check your internet connection
+- No model configured — enter the provider's exact model identifier
+- The cloud AI endpoint is unreachable — check your internet connection
 
-The sensor always falls back to local classification if the LLM is unavailable. No alert is generated for LLM failures.
+The sensor always falls back to local classification and deterministic decoy names if AI is unavailable. No alert is generated for provider failures.
 
 ### Uninstalling
 
@@ -801,12 +807,12 @@ sudo rm -rf /opt/squirrelops
 
 **macOS sensor:**
 ```bash
-launchctl bootout gui/$(id -u)/com.squirrelops.sensor
-rm ~/Library/LaunchAgents/com.squirrelops.sensor.plist
-rm -rf ~/.squirrelops
+sudo bash /Library/SquirrelOps/uninstall.sh
 ```
 
-All locally stored data (databases, configuration, logs, alert history) is deleted with the installation directory. No data persists elsewhere.
+The uninstaller stops the services and asks before deleting the private sensor
+data. It also removes installer-created backups that can contain pairing
+material.
 
 ---
 
@@ -821,11 +827,12 @@ Everything, by default. All device data, alert history, scan results, and config
 | Feature | Data Sent | Destination | How to Disable |
 |---------|-----------|-------------|----------------|
 | **Push Notifications** | Alert title and body text | Apple Push Notification Service (via relay) | Toggle off in Settings > Alert Methods |
-| **Cloud LLM Classification** (Standard mode) | Manufacturer OUI, DHCP fingerprint hash, mDNS service types, open port list. No IPs, MACs, or hostnames. | Your configured LLM provider (Anthropic or OpenAI), using your own API key | Switch to Lite or Full profile |
+| **Cloud AI Classification and Decoy Naming** | Classification: OUI prefix, sanitized DNS and mDNS names, open port numbers, detected services, DHCP option codes, mDNS service types, and available UPnP metadata. Naming: a bounded, sanitized sample of observed hostnames. No fingerprint hashes, connection destinations, IP addresses, full MAC address, packet contents, alerts, or credentials. | OpenRouter, Fireworks.ai, or your configured OpenAI-compatible provider, using your own API key | Choose **None** or switch to Lite |
 | **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers." | Your Slack workspace | Toggle off in Settings > Alert Methods |
 | **Update Checks** | Current version number and platform identifier | SquirrelOps update endpoint | Don't click "Check for Updates" |
 
-In **Full mode** with a local LLM, no classification data leaves your network.
+With LM Studio or Ollama on the local network, classification and naming data
+stay on that network.
 
 ### Certificate Pinning
 
@@ -842,7 +849,7 @@ After pairing, the macOS app pins the sensor's TLS certificate by SHA-256 finger
 ### Virtual IP Safety
 
 Virtual IPs used by mimic decoys are:
-- Allocated from the high end of your subnet (typically .200-.250) to avoid DHCP conflicts
+- Allocated from helper-enforced offsets 200 through 250 from the observed network base on macOS to avoid DHCP conflicts
 - Excluded from the sensor's own scan loop to prevent false device discoveries
 - Automatically evacuated if a real device claims the same IP — the mimic is stopped, the alias is removed, and the IP is reallocated
 

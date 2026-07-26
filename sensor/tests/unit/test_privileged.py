@@ -21,6 +21,7 @@ from squirrelops_home_sensor.privileged.helper import (
     PrivilegedOperations,
     ServiceResult,
 )
+from squirrelops_home_sensor.privileged.linux_sidecar import LinuxNetworkHelperClient
 from squirrelops_home_sensor.privileged.xpc import MacOSPrivilegedOps
 
 # ---------------------------------------------------------------------------
@@ -350,6 +351,7 @@ COMMIT
         assert "HOST_NAT" not in payload
         assert ":SQUIRRELOPS_MIMIC - [0:0]" in payload
         assert "-I INPUT 1 -j SQUIRRELOPS_MIMIC" in payload
+        assert "-I FORWARD 1 -j SQUIRRELOPS_MIMIC" in payload
         assert "-I PREROUTING 1 -j SQUIRRELOPS_MIMIC" in payload
         assert (
             "-A SQUIRRELOPS_MIMIC -p tcp -d 192.168.1.200 "
@@ -358,6 +360,10 @@ COMMIT
         assert (
             "-A SQUIRRELOPS_MIMIC -p tcp -d 192.168.1.200 "
             "--dport 8080 -j ACCEPT"
+        ) in payload
+        assert (
+            "-A SQUIRRELOPS_MIMIC -m conntrack --ctstate DNAT "
+            "-p tcp -d 192.168.1.200 --dport 10080 -j ACCEPT"
         ) in payload
         assert "-A SQUIRRELOPS_MIMIC -d 192.168.1.200 -j DROP" in payload
         assert "-F SQUIRRELOPS_MIMIC" not in payload
@@ -876,7 +882,7 @@ class TestCreatePrivilegedOps:
             mock_sys.platform = "linux"
             ops = create_privileged_ops()
 
-        assert isinstance(ops, LinuxPrivilegedOps)
+        assert isinstance(ops, LinuxNetworkHelperClient)
 
     def test_returns_macos_ops_on_darwin(self) -> None:
         from squirrelops_home_sensor.privileged.helper import create_privileged_ops
@@ -894,7 +900,7 @@ class TestCreatePrivilegedOps:
             mock_sys.platform = "freebsd14"
             ops = create_privileged_ops()
 
-        assert isinstance(ops, LinuxPrivilegedOps)
+        assert isinstance(ops, LinuxNetworkHelperClient)
 
 
 # ---------------------------------------------------------------------------

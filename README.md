@@ -5,7 +5,8 @@
 - **Honeypots that blend in** — auto-deploys realistic decoy services (file shares, dev servers, Home Assistant instances) based on what's actually on your network
 - **Squirrel Scouts** — service fingerprinting that builds coherent fake hosts from real devices, with one decoy service per observed port and a shared virtual IP and hostname for services copied from the same source
 - **High-confidence decoy alerts** — a connection to an isolated decoy is inherently suspicious and is kept separate from lower-confidence behavioral detections
-- **Device fingerprinting** — identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional LLM-powered classification
+- **Device fingerprinting** — identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional AI device classification
+- **Believable decoy naming** — uses ordinary home and business names by default, with optional AI suggestions that follow observed hostname patterns
 - **Behavioral baselines** — learns normal connection patterns during a 48-hour training period, then alerts on anomalies
 - **Credential canaries** — plants realistic-looking credentials (AWS keys, SSH keys, .env files, database URIs, GitHub PATs, Home Assistant tokens) that trigger critical alerts when accessed through a decoy
 - **Local by default** — inventory, alerts, and configuration stay in local SQLite. Optional cloud classification and notification integrations are explicit opt-ins.
@@ -87,11 +88,11 @@ On macOS, these virtual IPs use proxy ARP through the Mac's physical interface. 
 
 The sensor adapts to available resources:
 
-| Profile | Scan Interval | Classic Decoys | Fake-host Ceiling | Classification |
+| Profile | Scan Interval | Host-listener Ceiling | Fake-host Ceiling | Classification |
 |---------|--------------|----------------|-------------------|----------------|
 | **Lite** | 15 min | 3 | Disabled | Local signature DB only |
-| **Standard** | 5 min | 3 | Up to 10 | Cloud LLM (your API key) |
-| **Full** | 1 min | 3 | Up to 30 | Local LLM (LM Studio/Ollama) |
+| **Standard** | 5 min | 3 | Up to 5 | Optional configured AI |
+| **Full** | 1 min | 3 | Up to 10 | Optional configured AI |
 
 The ceiling counts fake hosts, not service rows. Squirrel Scouts deploys at most one fake host for each eligible real source device, so a network with six eligible sources produces at most six fake hosts even in Full mode. A multi-port host has one service-decoy row per observed port and can therefore contribute several rows.
 
@@ -99,35 +100,47 @@ The ceiling counts fake hosts, not service rows. Squirrel Scouts deploys at most
 
 ### Sensor — Linux/NAS (Docker)
 
-Install from a pinned release and verify its checksum before running it, rather than piping an unverified script straight into a root shell. Each release publishes `install.sh` and `install.sh.sha256` on the [Releases page](https://github.com/rocketweb/squirrelops-home/releases).
+Linux publication is currently on hold. The 2.0.0 tree separates the
+unprivileged sensor from a constrained `network-helper` companion. The sensor
+uses a private bridge, a fixed non-root identity, a read-only root filesystem,
+and no Linux capabilities. Only the helper receives host networking,
+`NET_RAW`, and `NET_ADMIN` through a peer-authenticated, allow-listed Unix
+socket API.
 
-```bash
-VERSION=v1.1.14   # pick a released version
-base="https://github.com/rocketweb/squirrelops-home/releases/download/${VERSION}"
-curl -fsSLO "${base}/install.sh"
-curl -fsSLO "${base}/install.sh.sha256"
-shasum -a 256 -c install.sh.sha256   # must print: install.sh: OK
-less install.sh                      # review before running
-sudo bash install.sh
-```
+The release workflow remains fail closed until that boundary is independently
+reviewed on a real Linux LAN, or the release is explicitly reviewed as
+macOS-only. See [Release security](docs/RELEASE_SECURITY.md).
 
-Installs the sensor only on any Linux host with Docker (ARM64 and x86_64). The dashboard/control plane is the macOS app and is installed separately on a Mac. The sensor exposes port 8443 with TLS.
+### macOS App and Sensor
 
-### Sensor — macOS (launchd)
-
-Same verify-then-run flow. Requires Python 3.11+. Installs as a launchd agent under `~/.squirrelops/sensor/`.
+Use the signed and notarized `.pkg`. It contains the app, sensor, locked Python
+dependencies, and privileged helper. Do not use the old standalone
+`install-macos.sh` release asset. That script could fall back to an unpinned
+package index when it was separated from the source tree.
 
 ```bash
 VERSION=v1.1.14
 base="https://github.com/rocketweb/squirrelops-home/releases/download/${VERSION}"
-curl -fsSLO "${base}/install-macos.sh"
-curl -fsSLO "${base}/install-macos.sh.sha256"
-shasum -a 256 -c install-macos.sh.sha256   # must print: install-macos.sh: OK
-less install-macos.sh                       # review before running
-bash install-macos.sh
+curl -fsSLO "${base}/SquirrelOpsHome-1.1.14.pkg"
+curl -fsSLO "${base}/SquirrelOpsHome-1.1.14.pkg.sha256"
+shasum -a 256 -c SquirrelOpsHome-1.1.14.pkg.sha256
+pkgutil --check-signature SquirrelOpsHome-1.1.14.pkg
+spctl --assess --type install --verbose=2 SquirrelOpsHome-1.1.14.pkg
+open SquirrelOpsHome-1.1.14.pkg
 ```
 
-Prefer a notarized, code-signed `.pkg` from the Releases page when available, since macOS verifies its signature automatically.
+For v1.1.14, cross-check the expected SHA-256 on the separately hosted
+[macOS verification page](https://www.squirrelops.io/macos):
+`b9bfc26aa1d7fac87e413fad6d7d9271f65533f7d66dcb634d3b0a931103c54e`.
+
+Future hardened releases will include a checksummed and attested
+`RELEASE-VERIFICATION.md` asset. Verify that file first and treat it as the
+canonical release notes and command source. GitHub's release description is
+editable and is only a convenience pointer.
+
+The source-checkout-only `scripts/install-macos.sh` remains available for
+development. It requires the local `sensor/uv.lock`, exact `uv` version, and
+fails closed if the locked source project is absent.
 
 ### macOS App
 
@@ -146,12 +159,16 @@ The app discovers the sensor via mDNS (`_squirrelops._tcp`) and pairs using a on
 
 1. App discovers sensor on the local network
 2. Sensor generates a setup key at startup. It is shown in the startup banner and stored as `pairing-key` inside the private sensor data directory (`--show-pairing-code` retrieves it)
-3. User enters the setup key in the app, or the installed local app retrieves it through a peer-verified Unix socket
+3. User retrieves the setup key with the administrator-only packaged command and enters it in the app
 4. App and sensor perform a versioned HMAC-SHA256 transcript proof, then derive a session key with HKDF
 5. App generates a CSR, sensor issues a client certificate signed by its CA
 6. All subsequent communication uses mutual TLS. The one-time setup key is invalidated after use
 
-The production local-pairing socket accepts only the configured installed SquirrelOps executable after validating both its signature and designated code requirement. `pairing.allow_unsigned_local: true` exists for source development only and reduces the local trust boundary to the logged-in user.
+Packaged installs do not expose the setup key over a local socket. Process
+identity checks cannot prove which process is using a connected descriptor
+after file-descriptor passing. `pairing.allow_unsigned_local: true` enables a
+source-development-only socket and reduces the local trust boundary to the
+logged-in user.
 
 ## Development
 
@@ -193,7 +210,7 @@ sensor/src/squirrelops_home_sensor/
 ├── events/        Pub/sub event bus with audit log
 ├── fingerprint/   Multi-signal compositor and matcher
 ├── network/       Virtual IP allocation, port forwarding
-├── privileged/    macOS Swift helper RPC, Linux direct ops
+├── privileged/    macOS helper RPC and constrained Linux sidecar RPC
 ├── scanner/       ARP/port/mDNS/SSDP scanning
 ├── scouts/        Scout engine, scheduler, mimic orchestrator, templates, mDNS
 ├── secrets/       Keychain, encrypted file storage
@@ -204,7 +221,7 @@ sensor/src/squirrelops_home_sensor/
 
 - **Detection only** — never blocks, throttles, or modifies real network traffic
 - **No deep packet inspection** — analysis limited to connection metadata
-- **Local-first** — all data in local SQLite, only exceptions are optional APNs/Slack/LLM integrations
+- **Local-first** — all data in local SQLite, only exceptions are optional APNs, Slack, cloud AI, and update integrations
 - **Decoys never collide** — decoy services avoid real ports and don't respond to broadcast discovery
 - **Virtual IPs avoid conflicts** — allocated from high end of subnet, excluded from scan loop, evacuated if a real device claims the IP
 - **48-hour learning** — behavioral anomaly alerts are suppressed during learning; decoy trip alerts fire immediately

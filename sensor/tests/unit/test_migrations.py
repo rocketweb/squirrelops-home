@@ -6,7 +6,13 @@ import json
 import aiosqlite
 import pytest
 
-from squirrelops_home_sensor.db.migrations import _apply_v3, _apply_v7, _apply_v8, apply_migrations
+from squirrelops_home_sensor.db.migrations import (
+    _apply_v3,
+    _apply_v7,
+    _apply_v8,
+    _apply_v10,
+    apply_migrations,
+)
 from squirrelops_home_sensor.db.schema import SCHEMA_VERSION
 
 
@@ -239,6 +245,80 @@ class TestMigrationV7:
         await db.close()
 
     @pytest.mark.asyncio
+    async def test_v7_repoints_duplicate_insight_before_fk_delete(self, tmp_path) -> None:
+        """V7 repoints insight state before deleting an alert it references."""
+        db = await self._setup_db_with_duplicates(tmp_path)
+        await db.execute(
+            "UPDATE security_insight_state SET alert_id = 1 "
+            "WHERE insight_key = 'risky_port:22'"
+        )
+        await db.commit()
+        await db.execute("PRAGMA foreign_keys = ON")
+        assert (await (await db.execute("PRAGMA foreign_keys")).fetchone())[0] == 1
+
+        await _apply_v7(db)
+
+        row = await (
+            await db.execute(
+                "SELECT alert_id FROM security_insight_state "
+                "WHERE insight_key = 'risky_port:22'"
+            )
+        ).fetchone()
+        assert row["alert_id"] == 5
+        assert list(await (await db.execute("PRAGMA foreign_key_check")).fetchall()) == []
+
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_v7_rolls_back_all_changes_when_version_write_fails(
+        self, tmp_path
+    ) -> None:
+        """V7 restores all rows when a late migration statement fails."""
+        db = await self._setup_db_with_duplicates(tmp_path)
+        await db.execute("""
+            CREATE TRIGGER fail_v7_version
+            BEFORE INSERT ON schema_version
+            WHEN NEW.version = 7
+            BEGIN
+                SELECT RAISE(ABORT, 'forced V7 version failure');
+            END
+        """)
+        await db.commit()
+        await db.execute("PRAGMA foreign_keys = ON")
+
+        with pytest.raises(
+            aiosqlite.IntegrityError, match="forced V7 version failure"
+        ):
+            await _apply_v7(db)
+
+        alert_ids = [
+            row["id"]
+            for row in await (
+                await db.execute("SELECT id FROM home_alerts ORDER BY id")
+            ).fetchall()
+        ]
+        assert alert_ids == [1, 2, 3, 4, 5, 6]
+        assert (
+            await (
+                await db.execute(
+                    "SELECT COUNT(*) FROM schema_version WHERE version = 7"
+                )
+            ).fetchone()
+        )[0] == 0
+
+        await db.execute("DROP TRIGGER fail_v7_version")
+        await _apply_v7(db)
+        alert_ids = [
+            row["id"]
+            for row in await (
+                await db.execute("SELECT id FROM home_alerts ORDER BY id")
+            ).fetchall()
+        ]
+        assert alert_ids == [5, 6]
+
+        await db.close()
+
+    @pytest.mark.asyncio
     async def test_v7_idempotent(self, tmp_path) -> None:
         """Running V7 migration twice doesn't fail or delete more data."""
         db = await self._setup_db_with_duplicates(tmp_path)
@@ -441,6 +521,7 @@ class TestMigrationV8:
 
         await db.close()
 
+
     @pytest.mark.asyncio
     async def test_v8_consolidates_per_device_alerts(self, tmp_path) -> None:
         """V8 migration consolidates 3 SSH per-device alerts into 1 grouped alert."""
@@ -516,6 +597,84 @@ class TestMigrationV8:
         await db.close()
 
     @pytest.mark.asyncio
+    async def test_v8_repoints_insights_before_fk_delete(self, tmp_path) -> None:
+        """V8 repoints insight state before deleting grouped-alert losers."""
+        db = await self._setup_db_with_per_device_alerts(tmp_path)
+        await db.execute("PRAGMA foreign_keys = ON")
+        assert (await (await db.execute("PRAGMA foreign_keys")).fetchone())[0] == 1
+
+        await _apply_v8(db)
+
+        rows = list(
+            await (
+                await db.execute(
+                    "SELECT alert_id FROM security_insight_state "
+                    "WHERE insight_key = 'risky_port:22' ORDER BY device_id"
+                )
+            ).fetchall()
+        )
+        assert [row["alert_id"] for row in rows] == [3, 3]
+        assert list(await (await db.execute("PRAGMA foreign_key_check")).fetchall()) == []
+
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_v8_rolls_back_all_changes_when_version_write_fails(
+        self, tmp_path
+    ) -> None:
+        """V8 restores all rows when a late migration statement fails."""
+        db = await self._setup_db_with_per_device_alerts(tmp_path)
+        await db.execute(
+            "UPDATE security_insight_state SET alert_id = 3 "
+            "WHERE insight_key = 'risky_port:22'"
+        )
+        await db.execute("""
+            CREATE TRIGGER fail_v8_version
+            BEFORE INSERT ON schema_version
+            WHEN NEW.version = 8
+            BEGIN
+                SELECT RAISE(ABORT, 'forced V8 version failure');
+            END
+        """)
+        await db.commit()
+        await db.execute("PRAGMA foreign_keys = ON")
+
+        with pytest.raises(
+            aiosqlite.IntegrityError, match="forced V8 version failure"
+        ):
+            await _apply_v8(db)
+
+        rows = list(
+            await (
+                await db.execute(
+                    "SELECT id, issue_key FROM home_alerts ORDER BY id"
+                )
+            ).fetchall()
+        )
+        assert [(row["id"], row["issue_key"]) for row in rows] == [
+            (1, None),
+            (2, None),
+            (3, None),
+            (4, None),
+            (5, None),
+        ]
+        assert (
+            await (
+                await db.execute(
+                    "SELECT COUNT(*) FROM schema_version WHERE version = 8"
+                )
+            ).fetchone()
+        )[0] == 0
+
+        await db.execute("DROP TRIGGER fail_v8_version")
+        await _apply_v8(db)
+        assert (
+            await (await db.execute("SELECT COUNT(*) FROM home_alerts")).fetchone()
+        )[0] == 3
+
+        await db.close()
+
+    @pytest.mark.asyncio
     async def test_v8_idempotent(self, tmp_path) -> None:
         """Running V8 migration twice doesn't fail or corrupt data."""
         db = await self._setup_db_with_per_device_alerts(tmp_path)
@@ -549,4 +708,214 @@ class TestMigrationV8:
         row = await cursor.fetchone()
         assert row is not None
 
+        await db.close()
+
+
+class TestMigrationV10:
+    """Test V10 normalized mDNS-label uniqueness and V9 reconciliation."""
+
+    @staticmethod
+    async def _setup_v9_collision(tmp_path):
+        db = await aiosqlite.connect(str(tmp_path / "v9-collision.db"))
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        await db.execute(
+            "DROP INDEX idx_decoy_hosts_active_mdns_label_nocase"
+        )
+        await db.execute("DELETE FROM schema_version WHERE version = 10")
+
+        now = "2026-01-01T00:00:00Z"
+        await db.executemany(
+            """INSERT INTO decoy_hosts
+               (id, hostname, bind_address, tls_cert_pem, tls_key_pem,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    10,
+                    "server.local",
+                    "192.168.1.200",
+                    None,
+                    None,
+                    now,
+                    now,
+                ),
+                (
+                    20,
+                    "server.localdomain",
+                    "192.168.1.201",
+                    "legacy-cert",
+                    "legacy-key",
+                    now,
+                    now,
+                ),
+            ],
+        )
+        await db.executemany(
+            """INSERT INTO decoys
+               (id, name, decoy_type, bind_address, port, status, config,
+                created_at, updated_at, host_id, protocol, service_name,
+                is_primary)
+               VALUES (?, ?, 'mimic', ?, 443, 'active', ?, ?, ?, ?,
+                       'tcp', 'https', 1)""",
+            [
+                (
+                    100,
+                    "server.local",
+                    "192.168.1.200",
+                    json.dumps({"mdns_hostname": "server"}),
+                    now,
+                    now,
+                    10,
+                ),
+                (
+                    200,
+                    "server.localdomain",
+                    "192.168.1.201",
+                    json.dumps({"mdns_hostname": "server"}),
+                    now,
+                    now,
+                    20,
+                ),
+            ],
+        )
+        await db.commit()
+        return db
+
+    @pytest.mark.asyncio
+    async def test_v10_reconciles_v9_suffix_collision_deterministically(
+        self,
+        tmp_path,
+    ) -> None:
+        db = await self._setup_v9_collision(tmp_path)
+
+        await _apply_v10(db)
+
+        hosts = list(
+            await (
+                await db.execute(
+                    """SELECT id, hostname, tls_cert_pem, tls_key_pem
+                       FROM decoy_hosts
+                       ORDER BY id"""
+                )
+            ).fetchall()
+        )
+        assert [(row["id"], row["hostname"]) for row in hosts] == [
+            (10, "server.local"),
+            (20, "server-20.localdomain"),
+        ]
+        assert hosts[1]["tls_cert_pem"] != "legacy-cert"
+        assert hosts[1]["tls_key_pem"] != "legacy-key"
+
+        service = await (
+            await db.execute(
+                "SELECT name, config FROM decoys WHERE id = 200"
+            )
+        ).fetchone()
+        assert service["name"] == "server-20.localdomain"
+        assert json.loads(service["config"])["mdns_hostname"] == "server-20"
+        assert (
+            await (
+                await db.execute(
+                    "SELECT COUNT(*) FROM schema_version WHERE version = 10"
+                )
+            ).fetchone()
+        )[0] == 1
+
+        await _apply_v10(db)
+        assert (
+            await (
+                await db.execute(
+                    "SELECT hostname FROM decoy_hosts WHERE id = 20"
+                )
+            ).fetchone()
+        )["hostname"] == "server-20.localdomain"
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_v10_reserves_later_legacy_labels_when_renaming(
+        self,
+        tmp_path,
+    ) -> None:
+        db = await self._setup_v9_collision(tmp_path)
+        now = "2026-01-01T00:00:00Z"
+        await db.execute(
+            """INSERT INTO decoy_hosts
+               (id, hostname, bind_address, created_at, updated_at)
+               VALUES (30, 'server-20.local', '192.168.1.202', ?, ?)""",
+            (now, now),
+        )
+        await db.commit()
+
+        await _apply_v10(db)
+
+        hosts = list(
+            await (
+                await db.execute(
+                    "SELECT id, hostname FROM decoy_hosts ORDER BY id"
+                )
+            ).fetchall()
+        )
+        assert [(row["id"], row["hostname"]) for row in hosts] == [
+            (10, "server.local"),
+            (20, "server-20-2.localdomain"),
+            (30, "server-20.local"),
+        ]
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_v10_two_phase_rename_handles_occupied_final_name(
+        self,
+        tmp_path,
+    ) -> None:
+        db = await self._setup_v9_collision(tmp_path)
+        now = "2026-01-01T00:00:00Z"
+        await db.execute(
+            """INSERT INTO decoy_hosts
+               (id, hostname, bind_address, created_at, updated_at)
+               VALUES (5, 'server.local.', '192.168.1.202', ?, ?)""",
+            (now, now),
+        )
+        await db.commit()
+
+        await _apply_v10(db)
+
+        hosts = list(
+            await (
+                await db.execute(
+                    "SELECT id, hostname FROM decoy_hosts ORDER BY id"
+                )
+            ).fetchall()
+        )
+        assert [(row["id"], row["hostname"]) for row in hosts] == [
+            (5, "server.local"),
+            (10, "server-10.local"),
+            (20, "server-20.localdomain"),
+        ]
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_v10_index_enforces_normalized_active_label(
+        self,
+        tmp_path,
+    ) -> None:
+        db = await self._setup_v9_collision(tmp_path)
+        await _apply_v10(db)
+        now = "2026-01-01T00:00:00Z"
+
+        with pytest.raises(aiosqlite.IntegrityError):
+            await db.execute(
+                """INSERT INTO decoy_hosts
+                   (hostname, bind_address, created_at, updated_at)
+                   VALUES ('SERVER.', '192.168.1.202', ?, ?)""",
+                (now, now),
+            )
+
+        await db.execute(
+            """INSERT INTO decoy_hosts
+               (hostname, bind_address, retired_at, created_at, updated_at)
+               VALUES ('SERVER.localdomain.', '192.168.1.203', ?, ?, ?)""",
+            (now, now, now),
+        )
+        await db.rollback()
         await db.close()

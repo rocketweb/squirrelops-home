@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
+from squirrelops_home_sensor.privileged.helper import PrivilegedOperations
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +284,7 @@ class DecoyOrchestrator:
         interface: str = "en0",
         virtual_ip_range_start: int = 200,
         virtual_ip_range_end: int = 250,
+        network_publisher: PrivilegedOperations | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._db = db
@@ -294,6 +296,7 @@ class DecoyOrchestrator:
         self._interface = interface
         self._virtual_ip_range_start = virtual_ip_range_start
         self._virtual_ip_range_end = virtual_ip_range_end
+        self._network_publisher = network_publisher
         self._records: dict[int, DecoyRecord] = {}
         # The event loop that owns this orchestrator. Captured on deploy (which
         # always runs on the loop) so connection callbacks raised on non-loop
@@ -392,6 +395,13 @@ class DecoyOrchestrator:
             for decoy_id in excess_ids:
                 record = self._records.get(decoy_id)
                 if record is not None:
+                    if (
+                        self._network_publisher is not None
+                        and not await self._network_publisher.unpublish_listener(decoy_id)
+                    ):
+                        raise RuntimeError(
+                            f"Could not withdraw classic decoy {decoy_id}"
+                        )
                     await record.decoy.stop()
                     record.health = DecoyHealth.STOPPED
                 await self._db.execute(
@@ -729,6 +739,17 @@ class DecoyOrchestrator:
         decoy.on_connection = lambda event, _did=decoy.decoy_id, _dname=decoy.name: self._handle_connection(event, decoy_id=_did, decoy_name=_dname)
 
         await decoy.start()
+        if (
+            self._network_publisher is not None
+            and not await self._network_publisher.publish_listener(
+                decoy.decoy_id,
+                decoy.port,
+            )
+        ):
+            await decoy.stop()
+            raise RuntimeError(
+                f"Could not publish classic decoy {decoy.decoy_id}"
+            )
 
         record = DecoyRecord(decoy)
         self._records[decoy.decoy_id] = record
@@ -759,6 +780,10 @@ class DecoyOrchestrator:
         """Stop all deployed decoys."""
         for record in self._records.values():
             try:
+                if self._network_publisher is not None:
+                    await self._network_publisher.unpublish_listener(
+                        record.decoy.decoy_id
+                    )
                 await record.decoy.stop()
                 record.health = DecoyHealth.STOPPED
             except Exception:
@@ -903,6 +928,11 @@ class DecoyOrchestrator:
         record = self._records.get(decoy_id)
         if record is not None:
             try:
+                if (
+                    self._network_publisher is not None
+                    and not await self._network_publisher.unpublish_listener(decoy_id)
+                ):
+                    return False
                 await record.decoy.stop()
                 record.health = DecoyHealth.STOPPED
             except Exception:
@@ -998,6 +1028,11 @@ class DecoyOrchestrator:
         record = self._records.get(decoy_id)
         if record is not None:
             try:
+                if (
+                    self._network_publisher is not None
+                    and not await self._network_publisher.unpublish_listener(decoy_id)
+                ):
+                    return False
                 await record.decoy.stop()
             except Exception:
                 logger.exception("Failed to stop classic decoy %d", decoy_id)

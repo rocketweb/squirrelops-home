@@ -8,7 +8,7 @@
 # Environment variables:
 #   BUILD_CONFIG  - "debug" (default) or "release"
 #   BUILD_ARCH    - "arm64", "x86_64", or "universal" (default: current arch)
-#   SQUIRRELOPS_VERSION - optional assertion; must match ../VERSION
+#   SQUIRRELOPS_APP_VERSION - optional assertion; must match ../APP_VERSION
 #
 set -euo pipefail
 
@@ -16,10 +16,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../VERSION")"
-if [ -n "${SQUIRRELOPS_VERSION:-}" ] \
-    && [ "$SQUIRRELOPS_VERSION" != "$VERSION" ]; then
-    echo "[x] App version override does not match authoritative VERSION ($VERSION)." >&2
+APP_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../APP_VERSION")"
+DISTRIBUTION_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/../VERSION")"
+if [ -n "${SQUIRRELOPS_APP_VERSION:-}" ] \
+    && [ "$SQUIRRELOPS_APP_VERSION" != "$APP_VERSION" ]; then
+    echo "[x] App version override does not match authoritative APP_VERSION ($APP_VERSION)." >&2
     exit 1
 fi
 
@@ -148,9 +149,11 @@ cat > "$APP_BUNDLE/Contents/Info.plist" << PLIST
     <key>CFBundleIdentifier</key>
     <string>com.squirrelops.home</string>
     <key>CFBundleVersion</key>
-    <string>$VERSION</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleShortVersionString</key>
-    <string>$VERSION</string>
+    <string>$APP_VERSION</string>
+    <key>SquirrelOpsDistributionVersion</key>
+    <string>$DISTRIBUTION_VERSION</string>
     <key>CFBundleExecutable</key>
     <string>SquirrelOpsHome</string>
     <key>CFBundlePackageType</key>

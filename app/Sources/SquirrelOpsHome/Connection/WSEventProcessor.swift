@@ -277,27 +277,49 @@ public enum WSEventProcessor {
         // -- Alerts --
         if hasAlertChanges {
             var current = state.alerts
+            var alertsNeedingNotification: [AlertSummary] = []
+
+            func requestNotification(for alert: AlertSummary) {
+                if let index = alertsNeedingNotification.firstIndex(
+                    where: { $0.id == alert.id }
+                ) {
+                    alertsNeedingNotification[index] = alert
+                } else {
+                    alertsNeedingNotification.append(alert)
+                }
+            }
 
             // Apply updates (in-place replacement of existing alerts)
             for update in alertUpdates {
                 if let index = current.firstIndex(where: { $0.id == update.id }) {
+                    if isMaterialNotificationRevision(from: current[index], to: update) {
+                        requestNotification(for: update)
+                    }
                     current[index] = update
                 } else {
                     // Updated alert we haven't seen — insert at top
                     current.insert(update, at: 0)
+                    requestNotification(for: update)
                 }
             }
 
             // Insert new alerts at top (de-duplicate: if ID already exists, update in place)
             for alert in alerts {
                 if let index = current.firstIndex(where: { $0.id == alert.id }) {
+                    if isMaterialNotificationRevision(from: current[index], to: alert) {
+                        requestNotification(for: alert)
+                    }
                     current[index] = alert
                 } else {
                     current.insert(alert, at: 0)
+                    requestNotification(for: alert)
                 }
             }
 
             state.alerts = current
+            if !alertsNeedingNotification.isEmpty {
+                state.onAlertNotificationsRequested?(alertsNeedingNotification)
+            }
         }
 
         // -- System Status --
@@ -319,6 +341,20 @@ public enum WSEventProcessor {
     private static func decodeAlert(from payload: [String: AnyCodableValue]) -> AlertSummary? {
         guard let data = try? encoder.encode(payload) else { return nil }
         return try? decoder.decode(AlertSummary.self, from: data)
+    }
+
+    private static func isMaterialNotificationRevision(
+        from old: AlertSummary,
+        to new: AlertSummary
+    ) -> Bool {
+        guard new.readAt == nil else { return false }
+        return old.severity != new.severity
+            || old.title != new.title
+            || old.sourceIp != new.sourceIp
+            || old.createdAt != new.createdAt
+            || old.alertCount != new.alertCount
+            || old.deviceCount != new.deviceCount
+            || old.issueKey != new.issueKey
     }
 
     private static func decodeDecoy(from payload: [String: AnyCodableValue]) -> DecoySummary? {

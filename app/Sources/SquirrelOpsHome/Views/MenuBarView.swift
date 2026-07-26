@@ -12,15 +12,22 @@ public struct MenuBarView: View {
     }
 
     public var body: some View {
+        let metrics = MenuBarLayoutMetrics(
+            hasUnreadAlerts: !appState.unreadAlertCounts.isEmpty,
+            severityCount: appState.unreadAlertCounts.count
+        )
         VStack(alignment: .leading, spacing: Spacing.sm) {
             statusLine
             Divider()
             alertCountsSection
-            Spacer()
+            if metrics.reservesFlexibleAlertSpace {
+                Spacer()
+            }
             actionButtons
         }
         .padding(Spacing.md)
-        .frame(width: 320)
+        .frame(width: CGFloat(metrics.preferredWidth))
+        .fixedSize(horizontal: false, vertical: true)
         .background(Theme.background(colorScheme))
     }
 
@@ -151,7 +158,9 @@ public struct MenuBarView: View {
             Divider()
 
             Button {
-                openWindow(id: "main")
+                WindowActivationController.present(.dashboard) {
+                    openWindow(id: AppWindow.dashboard.rawValue)
+                }
             } label: {
                 HStack {
                     Image(systemName: "macwindow")

@@ -11,9 +11,12 @@ import aiosqlite
 import pytest
 
 from squirrelops_home_sensor.db.migrations import apply_migrations
-from squirrelops_home_sensor.devices.classifier import DeviceClassifier
+from squirrelops_home_sensor.devices.classifier import DeviceClassifier, LLMClassifier
 from squirrelops_home_sensor.devices.manager import DeviceManager, ScanResult
-from squirrelops_home_sensor.devices.signatures import SignatureDB
+from squirrelops_home_sensor.devices.signatures import (
+    DeviceClassification,
+    SignatureDB,
+)
 from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.events.log import EventLog
 
@@ -100,6 +103,95 @@ class TestDeviceManagerPipeline:
         payload = new_events[0]["payload"]
         assert payload["ip_address"] == "192.168.1.100"
         assert payload["mac_address"] == "A4:83:E7:11:22:33"
+
+    @pytest.mark.asyncio
+    async def test_ai_classification_is_persisted_across_restart(
+        self,
+        db: aiosqlite.Connection,
+        event_bus: EventBus,
+    ) -> None:
+        class FakeLLM(LLMClassifier):
+            evidence = None
+
+            async def classify(
+                self,
+                _fingerprint,
+                evidence=None,
+            ) -> DeviceClassification:
+                self.evidence = evidence
+                return DeviceClassification(
+                    manufacturer="Acme",
+                    device_type="nas",
+                    model="Vault 2000",
+                    confidence=0.88,
+                    source="llm",
+                )
+
+        empty_signatures = SignatureDB(
+            oui_prefixes={},
+            dhcp_fingerprints={},
+            mdns_patterns=[],
+        )
+        fake_llm = FakeLLM()
+        manager = DeviceManager(
+            db=db,
+            event_bus=event_bus,
+            classifier=DeviceClassifier(empty_signatures, fake_llm),
+        )
+        device_id = await manager.process_scan_result(
+            ScanResult(
+                ip_address="192.168.1.199",
+                mac_address="02:00:00:00:00:01",
+                hostname="mystery-box",
+                dhcp_options=[1, 3, 6, 15],
+                connections=[("203.0.113.10", 443)],
+            )
+        )
+        assert device_id is not None
+
+        from squirrelops_home_sensor.scanner.port_scanner import PortResult
+
+        await manager.enrich_device_ports(
+            "192.168.1.199",
+            [
+                PortResult(port=22, service_name="ssh"),
+                PortResult(port=445, service_name="microsoft-ds"),
+            ],
+            device_id=device_id,
+        )
+        await manager.enrich_device_discovery(
+            ip_address="192.168.1.199",
+            mdns_hostname="vault.local.",
+            mdns_service_types=frozenset({"_smb._tcp.local."}),
+            upnp_friendly_name="Office Vault",
+            upnp_manufacturer="Acme Hardware",
+            upnp_model_name="Vault 2000",
+            upnp_server_header="Linux UPnP/1.0",
+            device_id=device_id,
+        )
+        await manager.finalize_pending_classifications({device_id})
+
+        evidence = fake_llm.evidence
+        assert evidence is not None
+        assert evidence.mac_oui == "02:00:00"
+        assert evidence.dns_hostname == "mystery-box"
+        assert evidence.mdns_hostname == "vault.local."
+        assert evidence.open_ports == (22, 445)
+        assert evidence.detected_services == ("microsoft-ds", "ssh")
+        assert evidence.dhcp_options == (1, 3, 6, 15)
+        assert evidence.mdns_service_types == ("_smb._tcp.local.",)
+        assert evidence.upnp_friendly_name == "Office Vault"
+        assert evidence.upnp_server_header == "Linux UPnP/1.0"
+        assert not hasattr(evidence, "connections")
+
+        row = await (
+            await db.execute(
+                """SELECT vendor, device_type, model_name
+                   FROM devices
+                   WHERE ip_address = '192.168.1.199'"""
+            )
+        ).fetchone()
+        assert tuple(row) == ("Acme Hardware", "nas", "Vault 2000")
 
     @pytest.mark.asyncio
     async def test_known_device_updated(self, manager: DeviceManager, event_bus: EventBus) -> None:

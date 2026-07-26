@@ -22,6 +22,9 @@ struct DashboardView: View {
             if appState.connectionState == .authFailed {
                 repairBanner
             }
+            if appState.connectionState == .incompatible {
+                compatibilityBanner
+            }
             NavigationSplitView {
                 sidebar
             } detail: {
@@ -44,6 +47,20 @@ struct DashboardView: View {
             .buttonStyle(.borderedProminent)
             .tint(.black.opacity(0.2))
             .foregroundStyle(.black)
+        }
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.sm)
+        .background(Color.orange)
+    }
+
+    private var compatibilityBanner: some View {
+        HStack(spacing: Spacing.md) {
+            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                .foregroundStyle(.black)
+            Text("This app and sensor use incompatible API protocols. Update the older component before reconnecting.")
+                .font(Typography.body)
+                .foregroundStyle(.black)
+            Spacer()
         }
         .padding(.horizontal, Spacing.lg)
         .padding(.vertical, Spacing.sm)

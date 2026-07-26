@@ -342,6 +342,17 @@ struct AppStateTests {
                 in: [firstService, secondService, classic]
             ) == 2
         )
+        let summary = DecoyDeploymentSummary.active(
+            in: [firstService, secondService, classic]
+        )
+        #expect(summary.fakeHostCount == 1)
+        #expect(summary.serviceDecoyCount == 2)
+        #expect(summary.hostListenerCount == 1)
+        #expect(summary.deploymentCount == 2)
+        #expect(
+            summary.breakdownLabel
+                == "1 fake host · 2 service decoys · 1 host listener"
+        )
     }
 
     @Test("updateDevice replaces existing or appends new")

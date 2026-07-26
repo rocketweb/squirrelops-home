@@ -20,18 +20,22 @@ struct SettingsView: View {
     @State private var profileDetails: ResourceProfileResponse?
     @State private var isUpdatingProfile = false
     @State private var profileSaveMessage: String?
-    @State private var pushEnabled = true
+    @AppStorage(MacNotificationPreferences.enabledKey)
+    private var pushEnabled = true
     @State private var menuBarEnabled = true
     @State private var slackEnabled = false
     @State private var isLoading = true
     @State private var saveError: String?
     @State private var slackWebhookURL: String = ""
-    @State private var pushMinSeverity: String = "low"
+    @AppStorage(MacNotificationPreferences.minimumSeverityKey)
+    private var pushMinSeverity: String = "low"
     @State private var menuBarMinSeverity: String = "low"
     @State private var slackMinSeverity: String = "low"
+    @State private var llmProvider: String = "none"
     @State private var llmEndpoint: String = ""
     @State private var llmModel: String = ""
     @State private var llmApiKey: String = ""
+    @State private var llmSaveCoordinator = LLMConfigSaveCoordinator()
     @State private var autoApproveThreshold: String = "0.75"
     @State private var slackIncludeDeviceInfo = false
     @State private var credentialFilename: String = "passwords.txt"
@@ -175,17 +179,31 @@ struct SettingsView: View {
                 .tracking(Typography.captionTracking)
                 .foregroundStyle(Theme.textTertiary(colorScheme))
 
-            Toggle("Push Notifications", isOn: $pushEnabled)
+            Toggle("macOS Notifications", isOn: $pushEnabled)
                 .font(Typography.body)
                 .foregroundStyle(Theme.textPrimary(colorScheme))
                 .disabled(isLoading)
                 .onChange(of: pushEnabled) { _, newValue in
                     guard !isLoading else { return }
                     saveAlertMethod("push", config: ["enabled": .bool(newValue), "min_severity": .string(pushMinSeverity)])
+                    Task {
+                        await MacNotificationService.shared.updatePreferences(
+                            enabled: newValue,
+                            minimumSeverity: pushMinSeverity
+                        )
+                    }
                 }
 
             if pushEnabled {
-                severityPicker(label: "Push Severity", selection: $pushMinSeverity, method: "push", enabled: pushEnabled)
+                severityPicker(
+                    label: "macOS Severity",
+                    selection: $pushMinSeverity,
+                    method: "push",
+                    enabled: pushEnabled
+                )
+                Text("Shows standard macOS banners with sound. You can also manage permission in System Settings → Notifications.")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textTertiary(colorScheme))
             }
 
             Toggle("Menu Bar Alerts", isOn: $menuBarEnabled)
@@ -275,82 +293,85 @@ struct SettingsView: View {
 
     private var llmConfigSection: some View {
         VStack(alignment: .leading, spacing: Spacing.s12) {
-            Text("LLM CONFIGURATION")
+            Text("OPTIONAL AI DEVICE CLASSIFICATION AND DECOY NAMING")
                 .font(Typography.caption)
                 .tracking(Typography.captionTracking)
                 .foregroundStyle(Theme.textTertiary(colorScheme))
 
-            if selectedProfile == "full" {
-                Text("Local LLM endpoint for device classification (LM Studio or Ollama).")
-                    .font(Typography.bodySmall)
-                    .foregroundStyle(Theme.textSecondary(colorScheme))
-            } else {
-                Text("Cloud LLM endpoint for device classification (requires API key).")
-                    .font(Typography.bodySmall)
-                    .foregroundStyle(Theme.textSecondary(colorScheme))
-            }
+            Text(llmProviderDescription)
+                .font(Typography.bodySmall)
+                .foregroundStyle(Theme.textSecondary(colorScheme))
 
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("Endpoint")
+                Text("Provider")
                     .font(Typography.bodySmall)
                     .foregroundStyle(Theme.textSecondary(colorScheme))
 
-                TextField(
-                    selectedProfile == "full" ? "http://localhost:1234/v1" : "https://api.openai.com/v1",
-                    text: $llmEndpoint
-                )
-                .textFieldStyle(.roundedBorder)
-                .font(Typography.mono)
+                Picker("Provider", selection: $llmProvider) {
+                    Text("None").tag("none")
+                    Text("LM Studio").tag("lmstudio")
+                    Text("Ollama").tag("ollama")
+                    Text("OpenRouter").tag("openrouter")
+                    Text("Fireworks.ai").tag("fireworks")
+                    Text("Custom OpenAI-compatible").tag("custom")
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
                 .disabled(isLoading)
-                .task(id: llmEndpoint) {
+                .onChange(of: llmProvider) { oldValue, newValue in
                     guard !isLoading else { return }
-                    do {
-                        try await Task.sleep(for: .seconds(1))
-                    } catch { return }
-                    saveLLMConfig()
+                    updateLLMProvider(from: oldValue, to: newValue)
                 }
             }
 
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("Model")
-                    .font(Typography.bodySmall)
-                    .foregroundStyle(Theme.textSecondary(colorScheme))
+            if llmProvider != "none" {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("Endpoint")
+                        .font(Typography.bodySmall)
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
 
-                TextField(
-                    selectedProfile == "full" ? "llama-3.2-3b" : "gpt-4o-mini",
-                    text: $llmModel
-                )
-                .textFieldStyle(.roundedBorder)
-                .font(Typography.mono)
-                .disabled(isLoading)
-                .task(id: llmModel) {
-                    guard !isLoading else { return }
-                    do {
-                        try await Task.sleep(for: .seconds(1))
-                    } catch { return }
-                    saveLLMConfig()
+                    TextField(llmEndpointPlaceholder, text: $llmEndpoint)
+                        .textFieldStyle(.roundedBorder)
+                        .font(Typography.mono)
+                        .disabled(isLoading || isFixedCloudLLMProvider)
+                        .onChange(of: llmEndpoint) { _, _ in
+                            guard !isLoading else { return }
+                            scheduleLLMConfigSave()
+                        }
                 }
-            }
 
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("API Key")
-                    .font(Typography.bodySmall)
-                    .foregroundStyle(Theme.textSecondary(colorScheme))
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("Model")
+                        .font(Typography.bodySmall)
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
 
-                SecureField("sk-...", text: $llmApiKey)
-                    .textFieldStyle(.roundedBorder)
-                    .font(Typography.mono)
-                    .disabled(isLoading)
-                    .task(id: llmApiKey) {
-                        guard !isLoading else { return }
-                        do {
-                            try await Task.sleep(for: .seconds(1))
-                        } catch { return }
-                        saveLLMConfig()
-                    }
+                    TextField(llmModelPlaceholder, text: $llmModel)
+                        .textFieldStyle(.roundedBorder)
+                        .font(Typography.mono)
+                        .disabled(isLoading)
+                        .onChange(of: llmModel) { _, _ in
+                            guard !isLoading else { return }
+                            scheduleLLMConfigSave()
+                        }
+                }
 
-                if selectedProfile == "full" {
-                    Text("Not required for local LLM servers (LM Studio, Ollama).")
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("API Key")
+                        .font(Typography.bodySmall)
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
+
+                    SecureField("Provider API key", text: $llmApiKey)
+                        .textFieldStyle(.roundedBorder)
+                        .font(Typography.mono)
+                        .disabled(isLoading)
+                        .onChange(of: llmApiKey) { _, _ in
+                            guard !isLoading else { return }
+                            scheduleLLMConfigSave()
+                        }
+
+                    Text(
+                        llmAPIKeyHelp
+                    )
                         .font(Typography.bodySmall)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
                 }
@@ -530,6 +551,10 @@ struct SettingsView: View {
     private static let appVersion: String = {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
     }()
+    private static let distributionVersion: String = {
+        Bundle.main.infoDictionary?["SquirrelOpsDistributionVersion"] as? String
+            ?? appVersion
+    }()
 
     private var sensorSection: some View {
         VStack(alignment: .leading, spacing: Spacing.s12) {
@@ -538,6 +563,7 @@ struct SettingsView: View {
                 .tracking(Typography.captionTracking)
                 .foregroundStyle(Theme.textTertiary(colorScheme))
 
+            infoRow("Home Distribution", value: Self.distributionVersion)
             infoRow("App Version", value: Self.appVersion)
             if let sensor = appState.pairedSensor {
                 infoRow("Name", value: sensor.name)
@@ -621,7 +647,7 @@ struct SettingsView: View {
     }
 
     private func checkForGitHubUpdates() async {
-        let currentVersion = Self.appVersion
+        let currentVersion = Self.distributionVersion
         let apiURL = URL(string: "https://api.github.com/repos/rocketweb/squirrelops-home/releases/latest")!
 
         var request = URLRequest(url: apiURL)
@@ -643,7 +669,14 @@ struct SettingsView: View {
             }
 
             // Strip leading "v" from tag (e.g. "v1.2.0" -> "1.2.0")
-            let latestVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+            let latestVersion: String
+            if tagName.hasPrefix("home-v") {
+                latestVersion = String(tagName.dropFirst("home-v".count))
+            } else if tagName.hasPrefix("v") {
+                latestVersion = String(tagName.dropFirst())
+            } else {
+                latestVersion = tagName
+            }
 
             if isNewerVersion(latestVersion, than: currentVersion) {
                 updateStatus = "Update available: v\(latestVersion) (you have v\(currentVersion))"
@@ -722,6 +755,14 @@ struct SettingsView: View {
                     config[key] = value
                 }
                 saveAlertMethod(method, config: config)
+                if method == "push" {
+                    Task {
+                        await MacNotificationService.shared.updatePreferences(
+                            enabled: enabled,
+                            minimumSeverity: newValue
+                        )
+                    }
+                }
             }
         }
     }
@@ -790,7 +831,19 @@ struct SettingsView: View {
             }
 
             // LLM config: nested under "classifier", with top-level fallback for compat
+            var loadedProvider = false
             if case .object(let cls) = config["classifier"] {
+                if case .string(let provider) = cls["llm_provider"] {
+                    let supported = Set([
+                        "none", "lmstudio", "ollama",
+                        "openrouter", "fireworks", "custom",
+                    ])
+                    let normalized = provider.lowercased()
+                    llmProvider = supported.contains(normalized)
+                        ? normalized
+                        : "custom"
+                    loadedProvider = !provider.isEmpty
+                }
                 if case .string(let endpoint) = cls["llm_endpoint"] {
                     llmEndpoint = endpoint
                 }
@@ -810,6 +863,9 @@ struct SettingsView: View {
                 if case .string(let apiKey) = config["llm_api_key"] {
                     llmApiKey = apiKey
                 }
+            }
+            if !loadedProvider {
+                llmProvider = inferredLLMProvider(for: llmEndpoint)
             }
 
             if case .object(let fingerprint) = config["fingerprint"],
@@ -907,25 +963,136 @@ struct SettingsView: View {
         }
     }
 
-    private func saveLLMConfig() {
+    private func scheduleLLMConfigSave() {
         saveError = nil
-        Task {
+        guard let client = appState.sensorClient else {
+            saveError = "Sensor is not connected."
+            return
+        }
+        let classifierDict: [String: AnyCodableValue] = [
+            "llm_provider": .string(llmProvider),
+            "llm_endpoint": .string(llmEndpoint),
+            "llm_model": .string(llmModel),
+            "llm_api_key": llmApiKey.isEmpty
+                ? .null
+                : .string(llmApiKey),
+        ]
+        let body: [String: AnyCodableValue] = [
+            "classifier": .object(classifierDict)
+        ]
+
+        llmSaveCoordinator.submit {
             do {
-                var classifierDict: [String: AnyCodableValue] = [
-                    "llm_endpoint": .string(llmEndpoint),
-                    "llm_model": .string(llmModel),
-                ]
-                if !llmApiKey.isEmpty {
-                    classifierDict["llm_api_key"] = .string(llmApiKey)
+                try await client.request(.updateConfig(body: body))
+                guard !Task.isCancelled else { return }
+                if let profile: ResourceProfileResponse = try? await client.request(.profile) {
+                    profileDetails = profile
+                    appState.applyResourceProfile(profile)
                 }
-                let body: [String: AnyCodableValue] = [
-                    "classifier": .object(classifierDict)
-                ]
-                try await appState.sensorClient?.request(.updateConfig(body: body))
+                try? await appState.refreshSystemStatus()
             } catch {
-                saveError = "Failed to save LLM config: \(error.localizedDescription)"
+                guard !Task.isCancelled else { return }
+                saveError = "Failed to save AI configuration: \(error.localizedDescription)"
             }
         }
+    }
+
+    private var isCloudLLMProvider: Bool {
+        llmProvider == "openrouter" || llmProvider == "fireworks"
+    }
+
+    private var isFixedCloudLLMProvider: Bool {
+        isCloudLLMProvider
+    }
+
+    private var llmProviderDescription: String {
+        switch llmProvider {
+        case "lmstudio":
+            return "Use LM Studio for fallback device classification and pattern-aware names for some new fake hosts."
+        case "ollama":
+            return "Use Ollama for fallback device classification and pattern-aware names for some new fake hosts."
+        case "openrouter":
+            return "Use OpenRouter for fallback device classification and pattern-aware decoy naming."
+        case "fireworks":
+            return "Use Fireworks.ai for fallback device classification and pattern-aware decoy naming."
+        case "custom":
+            return "Use another OpenAI-compatible endpoint for both optional AI features."
+        default:
+            return "Disabled. Local signatures classify devices and deterministic home and business names are used for fake hosts."
+        }
+    }
+
+    private var llmEndpointPlaceholder: String {
+        llmDefaultEndpoint(for: llmProvider) ?? "https://provider.example/v1"
+    }
+
+    private var llmModelPlaceholder: String {
+        switch llmProvider {
+        case "openrouter":
+            return "provider/model"
+        case "fireworks":
+            return "accounts/account/models/model"
+        default:
+            return "Model identifier"
+        }
+    }
+
+    private var llmAPIKeyHelp: String {
+        switch llmProvider {
+        case "openrouter", "fireworks":
+            return "Required. The key is sent only to this provider's HTTPS API."
+        case "custom":
+            return "Required only if your endpoint uses bearer authentication."
+        default:
+            return "Not required for LM Studio or Ollama."
+        }
+    }
+
+    private func llmDefaultEndpoint(for provider: String) -> String? {
+        switch provider {
+        case "lmstudio":
+            return "http://localhost:1234/v1"
+        case "ollama":
+            return "http://localhost:11434/v1"
+        case "openrouter":
+            return "https://openrouter.ai/api/v1"
+        case "fireworks":
+            return "https://api.fireworks.ai/inference/v1"
+        default:
+            return nil
+        }
+    }
+
+    private func inferredLLMProvider(for endpoint: String) -> String {
+        let normalized = endpoint
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if normalized.isEmpty {
+            return "none"
+        }
+        for provider in ["lmstudio", "ollama", "openrouter", "fireworks"] {
+            if let candidate = llmDefaultEndpoint(for: provider),
+               normalized == candidate.lowercased() {
+                return provider
+            }
+        }
+        return "custom"
+    }
+
+    private func updateLLMProvider(from oldValue: String, to newValue: String) {
+        if let preset = llmDefaultEndpoint(for: newValue) {
+            llmEndpoint = preset
+        } else if newValue == "custom" && oldValue != "custom" {
+            llmEndpoint = ""
+        }
+        // Provider credentials are never portable. Clear them before the
+        // provider update is persisted so an OpenRouter key cannot be sent to
+        // Fireworks (or any custom endpoint), and vice versa.
+        if oldValue != newValue {
+            llmApiKey = ""
+        }
+        scheduleLLMConfigSave()
     }
 
     private func saveAlertMethod(_ method: String, config: [String: AnyCodableValue]) {

@@ -42,6 +42,11 @@ class TestSettingsModels:
         assert cfg.allow_unsigned_local is False
         assert cfg.socket_path is None
 
+    @pytest.mark.parametrize("port", [0, 65536])
+    def test_sensor_port_is_bounded(self, port: int) -> None:
+        with pytest.raises(ValueError):
+            SensorConfig(port=port)
+
     def test_network_config_defaults(self) -> None:
         cfg = NetworkConfig()
         assert cfg.scan_interval == 300
@@ -56,11 +61,33 @@ class TestSettingsModels:
         assert cfg.restart_max_attempts == 3
         assert cfg.restart_window_seconds == 300
 
+    def test_nested_models_reject_unknown_fields(self) -> None:
+        with pytest.raises(ValueError):
+            HomeAssistantConfig(
+                enabled=True,
+                url="http://192.168.1.2:8123",
+                token="token",
+                tls=False,
+            )
+
+    @pytest.mark.parametrize("max_concurrent", [0, 65])
+    def test_scout_concurrency_is_bounded(self, max_concurrent: int) -> None:
+        with pytest.raises(ValueError):
+            Settings(scouts={"max_concurrent_probes": max_concurrent})
+
     def test_alert_config_defaults(self) -> None:
         cfg = AlertConfig()
         assert cfg.retention_days == 90
         assert cfg.incident_window_minutes == 15
         assert cfg.incident_close_window_minutes == 30
+
+    @pytest.mark.parametrize("retention_days", [0, -1, 3651])
+    def test_alert_config_rejects_destructive_retention_bounds(
+        self,
+        retention_days: int,
+    ) -> None:
+        with pytest.raises(ValueError):
+            AlertConfig(retention_days=retention_days)
 
     def test_classifier_config_defaults(self) -> None:
         cfg = ClassifierConfig()

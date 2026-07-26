@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import socket
 import subprocess
 import sys
@@ -196,11 +197,39 @@ class ServiceAdvertiser:
         self.preferred_ip = preferred_ip
         self._zeroconf: AsyncZeroconf | None = None
         self._info: ServiceInfo | None = None
+        self._helper = None
 
     async def start(self) -> None:
         """Register the service on the local network."""
         ip = _get_local_ip(self.preferred_ip)
         server = _get_mdns_hostname()
+        helper_socket = os.environ.get("SQUIRRELOPS_NETWORK_HELPER_SOCKET", "")
+        if helper_socket:
+            from squirrelops_home_sensor.privileged.linux_sidecar import (
+                LinuxNetworkHelperClient,
+            )
+
+            helper = LinuxNetworkHelperClient(helper_socket)
+            try:
+                if await helper.register_mdns(
+                    registration_id="sensor",
+                    virtual_ip=ip,
+                    port=self.port,
+                    service_type=self.service_type,
+                    hostname=server.rstrip(".").removesuffix(".local"),
+                    instance_name=self.name,
+                    properties={"name": self.name},
+                ):
+                    self._helper = helper
+                    logger.info("mDNS: delegated sensor advertisement to Linux helper")
+                    return
+                logger.warning("mDNS: Linux helper rejected sensor advertisement")
+            except Exception:
+                logger.warning(
+                    "mDNS: Linux helper advertisement failed; continuing without it",
+                    exc_info=True,
+                )
+            return
         self._info = ServiceInfo(
             type_=self.service_type,
             name=f"{self.name}.{self.service_type}",
@@ -230,6 +259,10 @@ class ServiceAdvertiser:
 
     async def stop(self) -> None:
         """Unregister the service and close the responder."""
+        if self._helper is not None:
+            await self._helper.unregister_mdns("sensor")
+            self._helper = None
+            return
         if self._zeroconf is None:
             return
 

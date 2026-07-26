@@ -12,7 +12,7 @@
     <string>1.0</string>
     <key>SMAuthorizedClients</key>
     <array>
-        <string>identifier "com.squirrelops.home"</string>
+        <string>identifier "com.squirrelops.home" and anchor apple generic and certificate leaf[subject.OU] = "PSQ5HK5U65"</string>
     </array>
 </dict>
 </plist>

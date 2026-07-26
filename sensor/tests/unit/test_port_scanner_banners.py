@@ -96,6 +96,60 @@ class TestScanWithBanners:
         assert results.get("192.168.1.1", []) == []
 
     @pytest.mark.asyncio
+    async def test_network_failure_is_reported_as_inconclusive(
+        self,
+    ) -> None:
+        scanner = PortScanner(timeout_per_port=1.0, max_concurrent=10)
+
+        with patch(
+            "asyncio.open_connection",
+            side_effect=OSError("network unreachable"),
+        ):
+            results = await scanner.scan_with_banners(
+                targets=["192.168.1.1"],
+                ports=[22],
+            )
+
+        assert results == {}
+        assert results.inconclusive_ports == {
+            "192.168.1.1": frozenset({22}),
+        }
+
+    @pytest.mark.asyncio
+    async def test_connect_timeout_is_reported_as_inconclusive(self) -> None:
+        scanner = PortScanner(timeout_per_port=0.1, max_concurrent=10)
+
+        with patch("asyncio.open_connection", side_effect=TimeoutError):
+            results = await scanner.scan_with_banners(
+                targets=["192.168.1.1"],
+                ports=[443],
+            )
+
+        assert results == {}
+        assert results.inconclusive_ports == {
+            "192.168.1.1": frozenset({443}),
+        }
+
+    @pytest.mark.asyncio
+    async def test_connection_reset_is_reported_as_inconclusive(self) -> None:
+        """Only an explicit refusal proves that a prior port is closed."""
+        scanner = PortScanner(timeout_per_port=0.1, max_concurrent=10)
+
+        with patch(
+            "asyncio.open_connection",
+            side_effect=ConnectionResetError,
+        ):
+            results = await scanner.scan_with_banners(
+                targets=["192.168.1.1"],
+                ports=[443],
+            )
+
+        assert results == {}
+        assert results.inconclusive_ports == {
+            "192.168.1.1": frozenset({443}),
+        }
+
+    @pytest.mark.asyncio
     async def test_timeout_returns_no_banner(self) -> None:
         scanner = PortScanner(timeout_per_port=0.1, max_concurrent=10)
 
