@@ -406,7 +406,7 @@ if ! jq -e \
       and .source == $repository
       and .target == "tag"
       and .enforcement == "active"
-      and ((.current_user_can_bypass // false) == false)
+      and .current_user_can_bypass == "never"
       and (
         (.conditions.ref_name.include // []) as $included
         | (
@@ -453,7 +453,7 @@ if ! jq -e \
       and .source == $repository
       and .target == "branch"
       and .enforcement == "active"
-      and ((.current_user_can_bypass // false) == false)
+      and .current_user_can_bypass == "never"
       and (
         (.conditions.ref_name.include // [])
         | any(
