@@ -118,29 +118,56 @@ dependencies, and privileged helper. Do not use the old standalone
 `install-macos.sh` release asset. That script could fall back to an unpinned
 package index when it was separated from the source tree.
 
+The published 2.0.1 package requires macOS 14 or later and an Apple Silicon
+(`arm64`) Mac. This package does not support Intel Macs.
+
 ```bash
-VERSION=v1.1.14
-base="https://github.com/rocketweb/squirrelops-home/releases/download/${VERSION}"
-curl -fsSLO "${base}/SquirrelOpsHome-1.1.14.pkg"
-curl -fsSLO "${base}/SquirrelOpsHome-1.1.14.pkg.sha256"
-shasum -a 256 -c SquirrelOpsHome-1.1.14.pkg.sha256
-pkgutil --check-signature SquirrelOpsHome-1.1.14.pkg
-spctl --assess --type install --verbose=2 SquirrelOpsHome-1.1.14.pkg
-open SquirrelOpsHome-1.1.14.pkg
+VERSION=2.0.1
+TAG="home-v${VERSION}"
+base="https://github.com/rocketweb/squirrelops-home/releases/download/${TAG}"
+curl -fsSLO "${base}/SquirrelOpsHome-${VERSION}.pkg"
+curl -fsSLO "${base}/SquirrelOpsHome-${VERSION}.pkg.sha256"
+shasum -a 256 -c "SquirrelOpsHome-${VERSION}.pkg.sha256"
+pkgutil --check-signature "SquirrelOpsHome-${VERSION}.pkg"
+spctl --assess --type install --verbose=2 "SquirrelOpsHome-${VERSION}.pkg"
+open "SquirrelOpsHome-${VERSION}.pkg"
 ```
 
-For v1.1.14, cross-check the expected SHA-256 on the separately hosted
+For 2.0.1, cross-check the expected SHA-256 on the separately hosted
 [macOS verification page](https://www.squirrelops.io/macos):
-`b9bfc26aa1d7fac87e413fad6d7d9271f65533f7d66dcb634d3b0a931103c54e`.
+`55e76a67191f63746a012b56ecf34a5b40ddeeed8beb563494266fab2208f4f6`.
 
-Future hardened releases will include a checksummed and attested
-`RELEASE-VERIFICATION.md` asset. Verify that file first and treat it as the
-canonical release notes and command source. GitHub's release description is
-editable and is only a convenience pointer.
+The release also includes a checksummed and attested
+[`RELEASE-VERIFICATION.md`](https://github.com/rocketweb/squirrelops-home/releases/download/home-v2.0.1/RELEASE-VERIFICATION.md)
+asset. Verify that file first and treat it as the canonical release notes and
+command source. GitHub's release description is editable and is only a
+convenience pointer.
 
 The source-checkout-only `scripts/install-macos.sh` remains available for
 development. It requires the local `sensor/uv.lock`, exact `uv` version, and
 fails closed if the locked source project is absent.
+
+#### First-run pairing
+
+After installation, open SquirrelOps Home. The app discovers the local sensor,
+but packaged installs require manual entry of a one-time setup key. Open
+Terminal and run:
+
+```bash
+sudo -u _squirrelops \
+  /Library/SquirrelOps/sensor/python/bin/python3 \
+  -m squirrelops_home_sensor \
+  --config /Library/SquirrelOps/sensor/config.yaml \
+  --show-pairing-code
+```
+
+Enter your Mac administrator password when prompted, then paste the displayed
+20-character key into the app. The key expires after 10 minutes or after it is
+used. If it expires, restart the sensor and retrieve a new key:
+
+```bash
+sudo launchctl kickstart -k system/com.squirrelops.sensor
+```
 
 ### macOS App
 
@@ -158,8 +185,8 @@ Requires Swift 6.0 and macOS 14+ (Sonoma).
 The app discovers the sensor via mDNS (`_squirrelops._tcp`) and pairs using a one-time 100-bit setup key. The pairing flow:
 
 1. App discovers sensor on the local network
-2. Sensor generates a setup key at startup. It is shown in the startup banner and stored as `pairing-key` inside the private sensor data directory (`--show-pairing-code` retrieves it)
-3. User retrieves the setup key with the administrator-only packaged command and enters it in the app
+2. Sensor generates a setup key at startup and stores it as `pairing-key` inside the private sensor data directory
+3. User retrieves the setup key with the [administrator-only packaged command](#first-run-pairing) and enters it in the app
 4. App and sensor perform a versioned HMAC-SHA256 transcript proof, then derive a session key with HKDF
 5. App generates a CSR, sensor issues a client certificate signed by its CA
 6. All subsequent communication uses mutual TLS. The one-time setup key is invalidated after use
@@ -180,7 +207,7 @@ cd app && swift build
 cd app && swift test
 
 # Sensor (Python 3.11+)
-cd sensor && uv run pytest     # 1,669 tests in v1.1.14
+cd sensor && uv run pytest
 
 # Docker
 docker compose -f sensor/docker-compose.yml build
