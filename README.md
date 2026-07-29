@@ -2,23 +2,23 @@
 
 **Local-first home network security with high-signal deception.**
 
-- **Honeypots that blend in** — auto-deploys realistic decoy services (file shares, dev servers, Home Assistant instances) based on what's actually on your network
-- **Squirrel Scouts** — service fingerprinting that builds coherent fake hosts from real devices, with one decoy service per observed port and a shared virtual IP and hostname for services copied from the same source
-- **High-confidence decoy alerts** — a connection to an isolated decoy is inherently suspicious and is kept separate from lower-confidence behavioral detections
-- **Device fingerprinting** — identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional AI device classification
-- **Believable decoy naming** — uses ordinary home and business names by default, with optional AI suggestions that follow observed hostname patterns
-- **Behavioral baselines** — learns normal connection patterns during a 48-hour training period, then alerts on anomalies
-- **Credential canaries** — plants realistic-looking credentials (AWS keys, SSH keys, .env files, database URIs, GitHub PATs, Home Assistant tokens) that trigger critical alerts when accessed through a decoy
-- **Local by default** — inventory, alerts, and configuration stay in local SQLite. Optional cloud classification and notification integrations are explicit opt-ins.
-- **Push notifications** — optional APNs alerts to your iPhone/Mac when a decoy is tripped
-- **Home Assistant integration** — enriches device data with names, areas, and types from your HA instance
+- **Honeypots that blend in:** auto-deploys realistic decoy services (file shares, dev servers, Home Assistant instances) based on what's actually on your network
+- **Squirrel Scouts:** service fingerprinting that builds coherent fake hosts from real devices, with one decoy service per observed port and a shared virtual IP and hostname for services copied from the same source
+- **High-confidence decoy alerts:** a connection to an isolated decoy is inherently suspicious and is kept separate from lower-confidence behavioral detections
+- **Device fingerprinting:** identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional AI device classification
+- **Believable decoy naming:** uses ordinary home and business names by default, with optional AI suggestions that follow observed hostname patterns
+- **Behavioral baselines:** learns normal connection patterns during a 48-hour training period, then alerts on anomalies
+- **Credential canaries:** plants realistic-looking credentials (AWS keys, SSH keys, .env files, database URIs, GitHub PATs, Home Assistant tokens) that trigger critical alerts when accessed through a decoy
+- **Local by default:** inventory, alerts, and configuration stay in local SQLite. Optional cloud classification and notification integrations are explicit opt-ins.
+- **Push notifications:** optional APNs alerts to your iPhone/Mac when a decoy is tripped
+- **Home Assistant integration:** enriches device data with names, areas, and types from your HA instance
 
 ## How It Works
 
 SquirrelOps Home runs a sensor on your network that does three things:
 
 1. **Discovers and fingerprints** every device on your LAN using ARP scanning, port probing, mDNS/SSDP discovery, and IEEE OUI lookups
-2. **Deploys decoy services** that mimic real things on your network — a fake NAS, a fake Home Assistant, a fake dev server — placed on unused ports and IPs
+2. **Deploys decoy services** that mimic real things on your network (a fake NAS, a fake Home Assistant, a fake dev server), placed on unused ports and IPs
 3. **Watches and alerts** when anything touches a decoy or deviates from learned behavioral baselines
 
 The macOS app is your control plane: pair it with the sensor, view your device inventory, manage decoys, configure alerts, and respond to incidents.
@@ -39,11 +39,11 @@ The macOS app is your control plane: pair it with the sensor, view your device i
 
 ## Architecture
 
-The sensor is made up of three internal engines:
+The sensor is a single Python codebase covering three areas:
 
-- **PingTing** — passive network monitoring, device discovery, behavioral baselines
-- **ClownPeanuts** — active deception engine, decoy lifecycle management, credential canary deployment
-- **Squirrel Scouts** — deep service reconnaissance, mimic decoy generation, virtual network expansion
+- **Monitoring:** passive network monitoring, device discovery, and behavioral baselines, implemented in `scanner/`, `devices/`, and `fingerprint/`. The schema extends the upstream PingTing tables but PingTing itself is not bundled here.
+- **Deception:** decoy lifecycle management and credential canary deployment, implemented in `decoys/`. HTTP service emulation is handled by a vendored ClownPeanuts helper.
+- **Squirrel Scouts:** deep service reconnaissance, mimic decoy generation, and virtual network expansion.
 
 Communication between the app and sensor uses mutual TLS with certificates exchanged during an on-device pairing flow (challenge-response with ECDSA P-256).
 
@@ -98,7 +98,7 @@ The ceiling counts fake hosts, not service rows. Squirrel Scouts deploys at most
 
 ## Installation
 
-### Sensor — Linux/NAS (Docker)
+### Sensor: Linux/NAS (Docker)
 
 Linux publication is currently on hold. The 2.0 tree separates the
 unprivileged sensor from a constrained `network-helper` companion. The sensor
@@ -228,15 +228,17 @@ docs/         User guide and documentation
 
 ```
 sensor/src/squirrelops_home_sensor/
-├── alerts/        Alert dispatch, decoy/device handlers, incident grouping, retention
+├── alerts/        Alert dispatch, decoy handler, incident grouping, retention
 ├── api/           FastAPI routers (8 routers), WebSocket, DI
 ├── config/        YAML config with env var overrides
-├── db/            SQLite schema (v9), migrations
+├── db/            SQLite schema (v10), migrations
 ├── decoys/        Decoy orchestrator + types (dev_server, home_assistant, file_share, mimic)
 ├── devices/       Device manager, classifier, signatures, OUI
 ├── events/        Pub/sub event bus with audit log
 ├── fingerprint/   Multi-signal compositor and matcher
+├── integrations/  Home Assistant integration
 ├── network/       Virtual IP allocation, port forwarding
+├── plugins/       BaseAgentModule ABC and plugin loader
 ├── privileged/    macOS helper RPC and constrained Linux sidecar RPC
 ├── scanner/       ARP/port/mDNS/SSDP scanning
 ├── scouts/        Scout engine, scheduler, mimic orchestrator, templates, mDNS
@@ -246,13 +248,15 @@ sensor/src/squirrelops_home_sensor/
 
 ## Design Principles
 
-- **Detection only** — never blocks, throttles, or modifies real network traffic
-- **No deep packet inspection** — analysis limited to connection metadata
-- **Local-first** — all data in local SQLite, only exceptions are optional APNs, Slack, cloud AI, and update integrations
-- **Decoys never collide** — decoy services avoid real ports and don't respond to broadcast discovery
-- **Virtual IPs avoid conflicts** — allocated from high end of subnet, excluded from scan loop, evacuated if a real device claims the IP
-- **48-hour learning** — behavioral anomaly alerts are suppressed during learning; decoy trip alerts fire immediately
+- **Detection only:** never blocks, throttles, or modifies real network traffic
+- **No deep packet inspection:** analysis limited to connection metadata
+- **Local-first:** all data in local SQLite, only exceptions are optional APNs, Slack, cloud AI, and update integrations
+- **Decoys never collide:** decoy services avoid real ports and don't respond to broadcast discovery
+- **Virtual IPs avoid conflicts:** allocated from high end of subnet, excluded from scan loop, evacuated if a real device claims the IP
+- **48-hour learning:** behavioral anomaly alerts are suppressed during learning; decoy trip alerts fire immediately
 
 ## License
 
-All rights reserved. Source available for review.
+PolyForm Noncommercial License 1.0.0. See [LICENSE](LICENSE).
+
+Allowed: personal use, research, education, and other noncommercial use. Commercial use, resale, paid hosting, or repackaging for commercial advantage requires a separate license.
