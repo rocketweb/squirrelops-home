@@ -242,9 +242,9 @@ struct UpdateCheckerTests {
         #expect(second.availableUpdate?.version == "2.1.0")
     }
 
-    @Test("Becoming up to date clears the pending update")
+    @Test("Installing the update clears the indicator but keeps the known release")
     @MainActor
-    func upToDateClearsPendingUpdate() async {
+    func upToDateClearsTheIndicator() async {
         let defaults = Self.volatileDefaults()
         let stale = Self.makeChecker(
             currentVersion: "2.0.1", tag: "home-v2.1.0", defaults: defaults
@@ -259,7 +259,9 @@ struct UpdateCheckerTests {
         _ = await updated.check(force: true)
 
         #expect(updated.availableUpdate == nil)
-        #expect(defaults.string(forKey: UpdateChecker.pendingVersionDefaultsKey) == nil)
+        // Still the newest release; we are simply no longer behind it. The
+        // snapshot has to survive so other components can be compared to it.
+        #expect(updated.latestRelease?.version.description == "2.1.0")
     }
 
     @Test("A failed check keeps a previously found update visible")

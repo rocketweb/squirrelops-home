@@ -83,12 +83,6 @@ class LearningResponse(BaseModel):
     phase: str  # "learning" or "complete"
 
 
-class UpdateCheckResponse(BaseModel):
-    current_version: str
-    latest_version: str | None = None
-    update_available: bool = False
-    message: str = ""
-
 
 # ---------- Routes ----------
 
@@ -402,49 +396,3 @@ async def get_learning(
         hours_total=duration_hours,
         phase=phase,
     )
-
-
-@router.get("/updates", response_model=UpdateCheckResponse)
-async def check_updates(
-    config: dict = Depends(get_config),
-    _auth: dict = Depends(verify_client_cert),
-):
-    """Check for available sensor updates.
-
-    Compares current version against a remote manifest if configured.
-    Returns gracefully if no manifest URL is set or URL is unreachable.
-    """
-    current = __version__
-    manifest_url = config.get("update_manifest_url", "")
-
-    if not manifest_url:
-        return UpdateCheckResponse(
-            current_version=current,
-            message="No update source configured.",
-        )
-
-    try:
-        import aiohttp
-        async with aiohttp.ClientSession() as session, session.get(
-            manifest_url,
-            params={"current_version": current, "platform": "sensor"},
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            if resp.status != 200:
-                return UpdateCheckResponse(
-                    current_version=current,
-                    message="Update check failed.",
-                )
-            data = await resp.json()
-            latest = data.get("latest_version", current)
-            return UpdateCheckResponse(
-                current_version=current,
-                latest_version=latest,
-                update_available=latest != current,
-                message="Update available!" if latest != current else "Up to date.",
-            )
-    except Exception:
-        return UpdateCheckResponse(
-            current_version=current,
-            message="Could not reach update server.",
-        )

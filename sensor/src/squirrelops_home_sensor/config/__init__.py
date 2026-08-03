@@ -185,7 +185,6 @@ class Settings(BaseModel):
     learning_mode: LearningModeConfig = Field(default_factory=LearningModeConfig)
     pairing: PairingConfig = Field(default_factory=PairingConfig)
     alert_methods: dict[str, Any] = Field(default_factory=dict)
-    update_manifest_url: str = ""
 
 
 # ---------------------------------------------------------------------------

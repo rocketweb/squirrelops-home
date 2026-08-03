@@ -134,13 +134,14 @@ public struct MenuBarView: View {
 
     private var actionButtons: some View {
         VStack(spacing: Spacing.xs) {
-            if let update = appState.updateChecker.availableUpdate {
+            if let summary = appState.pendingUpdateSummary,
+               let update = appState.pendingUpdate {
                 Divider()
 
                 Link(destination: update.url) {
                     HStack {
                         Image(systemName: "arrow.down.circle.fill")
-                        Text("Update to v\(update.version)")
+                        Text(summary)
                             .font(Typography.bodySmall)
                         Spacer()
                     }

@@ -3,7 +3,22 @@ import Observation
 
 // MARK: - Result types
 
-/// A release newer than the one currently running.
+/// The newest release the update source knows about.
+///
+/// Stored separately from any one component's version because the app and the
+/// sensor ship from the same release but are versioned and installed
+/// independently. Either can be behind while the other is current.
+public struct ReleaseSnapshot: Sendable, Equatable {
+    public let version: SemanticVersion
+    public let url: URL
+
+    public init(version: SemanticVersion, url: URL) {
+        self.version = version
+        self.url = url
+    }
+}
+
+/// A release newer than some component that is installed.
 public struct AvailableUpdate: Sendable, Equatable {
     public let version: String
     public let url: URL
@@ -35,6 +50,11 @@ public enum UpdateCheckResult: Sendable, Equatable {
 /// piece of state: the launch check populates it, and Settings renders whatever
 /// the last check found instead of starting from blank.
 ///
+/// Only the app reaches the network. The sensor's version arrives over the
+/// existing authenticated status call, so a privileged daemon whose job is
+/// watching a home network never has to phone a third party to learn it is out
+/// of date.
+///
 /// The network call, the clock, and the defaults store are injected so the
 /// throttle and the failure paths are testable without a live network.
 @MainActor
@@ -54,18 +74,21 @@ public final class UpdateChecker {
 
     public nonisolated static let lastCheckDefaultsKey = "lastUpdateCheckAt"
 
-    // A known-pending update outlives the process. Without this, relaunching
-    // inside the throttle window would skip the check, leave `result` nil, and
-    // silently drop the update indicator while the update was still pending.
-    public nonisolated static let pendingVersionDefaultsKey = "pendingUpdateVersion"
-    public nonisolated static let pendingURLDefaultsKey = "pendingUpdateURL"
+    // The newest known release outlives the process. Without this, relaunching
+    // inside the throttle window would skip the check, leave the state empty,
+    // and silently drop the update indicator while it was still pending.
+    public nonisolated static let latestVersionDefaultsKey = "latestReleaseVersion"
+    public nonisolated static let latestURLDefaultsKey = "latestReleaseURL"
 
     public private(set) var isChecking = false
     public private(set) var result: UpdateCheckResult?
 
+    /// The newest release seen, whether or not anything is behind it.
+    public private(set) var latestRelease: ReleaseSnapshot?
+
+    /// A release newer than the running app.
     public var availableUpdate: AvailableUpdate? {
-        if case .available(let update) = result { return update }
-        return nil
+        update(forComponentVersion: currentVersion)
     }
 
     private let currentVersion: String
@@ -86,19 +109,11 @@ public final class UpdateChecker {
         self.interval = interval
         self.now = now
         self.fetch = fetch
-        self.result = Self.restorePendingUpdate(from: defaults)
-    }
-
-    /// Rehydrate an update found by an earlier run of the app.
-    private nonisolated static func restorePendingUpdate(
-        from defaults: UserDefaults
-    ) -> UpdateCheckResult? {
-        guard
-            let version = defaults.string(forKey: pendingVersionDefaultsKey),
-            let raw = defaults.string(forKey: pendingURLDefaultsKey),
-            let url = URL(string: raw)
-        else { return nil }
-        return .available(AvailableUpdate(version: version, url: url))
+        self.latestRelease = Self.restoreLatestRelease(from: defaults)
+        self.result = Self.describe(
+            latestRelease: latestRelease,
+            componentVersion: currentVersion
+        )
     }
 
     /// The running distribution version, falling back to the app version.
@@ -107,6 +122,30 @@ public final class UpdateChecker {
             ?? Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
             ?? "unknown"
     }
+
+    // MARK: - Comparison
+
+    /// A release newer than `raw`, or `nil` when `raw` is current, unreadable,
+    /// or no release has been seen yet.
+    ///
+    /// Used for the sensor as well as the app: both ship from one release but
+    /// are installed separately, so each is compared on its own.
+    public func update(forComponentVersion raw: String?) -> AvailableUpdate? {
+        guard
+            let raw,
+            let component = SemanticVersion(parsing: raw),
+            let release = latestRelease,
+            release.version > component
+        else { return nil }
+        return AvailableUpdate(version: release.version.description, url: release.url)
+    }
+
+    /// Whether `raw` is behind the newest known release.
+    public func isOutOfDate(_ raw: String?) -> Bool {
+        update(forComponentVersion: raw) != nil
+    }
+
+    // MARK: - Checking
 
     /// Check the release feed.
     ///
@@ -127,51 +166,50 @@ public final class UpdateChecker {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 15
 
-        let outcome: UpdateCheckResult
+        let lookup: ReleaseLookup
         do {
             let (data, response) = try await fetch(request)
-            outcome = Self.interpret(
-                data: data,
-                response: response,
-                currentVersion: currentVersion
-            )
+            lookup = Self.parseRelease(data: data, response: response)
         } catch {
-            outcome = .failed("Check failed: \(error.localizedDescription)")
+            lookup = .problem("Check failed: \(error.localizedDescription)")
         }
 
-        // Only a completed check opens the throttle window. Stamping on failure
-        // would let one transient outage suppress checks for a full day.
-        switch outcome {
-        case .available(let update):
+        switch lookup {
+        case .problem(let message):
+            // Keep whatever we last knew. Losing the network is not evidence
+            // that a previously found release was withdrawn, and stamping the
+            // clock would let one outage suppress checks for a full day.
+            result = .failed(message)
+            return .failed(message)
+
+        case .found(let release):
+            latestRelease = release
             defaults.set(now(), forKey: Self.lastCheckDefaultsKey)
-            defaults.set(update.version, forKey: Self.pendingVersionDefaultsKey)
-            defaults.set(update.url.absoluteString, forKey: Self.pendingURLDefaultsKey)
-        case .upToDate:
-            defaults.set(now(), forKey: Self.lastCheckDefaultsKey)
-            defaults.removeObject(forKey: Self.pendingVersionDefaultsKey)
-            defaults.removeObject(forKey: Self.pendingURLDefaultsKey)
-        case .failed:
-            // Keep whatever we last knew; a failed check is not evidence that a
-            // previously found update went away.
-            result = result ?? outcome
+            defaults.set(release.version.description, forKey: Self.latestVersionDefaultsKey)
+            defaults.set(release.url.absoluteString, forKey: Self.latestURLDefaultsKey)
+            let outcome = Self.describe(
+                latestRelease: release,
+                componentVersion: currentVersion
+            ) ?? .failed("Could not read the installed version \"\(currentVersion)\".")
+            result = outcome
             return outcome
-        case .skipped:
-            break
         }
-
-        result = outcome
-        return outcome
     }
 
     // MARK: - Parsing
 
-    private static func interpret(
+    /// Either a usable release or the reason one could not be read.
+    private enum ReleaseLookup {
+        case found(ReleaseSnapshot)
+        case problem(String)
+    }
+
+    private static func parseRelease(
         data: Data,
-        response: URLResponse,
-        currentVersion: String
-    ) -> UpdateCheckResult {
+        response: URLResponse
+    ) -> ReleaseLookup {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            return .failed("Could not reach GitHub. Try again later.")
+            return .problem("Could not reach GitHub. Try again later.")
         }
         guard
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -179,21 +217,41 @@ public final class UpdateChecker {
             let htmlURL = json["html_url"] as? String,
             let url = URL(string: htmlURL)
         else {
-            return .failed("Unexpected response from GitHub.")
+            return .problem("Unexpected response from GitHub.")
         }
-
         // An unreadable version is reported, never assumed. Guessing here would
         // tell someone on an old build that they are current.
-        guard let latest = SemanticVersion(parsing: tagName) else {
-            return .failed("Could not read a version from release tag \"\(tagName)\".")
+        guard let version = SemanticVersion(parsing: tagName) else {
+            return .problem("Could not read a version from release tag \"\(tagName)\".")
         }
-        guard let current = SemanticVersion(parsing: currentVersion) else {
-            return .failed("Could not read the installed version \"\(currentVersion)\".")
-        }
+        return .found(ReleaseSnapshot(version: version, url: url))
+    }
 
-        guard latest > current else {
-            return .upToDate(current: current.description)
+    /// Render the display outcome for one component against a known release.
+    private static func describe(
+        latestRelease: ReleaseSnapshot?,
+        componentVersion raw: String
+    ) -> UpdateCheckResult? {
+        guard let release = latestRelease else { return nil }
+        guard let component = SemanticVersion(parsing: raw) else { return nil }
+        guard release.version > component else {
+            return .upToDate(current: component.description)
         }
-        return .available(AvailableUpdate(version: latest.description, url: url))
+        return .available(
+            AvailableUpdate(version: release.version.description, url: release.url)
+        )
+    }
+
+    /// Rehydrate the release found by an earlier run of the app.
+    private nonisolated static func restoreLatestRelease(
+        from defaults: UserDefaults
+    ) -> ReleaseSnapshot? {
+        guard
+            let raw = defaults.string(forKey: latestVersionDefaultsKey),
+            let version = SemanticVersion(parsing: raw),
+            let rawURL = defaults.string(forKey: latestURLDefaultsKey),
+            let url = URL(string: rawURL)
+        else { return nil }
+        return ReleaseSnapshot(version: version, url: url)
     }
 }

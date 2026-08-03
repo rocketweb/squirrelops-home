@@ -1505,19 +1505,6 @@ public struct CompleteResponse: Codable, Sendable {
     }
 }
 
-public struct UpdateCheckResponse: Codable, Sendable {
-    public let currentVersion: String
-    public let latestVersion: String?
-    public let updateAvailable: Bool
-    public let message: String
-
-    enum CodingKeys: String, CodingKey {
-        case currentVersion = "current_version"
-        case latestVersion = "latest_version"
-        case updateAvailable = "update_available"
-        case message
-    }
-}
 
 // MARK: - Squirrel Scouts
 
