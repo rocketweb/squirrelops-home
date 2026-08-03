@@ -9,9 +9,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import ValidationError
 
+from squirrelops_home_sensor.api.config_secrets import (
+    redact_alert_methods,
+    redact_config,
+    restore_alert_method_secrets,
+    restore_config_secrets,
+)
 from squirrelops_home_sensor.api.deps import get_config, verify_client_cert
 from squirrelops_home_sensor.api.routes_system import get_scan_loop
 from squirrelops_home_sensor.config import _FLAT_KEY_MAP, Settings, _deep_merge
@@ -21,7 +27,24 @@ from squirrelops_home_sensor.secure_io import atomic_write_private_text
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/config", tags=["config"])
+
+def _no_store(response: Response) -> None:
+    """Forbid caching of every config response.
+
+    Config bodies carry credentials even after redaction removes the worst of
+    them (Home Assistant URLs, sensor identifiers). ``URLCache`` in the macOS
+    app writes cached responses to an unencrypted on-disk store, so the sensor
+    tells every client not to persist them rather than trusting each client to
+    opt out on its own.
+    """
+    response.headers["Cache-Control"] = "no-store"
+
+
+router = APIRouter(
+    prefix="/config",
+    tags=["config"],
+    dependencies=[Depends(_no_store)],
+)
 
 # Fields that cannot be overwritten by PUT /config.
 PROTECTED_FIELDS = {
@@ -271,8 +294,8 @@ async def get_full_config(
     config: dict = Depends(get_config),
     _auth: dict = Depends(verify_client_cert),
 ) -> dict:
-    """Return the full sensor configuration."""
-    return config
+    """Return the full sensor configuration with secrets redacted."""
+    return redact_config(config)
 
 
 @router.put("")
@@ -300,7 +323,12 @@ async def update_config(
         )
 
     if not body:
-        return config
+        return redact_config(config)
+
+    # A client that echoes back a redacted secret means "leave it alone", not
+    # "set the credential to this marker". Resolve those before validation so
+    # the merge and the persisted file only ever see real values.
+    body = restore_config_secrets(body, config)
 
     updated = _validated_runtime_update(body, config)
     previous = deepcopy(config)
@@ -333,7 +361,7 @@ async def update_config(
         raise
     config.clear()
     config.update(updated)
-    return config
+    return redact_config(config)
 
 
 @router.get("/alert-methods")
@@ -341,8 +369,8 @@ async def get_alert_methods(
     config: dict = Depends(get_config),
     _auth: dict = Depends(verify_client_cert),
 ) -> dict:
-    """Return configured alert/notification methods."""
-    return config.get("alert_methods", {})
+    """Return configured alert/notification methods with secrets redacted."""
+    return redact_alert_methods(config.get("alert_methods", {}))
 
 
 @router.put("/alert-methods")
@@ -356,6 +384,9 @@ async def update_alert_methods(
     methods = updated.setdefault("alert_methods", {})
     if not isinstance(methods, dict):
         raise _unprocessable("Configuration section 'alert_methods' must be an object.")
+    # Each method is replaced wholesale below, so an echoed marker would wipe
+    # the stored webhook. Resolve markers against the current methods first.
+    body = restore_alert_method_secrets(body, methods)
     for method_name, method_config in body.items():
         if not isinstance(method_name, str) or not method_name or len(method_name) > 64:
             raise _unprocessable("Invalid alert method name.")
@@ -366,7 +397,7 @@ async def update_alert_methods(
     _persist_config(updated)
     config.clear()
     config.update(updated)
-    return config["alert_methods"]
+    return redact_alert_methods(config["alert_methods"])
 
 
 @router.get("/ha-status")
