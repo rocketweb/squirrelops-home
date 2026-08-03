@@ -182,35 +182,18 @@ public final class UpdateChecker {
             return .failed("Unexpected response from GitHub.")
         }
 
-        let latest = strippedTag(tagName)
-        guard isNewer(latest, than: currentVersion) else {
-            return .upToDate(current: currentVersion)
+        // An unreadable version is reported, never assumed. Guessing here would
+        // tell someone on an old build that they are current.
+        guard let latest = SemanticVersion(parsing: tagName) else {
+            return .failed("Could not read a version from release tag \"\(tagName)\".")
         }
-        return .available(AvailableUpdate(version: latest, url: url))
-    }
-
-    /// Remove the release-tag prefix (``home-v2.0.1`` and ``v1.1.14`` are both
-    /// in use).
-    static func strippedTag(_ tag: String) -> String {
-        if tag.hasPrefix("home-v") { return String(tag.dropFirst("home-v".count)) }
-        if tag.hasPrefix("v") { return String(tag.dropFirst()) }
-        return tag
-    }
-
-    /// Compare two dotted version strings.
-    ///
-    /// Known limitation: components that are not plain integers are dropped, so
-    /// a tag using an unrecognized scheme compares as older and reports "up to
-    /// date". Replaced in the follow-up commit.
-    static func isNewer(_ a: String, than b: String) -> Bool {
-        let partsA = a.split(separator: ".").compactMap { Int($0) }
-        let partsB = b.split(separator: ".").compactMap { Int($0) }
-        for index in 0..<max(partsA.count, partsB.count) {
-            let left = index < partsA.count ? partsA[index] : 0
-            let right = index < partsB.count ? partsB[index] : 0
-            if left > right { return true }
-            if left < right { return false }
+        guard let current = SemanticVersion(parsing: currentVersion) else {
+            return .failed("Could not read the installed version \"\(currentVersion)\".")
         }
-        return false
+
+        guard latest > current else {
+            return .upToDate(current: current.description)
+        }
+        return .available(AvailableUpdate(version: latest.description, url: url))
     }
 }

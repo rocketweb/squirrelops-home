@@ -281,4 +281,47 @@ struct UpdateCheckerTests {
         // Losing the network is not evidence the release was withdrawn.
         #expect(offline.availableUpdate?.version == "2.1.0")
     }
+
+    // MARK: - Version parsing
+
+    @Test("An unrecognized tag scheme fails instead of reporting up to date")
+    @MainActor
+    func unreadableTagFails() async {
+        let checker = Self.makeChecker(currentVersion: "2.0.1", tag: "nightly-build")
+        guard case .failed = await checker.check(force: true) else {
+            Issue.record("an unreadable tag must not resolve to up-to-date")
+            return
+        }
+        #expect(checker.availableUpdate == nil)
+    }
+
+    @Test("A newer release under an unfamiliar prefix is still detected")
+    @MainActor
+    func unfamiliarPrefixStillCompares() async {
+        // The old parser dropped "sensor-v3" entirely, compared as 0.0, and
+        // told the user they were up to date.
+        let checker = Self.makeChecker(currentVersion: "2.0.1", tag: "sensor-v3.0.0")
+        #expect(await checker.check(force: true) == .available(AvailableUpdate(
+            version: "3.0.0",
+            url: URL(string: "https://github.com/rocketweb/squirrelops-home/releases/tag/x")!
+        )))
+    }
+
+    @Test("An unreadable installed version fails rather than comparing")
+    @MainActor
+    func unreadableCurrentVersionFails() async {
+        let checker = Self.makeChecker(currentVersion: "unknown", tag: "home-v2.1.0")
+        guard case .failed = await checker.check(force: true) else {
+            Issue.record("expected .failed")
+            return
+        }
+    }
+
+    @Test("Multi-digit patch versions compare numerically")
+    @MainActor
+    func multiDigitPatchComparesNumerically() async {
+        let checker = Self.makeChecker(currentVersion: "1.1.9", tag: "v1.1.14")
+        _ = await checker.check(force: true)
+        #expect(checker.availableUpdate?.version == "1.1.14")
+    }
 }
