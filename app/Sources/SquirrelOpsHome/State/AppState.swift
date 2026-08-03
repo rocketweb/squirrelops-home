@@ -137,7 +137,13 @@ public final class AppState {
         presentedCriticalAlerts.first
     }
 
-    public init() {}
+    /// Shared release check. Owned here so the launch check and the Settings
+    /// button read and write the same state rather than each keeping their own.
+    public let updateChecker: UpdateChecker
+
+    public init(updateChecker: UpdateChecker = UpdateChecker()) {
+        self.updateChecker = updateChecker
+    }
 
     public static func decoyDeviceIPs(in decoys: [DecoySummary]) -> Set<String> {
         Set(decoys.compactMap { decoy in
