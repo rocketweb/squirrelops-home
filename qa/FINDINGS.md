@@ -20,9 +20,10 @@ Policy: **reported, not fixed.** No product code was changed.
 | F, live system (F-01 to F-13) | 13 | 14 checks | yes | 9 pass, 0 fail, 5 need root |
 | E, app behavior (E-03, E-14) | 4 | 9 assertions | yes | 8 pass, 1 fail |
 | E, remainder | 18 | already covered | yes | 281 existing tests |
-| G, I, J remainder | 24 | not yet | no | pending |
+| G-07 address redaction | 1 | 18 assertions | yes | 1 fail, 17 pass |
+| G, I, J remainder | 23 | already covered | yes | 200-plus existing tests |
 
-**Running total: 98 automated assertions (14 failed, 84 passed) plus 9 live
+**Running total: 116 automated assertions (15 failed, 101 passed) plus 9 live
 checks passed.** The full sensor suite is
 1934 passed with the same 9 failures, so the functional cases introduced no
 regressions.
@@ -315,6 +316,78 @@ route added later without anyone remembering to write a test for it. It passes.
 Also added: `/ports/probe` input validation including a check that the sensor
 cannot be pointed at a public address, unknown-route handling that does not leak
 tracebacks or module paths, and scout profile listing.
+
+---
+
+## DEF-007 (Medium): an unpadded MAC is not redacted before reaching a cloud LLM
+
+**Case:** G-07. **1 failing assertion.**
+
+`_sanitize_signal` strips addresses out of device signals before they are sent
+to a cloud classifier. It misses the unpadded MAC form:
+
+```
+_sanitize_signal("host AE:29:A:E5:CC:C5 here")  ->  unchanged
+_sanitize_signal("host AE:29:0A:E5:CC:C5 here") ->  redacted
+```
+
+**Cause.** `_FULL_MAC_RE` requires exactly two hex digits per octet:
+
+```python
+(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}
+```
+
+The IPv4 pattern beside it is written flexibly as `\d{1,3}`, so the rigidity is
+specific to the MAC branch. The IPv6 candidate pattern does match the string,
+but `_redact_ipv6` only redacts when `ipaddress` parses it as real IPv6, and a
+six-group MAC does not parse, so it is returned unchanged.
+
+**Repro**
+
+```
+.venv/bin/python -m pytest tests/functional/test_group_gij.py -p no:randomly
+```
+
+**Impact.** `_sanitize_signal` is applied to values explicitly labelled
+untrusted: DNS hostname, mDNS hostname, and other device-supplied strings at
+llm_classifier.py lines 176, 182, and 212. A device on the LAN chooses its own
+mDNS hostname. Advertising one that contains an unpadded MAC puts that address
+verbatim into an outbound prompt to a third-party API.
+
+The stored `mac_oui` goes through `normalize_mac` first and is padded, so the
+primary path is safe. This is the untrusted-input path, which is the one the
+control exists for.
+
+**This is the third instance of the same assumption in one session.** macOS
+`arp -an` emits unpadded octets, and code that assumes padding keeps breaking on
+it:
+
+1. `normalize_mac` handles it correctly, but had no regression guard until H-03
+2. `qa/live/check.sh` F-09 hit it and falsely reported 10 host collisions
+3. `_FULL_MAC_RE` here, which is an actual defect
+
+**Code:** [llm_classifier.py:62](../sensor/src/squirrelops_home_sensor/devices/llm_classifier.py)
+
+**Suggested direction.** Allow one or two hex digits per octet in the MAC
+branch, or run untrusted values through `normalize_mac` before matching. A
+project-wide audit for the padding assumption looks worthwhile given three hits.
+
+---
+
+## Group G, I, J notes
+
+I and J needed no new tests. Already covered by 31 db schema, 40 db query, 25
+event bus, 22 matcher, 19 composite, 11 classifier, 9 baseline, and 10 port-risk
+tests. `prune_orphaned_events` is covered in `test_entry_point.py` and
+`reencrypt_store` in `test_secret_store.py`, both of which the earlier count
+missed.
+
+Group G was covered apart from G-07, which had **one** assertion guarding it.
+
+Two deliberate non-defects are pinned so a future fix cannot overcorrect: a
+vendor string such as `Ubiquiti Networks` must survive redaction, and a
+four-part firmware version like `1.2.3` must not be mistaken for an address.
+Blanket redaction would leave the classifier with nothing to classify on.
 
 ---
 
