@@ -13,9 +13,11 @@ Policy: **reported, not fixed.** No product code was changed.
 | B, mimic lifecycle (B-01 to B-07, B-10 to B-15) | 13 | 13 assertions | yes | all pass |
 | C, isolation and PF, Python side (C-06, C-08, C-09, C-13 to C-16) | 7 | 27 assertions | yes | 4 fail, 23 pass |
 | C, PF rule builder (C-01 to C-03, C-05, C-07) | 5 | already covered | yes | 63 existing tests pass |
-| A, E, F, G, H, I, J remainder | 120 | not yet | no | pending |
+| H, scanning (H-03, H-05) | 2 | 6 assertions | yes | all pass |
+| H, remainder (H-01, H-02, H-04, H-06 to H-13) | 11 | already covered | yes | 134 existing tests |
+| A, E, F, G, I, J remainder | 107 | not yet | no | pending |
 
-**Running total: 68 assertions, 13 failed, 55 passed.** The full sensor suite is
+**Running total: 74 assertions, 13 failed, 61 passed.** The full sensor suite is
 1934 passed with the same 9 failures, so the functional cases introduced no
 regressions.
 
@@ -249,6 +251,40 @@ malformed rule rejection.
 surface and not against *existing test* coverage. That is why five Group C cases
 were planned as new work when they were already covered. Later groups should
 check the existing suites first.
+
+---
+
+## Group H notes, and a correction to my own coverage review
+
+Group H produced no defects, and almost all of it was already covered.
+
+| Planned case | Already covered by |
+|---|---|
+| H-01 two-phase scan | `single_scan_creates_devices_from_arp`, `single_scan_enriches_with_ports` |
+| H-02 port-scan failure | `port_scan_failure_doesnt_block_devices` |
+| H-04 ARP conflicts | `ip_conflicts_are_reconciled_before_device_filtering`, `same_mac_multi_ip_is_quarantined` |
+| H-06 concurrency bound | `semaphore_limits_concurrent_connections` |
+| H-07 per-port timeout | `unreachable_host_times_out`, `overall_scan_completes_in_bounded_time` |
+| H-08 banner probing | 14 tests in `test_port_scanner_banners.py` |
+| H-09, H-10 discovery | 8 mDNS browser and 17 SSDP tests |
+| H-11, H-12 restart | `load_restores_devices`, `no_duplicate_db_rows_across_restart` |
+| H-13 decoys excluded | `system_mimics_are_never_scanned_by_the_sensor` |
+
+**The coverage review was wrong about this.** It recorded "whole `scanner/`
+package untouched" as the single largest gap and justified adding 13 cases. The
+package has 134 existing tests. That claim came from reading the source tree and
+never opening the test tree, the same mistake that inflated Group C.
+
+Two cases were genuinely missing and are now covered:
+
+- **H-03.** `normalize_mac` had nine tests and none for the unpadded octet form
+  macOS `arp -an` emits, such as `ae:29:a:e5:cc:c5`. That is a previously fixed
+  defect in this project with no regression guard. The behavior is correct, and
+  now it is pinned.
+- **H-05.** Nothing asserted that `_local_interface_macs` returns normalized
+  values. If it ever stopped, comparison against scan results would silently
+  fail to match and the sensor would flag itself as an ARP conflict. Correct
+  today, now pinned.
 
 ---
 
