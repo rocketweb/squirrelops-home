@@ -312,3 +312,117 @@ class TestD14DeliveryFailureKeepsEvidence:
         assert (await cursor.fetchone())[0] == 1, (
             "evidence must survive an alerting failure"
         )
+
+
+class TestD15UpdatedAlertDelivery:
+    """The DEF-002 fix: deliver material updates without notifying on every hit.
+
+    These pin a behavior decision, not just a code path. If the rule changes,
+    these should change with it deliberately.
+    """
+
+    @staticmethod
+    def _dispatcher(cooldown=300.0):
+        from squirrelops_home_sensor.alerts.dispatcher import AlertDispatcher
+
+        delivered = []
+
+        async def handler(payload):
+            delivered.append(payload)
+
+        dispatcher = AlertDispatcher(
+            methods=[{"name": "test", "handler": handler, "min_severity": "low"}],
+            renotify_cooldown=cooldown,
+        )
+        return dispatcher, delivered
+
+    @staticmethod
+    def _alert(**overrides):
+        payload = {
+            "id": 1,
+            "alert_type": "decoy.trip",
+            "severity": "high",
+            "title": "1 decoy connection from 192.168.1.101",
+            "source_ip": "192.168.1.101",
+            "created_at": "2026-08-07T00:00:00Z",
+        }
+        payload.update(overrides)
+        return payload
+
+    @pytest.mark.asyncio
+    async def test_a_repeat_hit_with_an_unchanged_summary_is_not_delivered(self):
+        dispatcher, delivered = self._dispatcher()
+        await dispatcher.dispatch(self._alert())
+        for _ in range(50):
+            await dispatcher._on_alert_updated({"payload": self._alert()})
+
+        assert len(delivered) == 1, (
+            "a scan burst must not produce one notification per connection"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_promoted_title_is_delivered(self):
+        dispatcher, delivered = self._dispatcher()
+        await dispatcher.dispatch(self._alert())
+
+        # The moment a second endpoint is touched the title promotes, which is
+        # the moment the character of the event changed.
+        await dispatcher._on_alert_updated(
+            {"payload": self._alert(title="Port scan detected from 192.168.1.101")}
+        )
+
+        assert len(delivered) == 2
+        assert "Port scan detected" in delivered[-1]["title"]
+
+    @pytest.mark.asyncio
+    async def test_an_escalated_severity_is_delivered(self):
+        dispatcher, delivered = self._dispatcher()
+        await dispatcher.dispatch(self._alert(severity="medium"))
+        await dispatcher._on_alert_updated({"payload": self._alert(severity="critical")})
+
+        assert len(delivered) == 2
+        assert delivered[-1]["severity"] == "critical"
+
+    @pytest.mark.asyncio
+    async def test_a_second_material_change_inside_the_cooldown_is_held(self):
+        dispatcher, delivered = self._dispatcher(cooldown=3600.0)
+        await dispatcher.dispatch(self._alert())
+        await dispatcher._on_alert_updated({"payload": self._alert(title="a")})
+        await dispatcher._on_alert_updated({"payload": self._alert(title="b")})
+
+        assert len(delivered) == 2, "the cooldown bounds re-notification"
+
+    @pytest.mark.asyncio
+    async def test_a_material_change_after_the_cooldown_is_delivered(self):
+        dispatcher, delivered = self._dispatcher(cooldown=0.0)
+        await dispatcher.dispatch(self._alert())
+        await dispatcher._on_alert_updated({"payload": self._alert(title="a")})
+        await dispatcher._on_alert_updated({"payload": self._alert(title="b")})
+
+        assert len(delivered) == 3
+
+    @pytest.mark.asyncio
+    async def test_distinct_alerts_do_not_share_a_cooldown(self):
+        dispatcher, delivered = self._dispatcher(cooldown=3600.0)
+        await dispatcher.dispatch(self._alert(id=1))
+        await dispatcher.dispatch(self._alert(id=2))
+        await dispatcher._on_alert_updated({"payload": self._alert(id=1, title="x")})
+        await dispatcher._on_alert_updated({"payload": self._alert(id=2, title="y")})
+
+        assert len(delivered) == 4
+
+    @pytest.mark.asyncio
+    async def test_min_severity_still_applies_to_an_update(self):
+        from squirrelops_home_sensor.alerts.dispatcher import AlertDispatcher
+
+        delivered = []
+
+        async def handler(payload):
+            delivered.append(payload)
+
+        dispatcher = AlertDispatcher(
+            methods=[{"name": "test", "handler": handler, "min_severity": "critical"}]
+        )
+        await dispatcher._on_alert_updated({"payload": self._alert(severity="low")})
+
+        assert delivered == [], "an update must respect the severity threshold"

@@ -141,7 +141,10 @@ public final class AppState {
 
     public static func decoyDeviceIPs(in decoys: [DecoySummary]) -> Set<String> {
         Set(decoys.compactMap { decoy in
-            guard decoy.decoyType == "mimic", decoy.status == "active" else {
+            // isOperationalDeployment, not an inline status check. A degraded
+            // mimic keeps its alias, so treating it as inactive would let a
+            // fake host render as a real device in the user's inventory.
+            guard decoy.isVirtualMimic, decoy.isOperationalDeployment else {
                 return nil
             }
             guard !["", "0.0.0.0", "127.0.0.1", "::"].contains(decoy.bindAddress) else {

@@ -13,6 +13,7 @@ Linux: iptables DNAT rules in a ``SQUIRRELOPS_MIMIC`` chain.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 from collections.abc import Iterable
 from functools import wraps
@@ -51,6 +52,20 @@ def remap_port(port: int) -> int:
 def needs_remap(port: int) -> bool:
     """Check if a port requires remapping to avoid privilege issues."""
     return port < PRIVILEGED_PORT_THRESHOLD
+
+
+# The privileged helper supports directly allowing chosen ports on a protected
+# virtual IP, and its own tests cover that path. This sensor never uses it.
+#
+# Every advertised port is redirected to an isolated runtime listener instead.
+# Directly allowing a virtual-IP port would let a wildcard-bound host daemon
+# answer on the decoy address whenever the mimic listener stopped or failed to
+# bind, which is exactly the impersonation the mimic exists to avoid. The
+# default-deny rule is what makes that safe.
+#
+# Named rather than inlined so the emptiness reads as a decision. Populating it
+# reopens that hole, and nothing about an empty list literal said so.
+NO_DIRECT_PORTS: tuple[int, ...] = ()
 
 
 class PortForwardManager:
@@ -121,6 +136,17 @@ class PortForwardManager:
             raise ValueError(
                 "every exposed port must have exactly one private redirect"
             )
+        # Validate the address here, not only in the privileged helper. Ports
+        # already fail fast; letting an address fail late meant a malformed
+        # value crossed the privilege boundary and came back as a generic
+        # "Failed to set up port forwards via helper".
+        try:
+            ipaddress.IPv4Address(bind_ip)
+        except (ipaddress.AddressValueError, ValueError) as exc:
+            raise ValueError(
+                f"bind_ip must be an IPv4 address, got {bind_ip!r}"
+            ) from exc
+
         backend_ports = list(port_remaps.values())
         for from_port, to_port in port_remaps.items():
             if not isinstance(from_port, int) or not 1 <= from_port <= 65535:
@@ -151,14 +177,9 @@ class PortForwardManager:
         previous_rules = self._rules.get(decoy_id)
         previous_endpoint = self._protected_endpoints.get(decoy_id)
         self._rules[decoy_id] = rules
-        # Every advertised port is redirected to an isolated runtime listener.
-        # Never directly allow a virtual-IP port: a wildcard-bound host daemon
-        # could otherwise answer on the decoy address if the mimic listener
-        # stopped or could not bind.
-        direct_ports: list[int] = []
         self._protected_endpoints[decoy_id] = {
             "ip": bind_ip,
-            "direct_ports": direct_ports,
+            "direct_ports": list(NO_DIRECT_PORTS),
         }
 
         if await self._sync_rules():
@@ -196,7 +217,7 @@ class PortForwardManager:
             self._rules[decoy_id] = []
             self._protected_endpoints[decoy_id] = {
                 "ip": bind_ip,
-                "direct_ports": [],
+                "direct_ports": list(NO_DIRECT_PORTS),
             }
 
         if await self._sync_rules():

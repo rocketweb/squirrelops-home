@@ -2,7 +2,9 @@
 
 Branch: `bugfix/decoy-status-defects` (off `origin/main` @ acf1cf4)
 Run date: 2026-08-07
-Policy: **reported, not fixed.** No product code was changed.
+Original policy: reported, not fixed. **DEF-002 through DEF-007 were
+subsequently fixed on this branch at the maintainer's request.** DEF-001 is
+fixed on PR #23 and is untouched here.
 
 **7 defects confirmed. 4 candidate findings investigated and rejected.**
 116 automated assertions (15 fail, 101 pass) plus 9 live checks, across the full
@@ -16,17 +18,45 @@ Ordered by what to do first, not by discovery order.
 
 | # | Sev | Defect | Effort | Notes |
 |---|---|---|---|---|
-| **DEF-001** | Critical | `GET /config` returns every stored credential | **none** | Fix already written on PR #23. Merge and ship. |
-| **DEF-002** | High | Rolling decoy-trip alerts notify once, then go silent | design | Needs a decision on what an update notification means. Not a one-line fix. |
-| **DEF-003** | Medium | Status read during registration invents a failure | small | Reorder two statements at three sites. |
-| **DEF-007** | Medium | Unpadded MAC reaches a cloud LLM unredacted | small + audit | Regex fix is trivial. The audit it implies is not. |
-| **DEF-005** | Low | Bind address unvalidated before crossing to root | small | Add one check beside the existing port checks. |
-| **DEF-006** | Low | The app holds two definitions of a live mimic | small | Reuse `isOperationalDeployment`. |
-| **DEF-004** | Low | Unreachable branch weakens a default-deny | small | Delete, after checking the Linux path. |
+| **DEF-001** | Critical | `GET /config` returns every stored credential | open | Fixed on PR #23. Merge and ship. Not on this branch. |
+| **DEF-002** | High | Rolling decoy-trip alerts notify once, then go silent | **fixed** | Embeds a behavior decision. See the note below. |
+| **DEF-003** | Medium | Status read during registration invents a failure | **fixed** | Mapping now published before the mimic, three sites. |
+| **DEF-007** | Medium | Unpadded MAC reaches a cloud LLM unredacted | **fixed** | Regex accepts one or two digits per octet. Audit still open. |
+| **DEF-005** | Low | Bind address unvalidated before crossing to root | **fixed** | Validated beside the existing port checks. |
+| **DEF-006** | Low | The app holds two definitions of a live mimic | **fixed** | `decoyDeviceIPs` now uses `isOperationalDeployment`. |
+| **DEF-004** | Low | Unreachable branch weakens a default-deny | **fixed differently** | See the correction below. |
 
-Recommended sequence: DEF-001 (already done, just merge), then DEF-003, DEF-005,
-DEF-006, DEF-004 as a single cleanup pass, then DEF-007 and its audit, then
-DEF-002 once its behavior is decided.
+### DEF-002 embeds a behavior decision, please review it
+
+An updated alert is now delivered only when its **visible summary changes**,
+meaning severity or title, and at most once per 5 minute cooldown per alert.
+
+Severity and title are the signal because they are what the alert row shows.
+The title promotes to "Port scan detected from X" the moment a second endpoint
+is touched, which is when the character of the event actually changed.
+Delivering every update instead would turn a 1195-connection burst into 1195
+notifications, which is worse than the silence it replaces.
+
+The cooldown governs the gap **between re-notifications**, not the gap from the
+original alert, so the first material change is never held back. That ordering
+was wrong in the first implementation and the tests caught it.
+
+Alternatives not taken: notify on every update (spam), notify on connection
+count thresholds (arbitrary), notify only on severity increase (misses the
+port-scan promotion, which is the most useful signal here).
+
+### DEF-004 correction
+
+The original write-up recommended deleting the unreachable `tcp pass` branch in
+`buildPFRules`. **That recommendation was wrong.** The branch has twelve-plus
+tests in `PFIsolationTests.swift` asserting its behavior, so it is a supported
+helper capability, not dead code. Deleting it would have removed tested
+functionality from the privileged helper.
+
+The dead-ness is on the sensor side: `PortForwardManager` is the only producer
+of `direct_ports` on either platform and hardcodes it empty. That is now a named
+constant, `NO_DIRECT_PORTS`, carrying the reasoning, so the emptiness reads as a
+decision rather than an oversight. An empty list literal said nothing about why.
 
 **Cross-cutting:** DEF-007 is the third appearance of one wrong assumption. See
 [The MAC padding assumption](#the-mac-padding-assumption).

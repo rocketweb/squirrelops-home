@@ -9,7 +9,6 @@ Asserts the behavior the product should have. A failure is a finding.
 """
 
 import ipaddress
-from types import SimpleNamespace
 
 import pytest
 

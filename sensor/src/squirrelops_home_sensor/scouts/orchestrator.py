@@ -1389,9 +1389,13 @@ class MimicOrchestrator:
             )
             return False
 
-        self._active_mimics[decoy_id] = mimic
+        # Map every service to its primary BEFORE publishing the mimic. A
+        # status read that observes _active_mimics without the mapping resolves
+        # a sibling to itself, misses the dict, and reports a running host as
+        # degraded.
         for service_id in service_ids:
             self._service_to_primary[service_id] = decoy_id
+        self._active_mimics[decoy_id] = mimic
 
         # Register every credible service under the shared host identity.
         if self._mdns is not None:
@@ -3111,8 +3115,11 @@ class MimicOrchestrator:
                 )
                 return False
 
-            self._active_mimics[decoy_id] = mimic
+            # Resolve and install the mapping first. This awaits a DB query,
+            # so publishing the mimic before it leaves a window in which a
+            # concurrent status read reports the host's siblings as degraded.
             service_rows = await self._refresh_service_mapping(decoy_id)
+            self._active_mimics[decoy_id] = mimic
 
             # Re-register every credible service under the shared hostname.
             if self._mdns is not None:
@@ -3823,10 +3830,10 @@ class MimicOrchestrator:
                         )
                     continue
 
+                # Mapping first, for the same reason as the restart path.
+                await self._refresh_service_mapping(decoy_id)
                 self._active_mimics[decoy_id] = mimic
                 resumed_ips.add(bind_address)
-
-                await self._refresh_service_mapping(decoy_id)
 
                 # Re-register every credible service.
                 if self._mdns is not None:

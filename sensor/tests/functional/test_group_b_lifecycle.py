@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from squirrelops_home_sensor.db import queries as q
 from squirrelops_home_sensor.network.port_forward import PortForwardManager
 
 
