@@ -15,9 +15,11 @@ Policy: **reported, not fixed.** No product code was changed.
 | C, PF rule builder (C-01 to C-03, C-05, C-07) | 5 | already covered | yes | 63 existing tests pass |
 | H, scanning (H-03, H-05) | 2 | 6 assertions | yes | all pass |
 | H, remainder (H-01, H-02, H-04, H-06 to H-13) | 11 | already covered | yes | 134 existing tests |
-| A, E, F, G, I, J remainder | 107 | not yet | no | pending |
+| A, API gaps (A-30, A-32, A-33, A-35, A-42, A-43) | 6 | 15 assertions | yes | all pass |
+| A, remainder | 37 | already covered | yes | 259 existing tests |
+| E, F, G, I, J remainder | 64 | not yet | no | pending |
 
-**Running total: 74 assertions, 13 failed, 61 passed.** The full sensor suite is
+**Running total: 89 assertions, 13 failed, 76 passed.** The full sensor suite is
 1934 passed with the same 9 failures, so the functional cases introduced no
 regressions.
 
@@ -285,6 +287,30 @@ Two cases were genuinely missing and are now covered:
   values. If it ever stopped, comparison against scan results would silently
   fail to match and the sensor would flag itself as an ARP conflict. Correct
   today, now pinned.
+
+---
+
+## Group A notes
+
+No defects. 37 of 43 cases were already covered by 259 existing tests across
+`test_routes_*.py`, `test_ws.py`, and the api_auth unit files. Checking the test
+tree first, as the Group C and H corrections taught, meant six cases were
+written instead of forty-three.
+
+The thin spot was scouts: 9 tests for 8 endpoints, against 38 to 52 per router
+elsewhere, and skewed toward failure paths. `/scouts/profiles` had no coverage
+at all.
+
+Highest-value addition is **A-42**, a systematic authentication sweep. It reads
+every path and method from the OpenAPI schema, subtracts the deliberately
+unauthenticated ones, and asserts each remaining route answers 401 or 403 with
+no client certificate. Today that is five point tests covering a 53-endpoint
+surface. The sweep covers 30-plus routes and, more importantly, will cover any
+route added later without anyone remembering to write a test for it. It passes.
+
+Also added: `/ports/probe` input validation including a check that the sensor
+cannot be pointed at a public address, unknown-route handling that does not leak
+tracebacks or module paths, and scout profile listing.
 
 ---
 
