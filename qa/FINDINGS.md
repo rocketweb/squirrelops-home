@@ -9,7 +9,17 @@ Policy: **reported, not fixed.** No product code was changed.
 | Group | Cases planned | Implemented | Run | Result |
 |---|---|---|---|---|
 | Known defects (B-08, B-09, C-04, D-06, D-07, G-01, G-02) | 7 | 14 assertions | yes | 9 fail, 5 pass |
-| A, remainder of B, C, D, E, F, G, H, I, J | 157 | not yet | no | pending |
+| D, alert pipeline (D-01 to D-05, D-08 to D-14) | 12 | 14 assertions | yes | all pass |
+| B, mimic lifecycle (B-01 to B-07, B-10 to B-15) | 13 | 13 assertions | yes | all pass |
+| A, C, E, F, G, H, I, J remainder | 132 | not yet | no | pending |
+
+**Running total: 41 assertions, 9 failed, 32 passed.** The full sensor suite is
+1934 passed with the same 9 failures, so the functional cases introduced no
+regressions.
+
+Groups D and B produced **no new defects**. The alert pipeline behaves correctly
+apart from DEF-002, and the mimic lifecycle behaves correctly apart from
+DEF-003.
 
 `sensor/tests/functional/test_known_defects.py`, run with
 `.venv/bin/python -m pytest tests/functional/ -p no:randomly`.
@@ -187,8 +197,27 @@ the hole the comment forbids. Low severity today, latent risk.
 
 ---
 
+## Two false defects avoided
+
+Recorded because a report-only suite is only worth reading if its failures are
+trustworthy, and both of these failed first and looked real.
+
+- **Hostname collision.** B-13 initially failed, appearing to show that a
+  colliding mimic hostname was reused. The test had seeded `decoys` rows only.
+  `_unique_generated_hostname` checks `decoy_hosts`, a different table, so no
+  collision existed to detect. Test corrected, behavior is right.
+- **Sensor hostname reuse.** A second B-13 case appeared to show the sensor's
+  own hostname could be handed to a mimic. That guard lives in
+  `_observed_real_hostnames`, not in the generator. The test was asserting
+  against the wrong function. Corrected, and the guard is present.
+
+Several other early failures were foreign-key errors from incomplete seeding,
+notably `decoys.host_id` referencing `decoy_hosts` and `home_alerts.event_seq`
+referencing `events`. All were test defects and none are reported here.
+
 ## Not yet run
 
-157 of 164 planned cases. Groups A, E, F, H, I, J are unimplemented, as is most
-of B, C, D, and G. Nothing in this document should be read as a clean bill of
-health for those areas.
+132 of 164 planned cases. Groups A, C, E, F, H, I, J are unimplemented, plus
+part of G. Nothing in this document should be read as a clean bill of health for
+those areas. In particular the entire `scanner/` package, which is the sensor's
+primary job, has no functional coverage yet.
