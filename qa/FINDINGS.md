@@ -18,9 +18,11 @@ Policy: **reported, not fixed.** No product code was changed.
 | A, API gaps (A-30, A-32, A-33, A-35, A-42, A-43) | 6 | 15 assertions | yes | all pass |
 | A, remainder | 37 | already covered | yes | 259 existing tests |
 | F, live system (F-01 to F-13) | 13 | 14 checks | yes | 9 pass, 0 fail, 5 need root |
-| E, G, I, J remainder | 51 | not yet | no | pending |
+| E, app behavior (E-03, E-14) | 4 | 9 assertions | yes | 8 pass, 1 fail |
+| E, remainder | 18 | already covered | yes | 281 existing tests |
+| G, I, J remainder | 24 | not yet | no | pending |
 
-**Running total: 89 automated assertions (13 failed, 76 passed) plus 9 live
+**Running total: 98 automated assertions (14 failed, 84 passed) plus 9 live
 checks passed.** The full sensor suite is
 1934 passed with the same 9 failures, so the functional cases introduced no
 regressions.
@@ -313,6 +315,84 @@ route added later without anyone remembering to write a test for it. It passes.
 Also added: `/ports/probe` input validation including a check that the sensor
 cannot be pointed at a public address, unknown-route handling that does not leak
 tracebacks or module paths, and scout profile listing.
+
+---
+
+## DEF-006 (Low): the app has two definitions of a live mimic
+
+**Case:** E-03. **1 failing assertion.**
+
+`DecoySummary` states the rule explicitly:
+
+```swift
+public var isOperationalDeployment: Bool {
+    status == "active" || status == "degraded"
+}
+```
+
+`AppState.decoyDeviceIPs`, which decides what gets hidden from the device
+inventory, disagrees:
+
+```swift
+guard decoy.decoyType == "mimic", decoy.status == "active" else { return nil }
+```
+
+A degraded mimic keeps its `lo0` alias. When the degradation is a failed mDNS
+registration the listener is running normally, so the address is live but the
+app would not recognise it as a fake host.
+
+**Repro**
+
+```
+swift test --filter FunctionalGroupE
+```
+
+**Impact is limited today.** The sensor filters first, and its filter has a
+second clause the app does not:
+
+```sql
+AND NOT EXISTS (
+    SELECT 1 FROM virtual_ips vip
+    WHERE vip.ip_address = d.ip_address AND vip.released_at IS NULL
+)
+```
+
+An unreleased `virtual_ips` row covers a degraded mimic regardless of decoy
+status, so no device row reaches the app in the ordinary path. The app filter is
+a second line of defence, and it is the line that has the hole.
+
+**Why it still matters.** If a device row ever did arrive for a degraded mimic
+address, through a WebSocket device event racing deployment or any future change
+to the sensor filter, the app would render one of its own fake hosts to the user
+as a real device on their network. That is the specific outcome the filter
+exists to prevent.
+
+**Code:** [AppState.swift:143](../app/Sources/SquirrelOpsHome/State/AppState.swift),
+[Models.swift:842](../app/Sources/SquirrelOpsHome/Networking/Models.swift),
+[decoy_filter.py:7](../sensor/src/squirrelops_home_sensor/devices/decoy_filter.py)
+
+**Suggested direction.** Have `decoyDeviceIPs` use `isOperationalDeployment`
+rather than its own inline status check, so the two definitions cannot drift.
+
+---
+
+## Group E notes
+
+18 of 22 cases were already covered by 281 existing tests. Four modules had
+**zero** test references anywhere in the suite: `SensorAPICompatibility`,
+`HelperManager`, `SensorInstaller`, and `MacNotificationService`.
+
+E-14 now covers `SensorAPICompatibility`, the gate that refuses to talk to a
+sensor speaking a different API protocol. It had no tests at all despite being
+the check that prevents a version-mismatched app from misreading every response.
+It passes: only the exact protocol is accepted, a missing protocol is refused,
+and the error names both versions.
+
+`HelperManager` and `SensorInstaller` remain uncovered on purpose. Both install
+or inspect a privileged helper on the real system, so exercising them from a
+test would mutate the machine. They need a fixture that fakes the install root
+before they can be tested safely, which is more than a functional pass should
+take on.
 
 ---
 
