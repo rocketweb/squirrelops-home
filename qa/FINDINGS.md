@@ -11,9 +11,11 @@ Policy: **reported, not fixed.** No product code was changed.
 | Known defects (B-08, B-09, C-04, D-06, D-07, G-01, G-02) | 7 | 14 assertions | yes | 9 fail, 5 pass |
 | D, alert pipeline (D-01 to D-05, D-08 to D-14) | 12 | 14 assertions | yes | all pass |
 | B, mimic lifecycle (B-01 to B-07, B-10 to B-15) | 13 | 13 assertions | yes | all pass |
-| A, C, E, F, G, H, I, J remainder | 132 | not yet | no | pending |
+| C, isolation and PF, Python side (C-06, C-08, C-09, C-13 to C-16) | 7 | 27 assertions | yes | 4 fail, 23 pass |
+| C, PF rule builder (C-01 to C-03, C-05, C-07) | 5 | already covered | yes | 63 existing tests pass |
+| A, E, F, G, H, I, J remainder | 120 | not yet | no | pending |
 
-**Running total: 41 assertions, 9 failed, 32 passed.** The full sensor suite is
+**Running total: 68 assertions, 13 failed, 55 passed.** The full sensor suite is
 1934 passed with the same 9 failures, so the functional cases introduced no
 regressions.
 
@@ -24,8 +26,8 @@ DEF-003.
 `sensor/tests/functional/test_known_defects.py`, run with
 `.venv/bin/python -m pytest tests/functional/ -p no:randomly`.
 
-**9 failed, 5 passed.** Every failure below is a reproduction, not a broken
-test. The 5 passes are the control cases that show the assertions are sound.
+Every failure below is a reproduction, not a broken test. The passing cases are
+controls that show the assertions are sound.
 
 ---
 
@@ -194,6 +196,59 @@ the hole the comment forbids. Low severity today, latent risk.
 | B-08 | Host status is uniform when the mapping is populated |
 | C-04 (x3) | `direct_ports` empty, high ports redirected, quarantine denies all |
 | D-06 | A folded trip does publish `alert.updated` |
+
+---
+
+## DEF-005 (Low): the bind address is not validated before crossing to root
+
+**Case:** C-06. **4 failing assertions.**
+
+`PortForwardManager.add_forwards` validates ports thoroughly, rejecting zero,
+negative, out-of-range, duplicate, self-mapped, and overlapping values. It does
+not validate `bind_ip` at all. An empty string, `999.1.1.1`, `not-an-ip`, and an
+IPv6 literal are all accepted and forwarded to the privileged helper.
+
+**Repro**
+
+```
+.venv/bin/python -m pytest tests/functional/test_group_c_isolation.py::TestC06InvalidRulesRejected -p no:randomly
+```
+
+**Impact is limited, and this is not a hole.** The Swift helper does validate:
+`buildPFRules` calls `isValidIPv4` on every address and throws, and the existing
+"Rejects malformed rule data" and "IPv4 validation rejects ambiguous and
+malformed forms" tests confirm it. No malformed rule reaches pfctl.
+
+What is wrong is the shape. Ports fail fast in the sensor, addresses fail late
+in a root process, which is an inconsistent boundary. `xpc.py:275` forwards the
+payload unvalidated, and its `except Exception` turns the helper's specific
+rejection into a generic "Failed to set up port forwards via helper", so the
+operator sees no indication that an address was malformed.
+
+**Code:** [port_forward.py:82](../sensor/src/squirrelops_home_sensor/network/port_forward.py)
+validates ports but not `bind_ip`, [xpc.py:275](../sensor/src/squirrelops_home_sensor/privileged/xpc.py)
+forwards as-is.
+
+**Suggested direction.** Validate `bind_ip` alongside the port checks, so an
+invalid address never crosses the privilege boundary and the error names itself.
+
+---
+
+## Group C notes
+
+C-16 passes. The Linux sidecar rejects every malformed protected endpoint and
+enforces its bounded-payload limits, which is the same job the Swift helper does
+on macOS.
+
+C-01, C-02, C-03, C-05, and C-07 needed no new tests. `PFIsolationTests.swift`
+already covers them with 63 passing tests, including redirect-pass and
+default-deny generation, ingress coverage, duplicate endpoint merging, and
+malformed rule rejection.
+
+**Process note.** The coverage review compared the plan against the *source*
+surface and not against *existing test* coverage. That is why five Group C cases
+were planned as new work when they were already covered. Later groups should
+check the existing suites first.
 
 ---
 
