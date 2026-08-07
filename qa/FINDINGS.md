@@ -4,48 +4,43 @@ Branch: `bugfix/decoy-status-defects` (off `origin/main` @ acf1cf4)
 Run date: 2026-08-07
 Policy: **reported, not fixed.** No product code was changed.
 
-## Execution status
-
-| Group | Cases planned | Implemented | Run | Result |
-|---|---|---|---|---|
-| Known defects (B-08, B-09, C-04, D-06, D-07, G-01, G-02) | 7 | 14 assertions | yes | 9 fail, 5 pass |
-| D, alert pipeline (D-01 to D-05, D-08 to D-14) | 12 | 14 assertions | yes | all pass |
-| B, mimic lifecycle (B-01 to B-07, B-10 to B-15) | 13 | 13 assertions | yes | all pass |
-| C, isolation and PF, Python side (C-06, C-08, C-09, C-13 to C-16) | 7 | 27 assertions | yes | 4 fail, 23 pass |
-| C, PF rule builder (C-01 to C-03, C-05, C-07) | 5 | already covered | yes | 63 existing tests pass |
-| H, scanning (H-03, H-05) | 2 | 6 assertions | yes | all pass |
-| H, remainder (H-01, H-02, H-04, H-06 to H-13) | 11 | already covered | yes | 134 existing tests |
-| A, API gaps (A-30, A-32, A-33, A-35, A-42, A-43) | 6 | 15 assertions | yes | all pass |
-| A, remainder | 37 | already covered | yes | 259 existing tests |
-| F, live system (F-01 to F-13) | 13 | 14 checks | yes | 9 pass, 0 fail, 5 need root |
-| E, app behavior (E-03, E-14) | 4 | 9 assertions | yes | 8 pass, 1 fail |
-| E, remainder | 18 | already covered | yes | 281 existing tests |
-| G-07 address redaction | 1 | 18 assertions | yes | 1 fail, 17 pass |
-| G, I, J remainder | 23 | already covered | yes | 200-plus existing tests |
-
-**Running total: 116 automated assertions (15 failed, 101 passed) plus 9 live
-checks passed.** The full sensor suite is
-1934 passed with the same 9 failures, so the functional cases introduced no
-regressions.
-
-Groups D and B produced **no new defects**. The alert pipeline behaves correctly
-apart from DEF-002, and the mimic lifecycle behaves correctly apart from
-DEF-003.
-
-`sensor/tests/functional/test_known_defects.py`, run with
-`.venv/bin/python -m pytest tests/functional/ -p no:randomly`.
-
-Every failure below is a reproduction, not a broken test. The passing cases are
-controls that show the assertions are sound.
+**7 defects confirmed. 4 candidate findings investigated and rejected.**
+116 automated assertions (15 fail, 101 pass) plus 9 live checks, across the full
+product. The 15 failures are all reproductions of the 7 defects.
 
 ---
 
+## Triage
+
+Ordered by what to do first, not by discovery order.
+
+| # | Sev | Defect | Effort | Notes |
+|---|---|---|---|---|
+| **DEF-001** | Critical | `GET /config` returns every stored credential | **none** | Fix already written on PR #23. Merge and ship. |
+| **DEF-002** | High | Rolling decoy-trip alerts notify once, then go silent | design | Needs a decision on what an update notification means. Not a one-line fix. |
+| **DEF-003** | Medium | Status read during registration invents a failure | small | Reorder two statements at three sites. |
+| **DEF-007** | Medium | Unpadded MAC reaches a cloud LLM unredacted | small + audit | Regex fix is trivial. The audit it implies is not. |
+| **DEF-005** | Low | Bind address unvalidated before crossing to root | small | Add one check beside the existing port checks. |
+| **DEF-006** | Low | The app holds two definitions of a live mimic | small | Reuse `isOperationalDeployment`. |
+| **DEF-004** | Low | Unreachable branch weakens a default-deny | small | Delete, after checking the Linux path. |
+
+Recommended sequence: DEF-001 (already done, just merge), then DEF-003, DEF-005,
+DEF-006, DEF-004 as a single cleanup pass, then DEF-007 and its audit, then
+DEF-002 once its behavior is decided.
+
+**Cross-cutting:** DEF-007 is the third appearance of one wrong assumption. See
+[The MAC padding assumption](#the-mac-padding-assumption).
+
+---
+
+# Defects
+
 ## DEF-001 (Critical): config endpoint returns every stored credential
 
-**Case:** G-01. **Confirms:** KD-4. **5 failing assertions.**
+**Case:** G-01. **5 failing assertions.**
 
-`GET /config` returns the sensor configuration verbatim. Four separate secrets
-come back in plaintext to any paired client:
+`GET /config` returns the sensor configuration verbatim. Four secrets come back
+in plaintext to any paired client:
 
 | Secret | Config path |
 |---|---|
@@ -56,30 +51,27 @@ come back in plaintext to any paired client:
 
 `GET /config/alert-methods` returns the webhook as well.
 
-**Repro**
+**Impact.** The macOS app caches API responses through `URLCache`, which writes
+them unencrypted to `~/Library/Caches/com.squirrelops.home/Cache.db`. That file
+is mode 644 and owned by the user, so any process running as that user reads
+every credential without ever holding the client certificate. Confirmed by
+extraction on this machine during the session.
+
+**Code:** [routes_config.py:270](../sensor/src/squirrelops_home_sensor/api/routes_config.py)
+returns `config` directly.
+
+**Status.** A fix exists on `security/redact-config-secrets`, PR #23, unmerged.
+It is not on this branch, so these failures are the correct result for main.
 
 ```
 .venv/bin/python -m pytest tests/functional/test_known_defects.py::TestG01ConfigDoesNotReturnSecrets -p no:randomly
 ```
 
-**Impact.** The macOS app caches API responses through `URLCache`, which writes
-them unencrypted to `~/Library/Caches/com.squirrelops.home/Cache.db`. That file
-is mode 644 and owned by the user, so any process running as that user reads
-every credential without ever holding the client certificate. Confirmed by
-extraction on this machine earlier in the session.
-
-**Code:** [routes_config.py:270](../sensor/src/squirrelops_home_sensor/api/routes_config.py)
-returns `config` directly.
-
-**Note.** A fix exists on `security/redact-config-secrets`, PR #23, unmerged. It
-is not on this branch, so these failures are expected here and are the correct
-result for main.
-
 ---
 
 ## DEF-002 (High): rolling decoy-trip alerts notify once, then go silent
 
-**Case:** D-07. **Confirms:** KD-3. **1 failing assertion.**
+**Case:** D-07. **1 failing assertion.**
 
 `AlertDispatcher.subscribe_to` subscribes to `["alert.new"]` only.
 `DecoyAlertHandler._create_or_update_trip_alert` folds every repeat trip from a
@@ -89,15 +81,9 @@ subscriber consumes.
 D-06 passes and proves the event is published, so the gap is on the consuming
 side, not the producing side.
 
-**Repro**
-
-```
-.venv/bin/python -m pytest tests/functional/test_known_defects.py::TestD07UpdatedAlertsAreDelivered -p no:randomly
-```
-
 **Impact.** An intrusion produces exactly one notification, on the first
 connection. Observed live: alert 312 accumulated 1195 connections over 10 days
-across 24 decoys and 31 endpoints and sent one Slack message, on the first hit.
+across 24 decoys and 31 endpoints, and sent one Slack message.
 
 It also self-perpetuates. The fold-in query matches
 `WHERE read_at IS NULL AND actioned_at IS NULL`, so an uncleared alert keeps
@@ -106,16 +92,21 @@ absorbing hits and can never fire again. Clearing it re-arms notification.
 **Code:** [dispatcher.py:91](../sensor/src/squirrelops_home_sensor/alerts/dispatcher.py),
 [decoy_handler.py:305](../sensor/src/squirrelops_home_sensor/alerts/decoy_handler.py)
 
-**Not a one-line fix.** Adding `alert.updated` to the subscribe list would
-notify on every connection in a scan burst. The fix has to decide what an update
-notification means, most likely re-notify on severity increase or on a new
-endpoint, with rate limiting.
+**Why this needs a decision, not a patch.** Adding `alert.updated` to the
+subscribe list would notify on every connection in a scan burst, which is worse
+than silence. The fix has to define what an update notification means, most
+likely re-notify on severity increase or on a newly seen endpoint, with rate
+limiting.
+
+```
+.venv/bin/python -m pytest tests/functional/test_known_defects.py::TestD07UpdatedAlertsAreDelivered -p no:randomly
+```
 
 ---
 
 ## DEF-003 (Medium): status read during registration invents a failure
 
-**Case:** B-09. **Confirms:** KD-1. **1 failing assertion.**
+**Case:** B-09. **1 failing assertion.**
 
 ```
 assert 'degraded' == 'active'
@@ -146,185 +137,37 @@ persisted status stays `active`.
 B-08 passes with the mapping populated, which isolates the cause to the window
 rather than to the status logic.
 
-**Repro**
-
-```
-.venv/bin/python -m pytest tests/functional/test_known_defects.py::TestB09NoFalseDegradedDuringRegistration -p no:randomly
-```
-
 **Impact.** Transient false DEGRADED in the Scouts screen. Cosmetic, but it
 erodes trust in the one screen meant to report deception health, and the silent
-`.get(decoy_id, decoy_id)` default means a genuinely missing mapping is
+`.get(decoy_id, decoy_id)` default makes a genuinely missing mapping
 indistinguishable from a real failure.
 
 **Code:** [orchestrator.py:231](../sensor/src/squirrelops_home_sensor/scouts/orchestrator.py),
 sites at 1393, 3114, 3826.
 
 **Suggested direction.** Populate the mapping before publishing into
-`_active_mimics` so no await separates them. Three sites, no behavior change
-otherwise. Separately, consider making the missing-mapping case explicit rather
+`_active_mimics`, so no await separates them. Three sites, no other behavior
+change. Separately, consider making the missing-mapping case explicit rather
 than defaulting.
 
-**Caveat.** This reproduces the mechanism. It does not prove it caused the
+**Caveat.** This reproduces the mechanism. It does **not** prove it caused the
 mixed-status screenshot from 2026-08-03, whose decoy rows no longer exist. That
 screenshot showed 3 active and 2 degraded on one host, whereas this race
 predicts 1 active with the rest degraded. Either a second cause exists or the
 screenshot caught a different transition.
 
----
-
-## DEF-004 (Low): unreachable branch weakens a default-deny
-
-**Case:** C-04. **Confirms:** KD-2. **3 passing tests characterize it.**
-
-Not a behavior defect. The PF rules are correct and the tests confirm it:
-`direct_ports` is empty from both macOS call sites, every advertised port is
-redirected through `rdr pass`, and high ports get no special treatment.
-
-The finding is that `buildPFRules` carries a
-`pass in quick ... proto tcp ... port { … }` branch that no macOS caller can
-reach, because `direct_ports` is hardcoded empty at
-[port_forward.py:158](../sensor/src/squirrelops_home_sensor/network/port_forward.py)
-with a comment explaining that directly allowing a virtual-IP port would let a
-wildcard-bound host daemon answer on the decoy address.
-
-**Impact.** Dead code that, if ever fed a non-empty list, would punch exactly
-the hole the comment forbids. Low severity today, latent risk.
-
-**Code:** [RPCMethods.swift:1486](../app/Sources/SquirrelOpsHelper/RPCMethods.swift)
-
-**Before removing:** check `privileged/linux_sidecar.py`, which also accepts
-`direct_ports` and may legitimately use it.
-
----
-
-## Passing control cases
-
-| Case | Confirms |
-|---|---|
-| B-08 | Host status is uniform when the mapping is populated |
-| C-04 (x3) | `direct_ports` empty, high ports redirected, quarantine denies all |
-| D-06 | A folded trip does publish `alert.updated` |
-
----
-
-## DEF-005 (Low): the bind address is not validated before crossing to root
-
-**Case:** C-06. **4 failing assertions.**
-
-`PortForwardManager.add_forwards` validates ports thoroughly, rejecting zero,
-negative, out-of-range, duplicate, self-mapped, and overlapping values. It does
-not validate `bind_ip` at all. An empty string, `999.1.1.1`, `not-an-ip`, and an
-IPv6 literal are all accepted and forwarded to the privileged helper.
-
-**Repro**
-
 ```
-.venv/bin/python -m pytest tests/functional/test_group_c_isolation.py::TestC06InvalidRulesRejected -p no:randomly
+.venv/bin/python -m pytest tests/functional/test_known_defects.py::TestB09NoFalseDegradedDuringRegistration -p no:randomly
 ```
 
-**Impact is limited, and this is not a hole.** The Swift helper does validate:
-`buildPFRules` calls `isValidIPv4` on every address and throws, and the existing
-"Rejects malformed rule data" and "IPv4 validation rejects ambiguous and
-malformed forms" tests confirm it. No malformed rule reaches pfctl.
-
-What is wrong is the shape. Ports fail fast in the sensor, addresses fail late
-in a root process, which is an inconsistent boundary. `xpc.py:275` forwards the
-payload unvalidated, and its `except Exception` turns the helper's specific
-rejection into a generic "Failed to set up port forwards via helper", so the
-operator sees no indication that an address was malformed.
-
-**Code:** [port_forward.py:82](../sensor/src/squirrelops_home_sensor/network/port_forward.py)
-validates ports but not `bind_ip`, [xpc.py:275](../sensor/src/squirrelops_home_sensor/privileged/xpc.py)
-forwards as-is.
-
-**Suggested direction.** Validate `bind_ip` alongside the port checks, so an
-invalid address never crosses the privilege boundary and the error names itself.
-
 ---
 
-## Group C notes
-
-C-16 passes. The Linux sidecar rejects every malformed protected endpoint and
-enforces its bounded-payload limits, which is the same job the Swift helper does
-on macOS.
-
-C-01, C-02, C-03, C-05, and C-07 needed no new tests. `PFIsolationTests.swift`
-already covers them with 63 passing tests, including redirect-pass and
-default-deny generation, ingress coverage, duplicate endpoint merging, and
-malformed rule rejection.
-
-**Process note.** The coverage review compared the plan against the *source*
-surface and not against *existing test* coverage. That is why five Group C cases
-were planned as new work when they were already covered. Later groups should
-check the existing suites first.
-
----
-
-## Group H notes, and a correction to my own coverage review
-
-Group H produced no defects, and almost all of it was already covered.
-
-| Planned case | Already covered by |
-|---|---|
-| H-01 two-phase scan | `single_scan_creates_devices_from_arp`, `single_scan_enriches_with_ports` |
-| H-02 port-scan failure | `port_scan_failure_doesnt_block_devices` |
-| H-04 ARP conflicts | `ip_conflicts_are_reconciled_before_device_filtering`, `same_mac_multi_ip_is_quarantined` |
-| H-06 concurrency bound | `semaphore_limits_concurrent_connections` |
-| H-07 per-port timeout | `unreachable_host_times_out`, `overall_scan_completes_in_bounded_time` |
-| H-08 banner probing | 14 tests in `test_port_scanner_banners.py` |
-| H-09, H-10 discovery | 8 mDNS browser and 17 SSDP tests |
-| H-11, H-12 restart | `load_restores_devices`, `no_duplicate_db_rows_across_restart` |
-| H-13 decoys excluded | `system_mimics_are_never_scanned_by_the_sensor` |
-
-**The coverage review was wrong about this.** It recorded "whole `scanner/`
-package untouched" as the single largest gap and justified adding 13 cases. The
-package has 134 existing tests. That claim came from reading the source tree and
-never opening the test tree, the same mistake that inflated Group C.
-
-Two cases were genuinely missing and are now covered:
-
-- **H-03.** `normalize_mac` had nine tests and none for the unpadded octet form
-  macOS `arp -an` emits, such as `ae:29:a:e5:cc:c5`. That is a previously fixed
-  defect in this project with no regression guard. The behavior is correct, and
-  now it is pinned.
-- **H-05.** Nothing asserted that `_local_interface_macs` returns normalized
-  values. If it ever stopped, comparison against scan results would silently
-  fail to match and the sensor would flag itself as an ARP conflict. Correct
-  today, now pinned.
-
----
-
-## Group A notes
-
-No defects. 37 of 43 cases were already covered by 259 existing tests across
-`test_routes_*.py`, `test_ws.py`, and the api_auth unit files. Checking the test
-tree first, as the Group C and H corrections taught, meant six cases were
-written instead of forty-three.
-
-The thin spot was scouts: 9 tests for 8 endpoints, against 38 to 52 per router
-elsewhere, and skewed toward failure paths. `/scouts/profiles` had no coverage
-at all.
-
-Highest-value addition is **A-42**, a systematic authentication sweep. It reads
-every path and method from the OpenAPI schema, subtracts the deliberately
-unauthenticated ones, and asserts each remaining route answers 401 or 403 with
-no client certificate. Today that is five point tests covering a 53-endpoint
-surface. The sweep covers 30-plus routes and, more importantly, will cover any
-route added later without anyone remembering to write a test for it. It passes.
-
-Also added: `/ports/probe` input validation including a check that the sensor
-cannot be pointed at a public address, unknown-route handling that does not leak
-tracebacks or module paths, and scout profile listing.
-
----
-
-## DEF-007 (Medium): an unpadded MAC is not redacted before reaching a cloud LLM
+## DEF-007 (Medium): unpadded MAC reaches a cloud LLM unredacted
 
 **Case:** G-07. **1 failing assertion.**
 
-`_sanitize_signal` strips addresses out of device signals before they are sent
-to a cloud classifier. It misses the unpadded MAC form:
+`_sanitize_signal` strips addresses out of device signals before they are sent to
+a cloud classifier. It misses the unpadded MAC form:
 
 ```
 _sanitize_signal("host AE:29:A:E5:CC:C5 here")  ->  unchanged
@@ -339,59 +182,65 @@ _sanitize_signal("host AE:29:0A:E5:CC:C5 here") ->  redacted
 
 The IPv4 pattern beside it is written flexibly as `\d{1,3}`, so the rigidity is
 specific to the MAC branch. The IPv6 candidate pattern does match the string,
-but `_redact_ipv6` only redacts when `ipaddress` parses it as real IPv6, and a
+but `_redact_ipv6` only redacts what `ipaddress` parses as real IPv6, and a
 six-group MAC does not parse, so it is returned unchanged.
 
-**Repro**
-
-```
-.venv/bin/python -m pytest tests/functional/test_group_gij.py -p no:randomly
-```
-
-**Impact.** `_sanitize_signal` is applied to values explicitly labelled
+**Impact.** `_sanitize_signal` is applied to values the code explicitly labels
 untrusted: DNS hostname, mDNS hostname, and other device-supplied strings at
 llm_classifier.py lines 176, 182, and 212. A device on the LAN chooses its own
-mDNS hostname. Advertising one that contains an unpadded MAC puts that address
+mDNS hostname. Advertising one containing an unpadded MAC puts that address
 verbatim into an outbound prompt to a third-party API.
 
 The stored `mac_oui` goes through `normalize_mac` first and is padded, so the
 primary path is safe. This is the untrusted-input path, which is the one the
 control exists for.
 
-**This is the third instance of the same assumption in one session.** macOS
-`arp -an` emits unpadded octets, and code that assumes padding keeps breaking on
-it:
-
-1. `normalize_mac` handles it correctly, but had no regression guard until H-03
-2. `qa/live/check.sh` F-09 hit it and falsely reported 10 host collisions
-3. `_FULL_MAC_RE` here, which is an actual defect
-
 **Code:** [llm_classifier.py:62](../sensor/src/squirrelops_home_sensor/devices/llm_classifier.py)
 
 **Suggested direction.** Allow one or two hex digits per octet in the MAC
-branch, or run untrusted values through `normalize_mac` before matching. A
-project-wide audit for the padding assumption looks worthwhile given three hits.
+branch, or run untrusted values through `normalize_mac` before matching. Then
+see the cross-cutting note below.
+
+```
+.venv/bin/python -m pytest tests/functional/test_group_gij.py -p no:randomly
+```
 
 ---
 
-## Group G, I, J notes
+## DEF-005 (Low): bind address unvalidated before crossing to root
 
-I and J needed no new tests. Already covered by 31 db schema, 40 db query, 25
-event bus, 22 matcher, 19 composite, 11 classifier, 9 baseline, and 10 port-risk
-tests. `prune_orphaned_events` is covered in `test_entry_point.py` and
-`reencrypt_store` in `test_secret_store.py`, both of which the earlier count
-missed.
+**Case:** C-06. **4 failing assertions.**
 
-Group G was covered apart from G-07, which had **one** assertion guarding it.
+`PortForwardManager.add_forwards` validates ports thoroughly, rejecting zero,
+negative, out-of-range, duplicate, self-mapped, and overlapping values. It does
+not validate `bind_ip` at all. An empty string, `999.1.1.1`, `not-an-ip`, and an
+IPv6 literal are all accepted and forwarded to the privileged helper.
 
-Two deliberate non-defects are pinned so a future fix cannot overcorrect: a
-vendor string such as `Ubiquiti Networks` must survive redaction, and a
-four-part firmware version like `1.2.3` must not be mistaken for an address.
-Blanket redaction would leave the classifier with nothing to classify on.
+**This is not a hole.** The Swift helper does validate: `buildPFRules` calls
+`isValidIPv4` on every address and throws, confirmed by the existing "Rejects
+malformed rule data" and "IPv4 validation rejects ambiguous and malformed forms"
+tests. No malformed rule reaches pfctl.
+
+What is wrong is the shape. Ports fail fast in the sensor, addresses fail late
+in a root process, which is an inconsistent boundary. `xpc.py:275` forwards the
+payload unvalidated, and its `except Exception` turns the helper's specific
+rejection into a generic "Failed to set up port forwards via helper", so the
+operator sees no indication that an address was malformed.
+
+**Code:** [port_forward.py:82](../sensor/src/squirrelops_home_sensor/network/port_forward.py)
+validates ports but not `bind_ip`,
+[xpc.py:275](../sensor/src/squirrelops_home_sensor/privileged/xpc.py) forwards as-is.
+
+**Suggested direction.** Validate `bind_ip` alongside the port checks, so an
+invalid address never crosses the privilege boundary and the error names itself.
+
+```
+.venv/bin/python -m pytest tests/functional/test_group_c_isolation.py::TestC06InvalidRulesRejected -p no:randomly
+```
 
 ---
 
-## DEF-006 (Low): the app has two definitions of a live mimic
+## DEF-006 (Low): the app holds two definitions of a live mimic
 
 **Case:** E-03. **1 failing assertion.**
 
@@ -414,12 +263,6 @@ A degraded mimic keeps its `lo0` alias. When the degradation is a failed mDNS
 registration the listener is running normally, so the address is live but the
 app would not recognise it as a fake host.
 
-**Repro**
-
-```
-swift test --filter FunctionalGroupE
-```
-
 **Impact is limited today.** The sensor filters first, and its filter has a
 second clause the app does not:
 
@@ -431,14 +274,13 @@ AND NOT EXISTS (
 ```
 
 An unreleased `virtual_ips` row covers a degraded mimic regardless of decoy
-status, so no device row reaches the app in the ordinary path. The app filter is
-a second line of defence, and it is the line that has the hole.
+status, so no device row reaches the app in the ordinary path.
 
-**Why it still matters.** If a device row ever did arrive for a degraded mimic
+**Why it still matters.** The app filter is the second line of defence, and it is
+the line with the hole. If a device row ever did arrive for a degraded mimic
 address, through a WebSocket device event racing deployment or any future change
 to the sensor filter, the app would render one of its own fake hosts to the user
-as a real device on their network. That is the specific outcome the filter
-exists to prevent.
+as a real device. That is the specific outcome the filter exists to prevent.
 
 **Code:** [AppState.swift:143](../app/Sources/SquirrelOpsHome/State/AppState.swift),
 [Models.swift:842](../app/Sources/SquirrelOpsHome/Networking/Models.swift),
@@ -447,81 +289,156 @@ exists to prevent.
 **Suggested direction.** Have `decoyDeviceIPs` use `isOperationalDeployment`
 rather than its own inline status check, so the two definitions cannot drift.
 
----
-
-## Group E notes
-
-18 of 22 cases were already covered by 281 existing tests. Four modules had
-**zero** test references anywhere in the suite: `SensorAPICompatibility`,
-`HelperManager`, `SensorInstaller`, and `MacNotificationService`.
-
-E-14 now covers `SensorAPICompatibility`, the gate that refuses to talk to a
-sensor speaking a different API protocol. It had no tests at all despite being
-the check that prevents a version-mismatched app from misreading every response.
-It passes: only the exact protocol is accepted, a missing protocol is refused,
-and the error names both versions.
-
-`HelperManager` and `SensorInstaller` remain uncovered on purpose. Both install
-or inspect a privileged helper on the real system, so exercising them from a
-test would mutate the machine. They need a fixture that fakes the install root
-before they can be tested safely, which is more than a functional pass should
-take on.
+```
+swift test --filter FunctionalGroupE
+```
 
 ---
 
-## Group F notes
+## DEF-004 (Low): unreachable branch weakens a default-deny
 
-No defects. `qa/live/check.sh` is read-only and mutates nothing.
+**Case:** C-04. **Characterized by 3 passing tests.**
 
-Passing against the live install: sensor running as `_squirrelops`, both
-LaunchDaemons present, API demanding a client certificate on 8443, version
-matching `release-components.json`, `_squirrelops._tcp` advertised, no virtual
-IP answered by a foreign host, helper socket `root:_squirrelops:660`, log
-directory mode 700.
+Not a behavior defect. The PF rules are correct and the tests confirm it:
+`direct_ports` is empty from both macOS call sites, every advertised port is
+redirected through `rdr pass`, and high ports get no special treatment.
 
-Five checks need root and are skipped rather than prompting. Run the whole
-script with `sudo bash qa/live/check.sh` to execute F-05, F-06, F-08, F-10, and
-F-11, which read the sensor database.
+The finding is that `buildPFRules` carries a
+`pass in quick ... proto tcp ... port { … }` branch no macOS caller can reach,
+because `direct_ports` is hardcoded empty at
+[port_forward.py:158](../sensor/src/squirrelops_home_sensor/network/port_forward.py)
+with a comment explaining that directly allowing a virtual-IP port would let a
+wildcard-bound host daemon answer on the decoy address.
 
-**Two script defects were found and fixed, not reported.** Both are worth
-recording because they are the same class of bug the product has been bitten by.
+**Impact.** Dead code that, if ever fed a non-empty list, would punch exactly the
+hole the comment forbids. Low severity today, latent risk.
 
-- **F-09 falsely reported all 10 virtual IPs as colliding with a foreign host.**
-  `arp -n` emits unpadded octets (`1c:1d:d3:e0:7d:3`) while `ifconfig` pads them
-  (`1c:1d:d3:e0:7d:03`), so string comparison made the Mac's own address look
-  foreign on every alias. This is precisely the trap H-03 now pins in
-  `normalize_mac`, reproduced independently in my own script an hour after
-  writing the regression test for it. The script now normalizes both sides.
-- **F-13 falsely reported mode 700 as world-readable.** `stat -f '%Lp'` prints
-  octal digits, and bash arithmetic read `700` as decimal, where bit 2 happens
-  to be set. Fixed with `8#$mode`.
+**Code:** [RPCMethods.swift:1486](../app/Sources/SquirrelOpsHelper/RPCMethods.swift)
 
-Had either been reported rather than investigated, the findings list would carry
-two fabricated defects, one of them alarming.
+**Before removing:** check `privileged/linux_sidecar.py`, which also accepts
+`direct_ports` and may legitimately use it.
 
 ---
 
-## Two false defects avoided
+# The MAC padding assumption
+
+DEF-007 is not an isolated bug. macOS `arp -an` emits unpadded octets
+(`ae:29:a:e5:cc:c5`), and code that assumes two hex digits keeps breaking on it.
+Three independent hits in a single session:
+
+| Where | Outcome |
+|---|---|
+| `normalize_mac` | Handles it correctly, but had **no regression guard** until H-03 added one |
+| `qa/live/check.sh` F-09 | My own script hit it and falsely reported 10 host collisions |
+| `_FULL_MAC_RE` | **DEF-007**, an actual defect |
+
+Three hits from three directions suggests the assumption is worth auditing
+project-wide rather than patching one site. Any comparison, regex, or lookup
+that consumes a MAC from a system tool rather than from `normalize_mac` is a
+candidate.
+
+---
+
+# Investigated and rejected
 
 Recorded because a report-only suite is only worth reading if its failures are
-trustworthy, and both of these failed first and looked real.
+trustworthy. All four failed first and looked real.
 
-- **Hostname collision.** B-13 initially failed, appearing to show that a
-  colliding mimic hostname was reused. The test had seeded `decoys` rows only.
-  `_unique_generated_hostname` checks `decoy_hosts`, a different table, so no
-  collision existed to detect. Test corrected, behavior is right.
-- **Sensor hostname reuse.** A second B-13 case appeared to show the sensor's
-  own hostname could be handed to a mimic. That guard lives in
-  `_observed_real_hostnames`, not in the generator. The test was asserting
-  against the wrong function. Corrected, and the guard is present.
+| Candidate | Why it was rejected |
+|---|---|
+| Colliding mimic hostname reused | Test seeded `decoys` rows only. `_unique_generated_hostname` checks `decoy_hosts`, a different table, so no collision existed to detect. Behavior is correct. |
+| Sensor hostname available to a mimic | The guard lives in `_observed_real_hostnames`, not the generator. Test asserted against the wrong function. Guard is present. |
+| 10 virtual IPs colliding with a foreign host | `qa/live/check.sh` compared `arp -n` output against `ifconfig` without normalizing. The "foreign" MAC was the Mac's own. Script fixed. |
+| Log directory world-readable at mode 700 | `stat -f '%Lp'` prints octal and bash arithmetic read `700` as decimal, where bit 2 is set. Script fixed with `8#$mode`. |
 
 Several other early failures were foreign-key errors from incomplete seeding,
 notably `decoys.host_id` referencing `decoy_hosts` and `home_alerts.event_seq`
 referencing `events`. All were test defects and none are reported here.
 
-## Not yet run
+Had the four above been reported rather than investigated, this document would
+carry seven real defects and four fabricated ones, with no way to tell them
+apart.
 
-132 of 164 planned cases. Groups A, C, E, F, H, I, J are unimplemented, plus
-part of G. Nothing in this document should be read as a clean bill of health for
-those areas. In particular the entire `scanner/` package, which is the sensor's
-primary job, has no functional coverage yet.
+---
+
+# Coverage record
+
+## What ran
+
+| Group | Planned | New assertions | Result |
+|---|---|---|---|
+| Known defects | 7 | 14 | 9 fail, 5 pass |
+| D, alert pipeline | 12 | 14 | all pass |
+| B, mimic lifecycle | 13 | 13 | all pass |
+| C, isolation and PF | 12 | 27 | 4 fail, 23 pass |
+| H, scanning | 13 | 6 | all pass |
+| A, API surface | 43 | 15 | all pass |
+| E, app behavior | 22 | 9 | 1 fail, 8 pass |
+| G, security | 12 | 18 | 1 fail, 17 pass |
+| I, data layer | 8 | 0 | already covered |
+| J, device intelligence | 8 | 0 | already covered |
+| F, live system | 13 | 14 checks | 9 pass, 5 need root |
+
+**Totals: 116 automated assertions, 15 fail, 101 pass, plus 9 live checks.**
+The full sensor suite runs 1934 passed with the same failures, so the functional
+cases introduced no regressions.
+
+## Already covered, so not rewritten
+
+The plan's 164 cases collapsed to roughly 40 genuinely new ones once checked
+against the existing suites.
+
+| Area | Existing coverage found |
+|---|---|
+| PF rule builder | 63 tests in `PFIsolationTests.swift` |
+| Scanner package | 134 tests across 6 files |
+| API surface | 259 tests across `test_routes_*.py`, `test_ws.py`, api_auth |
+| App behavior | 281 tests in `SquirrelOpsHomeTests` |
+| Data layer and device intelligence | 200-plus tests |
+
+## Deliberately not covered
+
+- **SwiftUI view bodies.** Rendering is not meaningfully unit-testable here. The
+  state each view derives from is covered instead.
+- **`HelperManager`, `SensorInstaller`.** Both install or inspect a privileged
+  helper on the real system, so exercising them would mutate the machine. They
+  need a fixture that fakes the install root first.
+- **`linux_sidecar.py` PF path.** Out of scope for a macOS install, but flagged
+  under DEF-004 because `direct_ports` may be live there.
+- **Live network scanning.** Group H uses fixtures. A live scan would be
+  non-deterministic and would touch neighbouring devices.
+
+## Live checks needing root
+
+F-05, F-06, F-08, F-10, and F-11 read the sensor database and are skipped rather
+than prompting. Run the whole script with root to execute them:
+
+```
+sudo bash qa/live/check.sh
+```
+
+---
+
+# Method notes
+
+Two corrections to the coverage review, both recorded because they changed how
+much of the plan was real work.
+
+**The review checked the source tree, not the test tree.** It named "whole
+`scanner/` package untouched" as the single largest gap and justified 13 cases.
+The package has 134 existing tests, and 11 of the 13 were already covered, often
+by tests with near-identical names. The same mistake inflated Group C by 5 cases.
+Once corrected, Group A produced 6 new cases instead of 43.
+
+**Worth keeping regardless of the correction:** A-42, a systematic
+authentication sweep. It reads every path and method from the OpenAPI schema,
+subtracts the deliberately unauthenticated ones, and asserts each remaining
+route answers 401 or 403 without a client certificate. Authentication was five
+point tests over a 53-endpoint surface. The sweep covers 30-plus routes and will
+cover any route added later without anyone remembering to write a test. It
+passes.
+
+Also newly pinned, all passing, all previously unguarded: `normalize_mac`
+zero-padding (H-03), `_local_interface_macs` normalization (H-05), and
+`SensorAPICompatibility` (E-14), the gate that refuses a sensor speaking a
+different API protocol and had no tests at all.
