@@ -17,9 +17,11 @@ Policy: **reported, not fixed.** No product code was changed.
 | H, remainder (H-01, H-02, H-04, H-06 to H-13) | 11 | already covered | yes | 134 existing tests |
 | A, API gaps (A-30, A-32, A-33, A-35, A-42, A-43) | 6 | 15 assertions | yes | all pass |
 | A, remainder | 37 | already covered | yes | 259 existing tests |
-| E, F, G, I, J remainder | 64 | not yet | no | pending |
+| F, live system (F-01 to F-13) | 13 | 14 checks | yes | 9 pass, 0 fail, 5 need root |
+| E, G, I, J remainder | 51 | not yet | no | pending |
 
-**Running total: 89 assertions, 13 failed, 76 passed.** The full sensor suite is
+**Running total: 89 automated assertions (13 failed, 76 passed) plus 9 live
+checks passed.** The full sensor suite is
 1934 passed with the same 9 failures, so the functional cases introduced no
 regressions.
 
@@ -311,6 +313,38 @@ route added later without anyone remembering to write a test for it. It passes.
 Also added: `/ports/probe` input validation including a check that the sensor
 cannot be pointed at a public address, unknown-route handling that does not leak
 tracebacks or module paths, and scout profile listing.
+
+---
+
+## Group F notes
+
+No defects. `qa/live/check.sh` is read-only and mutates nothing.
+
+Passing against the live install: sensor running as `_squirrelops`, both
+LaunchDaemons present, API demanding a client certificate on 8443, version
+matching `release-components.json`, `_squirrelops._tcp` advertised, no virtual
+IP answered by a foreign host, helper socket `root:_squirrelops:660`, log
+directory mode 700.
+
+Five checks need root and are skipped rather than prompting. Run the whole
+script with `sudo bash qa/live/check.sh` to execute F-05, F-06, F-08, F-10, and
+F-11, which read the sensor database.
+
+**Two script defects were found and fixed, not reported.** Both are worth
+recording because they are the same class of bug the product has been bitten by.
+
+- **F-09 falsely reported all 10 virtual IPs as colliding with a foreign host.**
+  `arp -n` emits unpadded octets (`1c:1d:d3:e0:7d:3`) while `ifconfig` pads them
+  (`1c:1d:d3:e0:7d:03`), so string comparison made the Mac's own address look
+  foreign on every alias. This is precisely the trap H-03 now pins in
+  `normalize_mac`, reproduced independently in my own script an hour after
+  writing the regression test for it. The script now normalizes both sides.
+- **F-13 falsely reported mode 700 as world-readable.** `stat -f '%Lp'` prints
+  octal digits, and bash arithmetic read `700` as decimal, where bit 2 happens
+  to be set. Fixed with `8#$mode`.
+
+Had either been reported rather than investigated, the findings list would carry
+two fabricated defects, one of them alarming.
 
 ---
 
