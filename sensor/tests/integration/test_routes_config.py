@@ -4,6 +4,8 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from squirrelops_home_sensor.api.config_secrets import REDACTED
+
 
 class TestGetConfig:
     """GET /config -- full sensor configuration."""
@@ -398,7 +400,7 @@ class TestUpdateAlertMethods:
         )
         assert response.status_code == 200
 
-    def test_update_alert_methods_changes_config(self, client):
+    def test_update_alert_methods_changes_config(self, client, sensor_config):
         client.put(
             "/config/alert-methods",
             json={"slack": {"enabled": True, "webhook_url": "https://hooks.slack.com/test"}},
@@ -406,7 +408,13 @@ class TestUpdateAlertMethods:
         response = client.get("/config/alert-methods")
         data = response.json()
         assert data["slack"]["enabled"] is True
-        assert data["slack"]["webhook_url"] == "https://hooks.slack.com/test"
+        # The webhook is a secret, so the response only confirms it is set.
+        # Assert the stored value to prove the update actually landed.
+        assert data["slack"]["webhook_url"] == REDACTED
+        assert (
+            sensor_config["alert_methods"]["slack"]["webhook_url"]
+            == "https://hooks.slack.com/test"
+        )
 
     def test_update_alert_methods_preserves_other_methods(self, client):
         client.put(
@@ -528,3 +536,176 @@ class TestHAStatus:
         data = response.json()
         assert data["connected"] is False
         assert data["device_count"] == 0
+
+
+class TestSecretRedaction:
+    """Config responses must not carry credentials to disk-caching clients."""
+
+    @staticmethod
+    def _seed_secrets(sensor_config):
+        sensor_config["home_assistant"] = {
+            "enabled": True,
+            "url": "http://192.168.1.20:8123",
+            "token": "eyJhbGciOiJIUzI1NiJ9.real-ha-token",
+        }
+        sensor_config["classifier"] = {
+            "mode": "cloud",
+            "llm_provider": "fireworks",
+            "llm_api_key": "fw-real-api-key",
+        }
+        sensor_config["sensor"]["secret_passphrase"] = "real-passphrase"
+        sensor_config["alert_methods"]["slack"] = {
+            "enabled": True,
+            "min_severity": "low",
+            "include_device_info": False,
+            "webhook_url": "https://hooks.slack.com/services/T1/B2/real-secret",
+        }
+        return sensor_config
+
+    def test_get_config_redacts_every_secret(self, client, sensor_config):
+        self._seed_secrets(sensor_config)
+        data = client.get("/config").json()
+        assert data["home_assistant"]["token"] == REDACTED
+        assert data["classifier"]["llm_api_key"] == REDACTED
+        assert data["sensor"]["secret_passphrase"] == REDACTED
+        assert data["alert_methods"]["slack"]["webhook_url"] == REDACTED
+
+    def test_get_config_still_returns_non_secret_fields(self, client, sensor_config):
+        self._seed_secrets(sensor_config)
+        data = client.get("/config").json()
+        assert data["home_assistant"]["url"] == "http://192.168.1.20:8123"
+        assert data["alert_methods"]["slack"]["enabled"] is True
+        assert data["subnet"] == "192.168.1.0/24"
+
+    def test_get_config_does_not_mutate_the_live_config(self, client, sensor_config):
+        self._seed_secrets(sensor_config)
+        client.get("/config")
+        assert sensor_config["home_assistant"]["token"].endswith("real-ha-token")
+
+    def test_unset_secret_is_not_reported_as_configured(self, client, sensor_config):
+        sensor_config["alert_methods"]["slack"] = {"enabled": False, "webhook_url": ""}
+        data = client.get("/config").json()
+        assert data["alert_methods"]["slack"]["webhook_url"] == ""
+
+    def test_config_responses_are_not_cacheable(self, client):
+        assert client.get("/config").headers["cache-control"] == "no-store"
+        assert client.get("/config/alert-methods").headers["cache-control"] == "no-store"
+
+    def test_get_alert_methods_redacts_webhook(self, client, sensor_config):
+        self._seed_secrets(sensor_config)
+        data = client.get("/config/alert-methods").json()
+        assert data["slack"]["webhook_url"] == REDACTED
+        assert data["slack"]["enabled"] is True
+
+
+class TestSecretWriteBack:
+    """Echoing a redacted value back must never destroy the stored secret."""
+
+    def test_put_config_marker_preserves_stored_secret(self, client, sensor_config):
+        sensor_config["home_assistant"] = {
+            "enabled": True,
+            "url": "http://192.168.1.20:8123",
+            "token": "real-ha-token",
+        }
+        response = client.put(
+            "/config",
+            json={"home_assistant": {"enabled": False, "token": REDACTED}},
+        )
+        assert response.status_code == 200
+        assert sensor_config["home_assistant"]["token"] == "real-ha-token"
+        assert sensor_config["home_assistant"]["enabled"] is False
+
+    def test_put_config_real_value_still_updates(self, client, sensor_config):
+        sensor_config["home_assistant"] = {
+            "enabled": True,
+            "url": "http://192.168.1.20:8123",
+            "token": "old-token",
+        }
+        client.put("/config", json={"home_assistant": {"token": "new-token"}})
+        assert sensor_config["home_assistant"]["token"] == "new-token"
+
+    def test_put_config_response_is_redacted(self, client, sensor_config):
+        sensor_config["home_assistant"] = {
+            "enabled": True,
+            "url": "http://192.168.1.20:8123",
+            "token": "real-ha-token",
+        }
+        data = client.put("/config", json={"home_assistant": {"enabled": True}}).json()
+        assert data["home_assistant"]["token"] == REDACTED
+
+    def test_settings_screen_round_trip_keeps_the_webhook(self, client, sensor_config):
+        """The exact SettingsView flow: GET, then PUT the whole slack section.
+
+        SettingsView seeds its state from the GET response and writes the whole
+        method back whenever any field changes, so the marker comes straight
+        back. This is the regression that makes redaction safe to ship.
+        """
+        sensor_config["alert_methods"]["slack"] = {
+            "enabled": True,
+            "min_severity": "low",
+            "include_device_info": False,
+            "webhook_url": "https://hooks.slack.com/services/T1/B2/real-secret",
+        }
+        fetched = client.get("/config/alert-methods").json()
+        assert fetched["slack"]["webhook_url"] == REDACTED
+
+        response = client.put(
+            "/config/alert-methods",
+            json={
+                "slack": {
+                    "enabled": True,
+                    "min_severity": "high",
+                    "include_device_info": False,
+                    "webhook_url": fetched["slack"]["webhook_url"],
+                }
+            },
+        )
+        assert response.status_code == 200
+        stored = sensor_config["alert_methods"]["slack"]
+        assert stored["webhook_url"].endswith("/real-secret")
+        assert stored["min_severity"] == "high"
+        assert response.json()["slack"]["webhook_url"] == REDACTED
+
+    def test_put_alert_methods_real_webhook_still_updates(self, client, sensor_config):
+        sensor_config["alert_methods"]["slack"] = {
+            "enabled": True,
+            "webhook_url": "https://hooks.slack.com/services/old",
+        }
+        client.put(
+            "/config/alert-methods",
+            json={"slack": {"enabled": True, "webhook_url": "https://hooks.slack.com/services/new"}},
+        )
+        assert sensor_config["alert_methods"]["slack"]["webhook_url"].endswith("/new")
+
+    def test_empty_webhook_still_clears_the_secret(self, client, sensor_config):
+        sensor_config["alert_methods"]["slack"] = {
+            "enabled": True,
+            "webhook_url": "https://hooks.slack.com/services/old",
+        }
+        client.put(
+            "/config/alert-methods",
+            json={"slack": {"enabled": False, "webhook_url": ""}},
+        )
+        assert sensor_config["alert_methods"]["slack"]["webhook_url"] == ""
+
+    def test_marker_is_never_written_to_disk(self, client, sensor_config):
+        sensor_config["alert_methods"]["slack"] = {
+            "enabled": True,
+            "webhook_url": "https://hooks.slack.com/services/T1/B2/real-secret",
+        }
+        client.put(
+            "/config/alert-methods",
+            json={"slack": {"enabled": True, "webhook_url": REDACTED}},
+        )
+        persisted = Path(sensor_config["sensor"]["data_dir"]) / "config.yaml"
+        text = persisted.read_text()
+        assert REDACTED not in text
+        assert "real-secret" in text
+
+    def test_marker_without_a_stored_secret_is_dropped(self, client, sensor_config):
+        sensor_config["alert_methods"]["slack"] = {"enabled": False}
+        client.put(
+            "/config/alert-methods",
+            json={"slack": {"enabled": True, "webhook_url": REDACTED}},
+        )
+        assert "webhook_url" not in sensor_config["alert_methods"]["slack"]
