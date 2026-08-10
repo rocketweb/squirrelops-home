@@ -39,9 +39,6 @@ struct SettingsView: View {
     @State private var autoApproveThreshold: String = "0.75"
     @State private var slackIncludeDeviceInfo = false
     @State private var credentialFilename: String = "passwords.txt"
-    @State private var updateStatus: String = ""
-    @State private var updateURL: URL?
-    @State private var isCheckingUpdates = false
 
     // Home Assistant
     @State private var haEnabled = false
@@ -570,7 +567,28 @@ struct SettingsView: View {
                 infoRow("URL", value: sensor.baseURL.absoluteString)
             }
             if let info = appState.sensorInfo {
-                infoRow("Sensor Version", value: info.version ?? "Unknown")
+                if let sensorUpdate = appState.updateChecker
+                    .update(forComponentVersion: info.version) {
+                    HStack(alignment: .top, spacing: Spacing.sm) {
+                        Text("Sensor Version")
+                            .font(Typography.caption)
+                            .tracking(Typography.captionTracking)
+                            .foregroundStyle(Theme.textTertiary(colorScheme))
+                            .frame(width: 100, alignment: .trailing)
+
+                        VStack(alignment: .leading, spacing: Spacing.xs) {
+                            Text(info.version ?? "Unknown")
+                                .font(Typography.bodySmall)
+                                .foregroundStyle(Theme.textPrimary(colorScheme))
+                            Text("Sensor update available: v\(sensorUpdate.version)")
+                                .font(Typography.bodySmall)
+                                .foregroundStyle(Theme.statusWarning(colorScheme))
+                        }
+                        Spacer()
+                    }
+                } else {
+                    infoRow("Sensor Version", value: info.version ?? "Unknown")
+                }
                 infoRow("Uptime", value: formatUptime(info.uptimeSeconds))
             }
         }
@@ -601,106 +619,48 @@ struct SettingsView: View {
                 .foregroundStyle(Theme.textTertiary(colorScheme))
 
             Button {
-                isCheckingUpdates = true
-                updateStatus = ""
-                updateURL = nil
-                Task {
-                    await checkForGitHubUpdates()
-                    isCheckingUpdates = false
-                }
+                Task { await appState.updateChecker.check(force: true) }
             } label: {
                 HStack {
-                    if isCheckingUpdates {
+                    if appState.updateChecker.isChecking {
                         ProgressView()
                             .controlSize(.small)
                     }
                     Text("Check for Updates")
                 }
             }
-            .disabled(isCheckingUpdates)
+            .disabled(appState.updateChecker.isChecking)
 
-            if !updateStatus.isEmpty {
-                if let url = updateURL {
-                    VStack(alignment: .leading, spacing: Spacing.sm) {
-                        Text(updateStatus)
-                            .font(Typography.bodySmall)
-                            .foregroundStyle(Theme.statusWarning(colorScheme))
-
-                        Link(destination: url) {
-                            HStack(spacing: Spacing.xs) {
-                                Image(systemName: "arrow.down.circle")
-                                Text("Download from GitHub")
-                            }
-                            .font(Typography.bodySmall)
-                        }
-                    }
-                } else {
-                    Text(updateStatus)
+            switch appState.updateChecker.result {
+            case .available(let update):
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("Update available: v\(update.version) (you have v\(Self.distributionVersion))")
                         .font(Typography.bodySmall)
-                        .foregroundStyle(Theme.textSecondary(colorScheme))
+                        .foregroundStyle(Theme.statusWarning(colorScheme))
+
+                    Link(destination: update.url) {
+                        HStack(spacing: Spacing.xs) {
+                            Image(systemName: "arrow.down.circle")
+                            Text("Download from GitHub")
+                        }
+                        .font(Typography.bodySmall)
+                    }
                 }
+            case .upToDate(let current):
+                Text("You're up to date (v\(current)).")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+            case .failed(let message):
+                Text(message)
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+            case .skipped, .none:
+                EmptyView()
             }
         }
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
-    }
-
-    private func checkForGitHubUpdates() async {
-        let currentVersion = Self.distributionVersion
-        let apiURL = URL(string: "https://api.github.com/repos/rocketweb/squirrelops-home/releases/latest")!
-
-        var request = URLRequest(url: apiURL)
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 15
-
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                updateStatus = "Could not reach GitHub. Try again later."
-                return
-            }
-
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let tagName = json["tag_name"] as? String,
-                  let htmlURL = json["html_url"] as? String else {
-                updateStatus = "Unexpected response from GitHub."
-                return
-            }
-
-            // Strip leading "v" from tag (e.g. "v1.2.0" -> "1.2.0")
-            let latestVersion: String
-            if tagName.hasPrefix("home-v") {
-                latestVersion = String(tagName.dropFirst("home-v".count))
-            } else if tagName.hasPrefix("v") {
-                latestVersion = String(tagName.dropFirst())
-            } else {
-                latestVersion = tagName
-            }
-
-            if isNewerVersion(latestVersion, than: currentVersion) {
-                updateStatus = "Update available: v\(latestVersion) (you have v\(currentVersion))"
-                updateURL = URL(string: htmlURL)
-            } else {
-                updateStatus = "You're up to date (v\(currentVersion))."
-                updateURL = nil
-            }
-        } catch {
-            updateStatus = "Check failed: \(error.localizedDescription)"
-        }
-    }
-
-    /// Compare two semver version strings. Returns true if `a` is newer than `b`.
-    private func isNewerVersion(_ a: String, than b: String) -> Bool {
-        let partsA = a.split(separator: ".").compactMap { Int($0) }
-        let partsB = b.split(separator: ".").compactMap { Int($0) }
-        for i in 0..<max(partsA.count, partsB.count) {
-            let va = i < partsA.count ? partsA[i] : 0
-            let vb = i < partsB.count ? partsB[i] : 0
-            if va > vb { return true }
-            if va < vb { return false }
-        }
-        return false
     }
 
     private func infoRow(_ label: String, value: String) -> some View {

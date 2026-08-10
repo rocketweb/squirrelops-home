@@ -53,7 +53,6 @@ PROTECTED_FIELDS = {
     "profile",
     "profiles",
     "pairing",
-    "update_manifest_url",
 }
 
 # Keys inside the "sensor" section that are immutable at runtime: they decide
