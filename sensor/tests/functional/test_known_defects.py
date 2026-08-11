@@ -39,12 +39,6 @@ def _seed_secrets(sensor_config):
     sensor_config["sensor"]["secret_passphrase"] = "functional-passphrase"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "DEF-001 is fixed on branch security/redact-config-secrets (PR #23), not on this branch. Expected to fail until that merges, at which point these xpass and the marker should be removed."
-    ),
-    strict=False,
-)
 class TestG01ConfigDoesNotReturnSecrets:
     """G-01: GET /config must not hand credentials to any client."""
 
@@ -74,12 +68,6 @@ class TestG01ConfigDoesNotReturnSecrets:
         assert "hooks.slack.com/services/T1/B2/functional" not in body
 
 
-@pytest.mark.xfail(
-    reason=(
-        "DEF-001 is fixed on branch security/redact-config-secrets (PR #23), not on this branch. Expected to fail until that merges, at which point these xpass and the marker should be removed."
-    ),
-    strict=False,
-)
 class TestG02ConfigIsNotCacheable:
     """G-02: config responses must not be written to a client-side cache."""
 
@@ -220,44 +208,7 @@ class TestB08HostStatusIsUniform:
 
 
 class TestB09NoFalseDegradedDuringRegistration:
-    """B-09: a status read racing registration must not invent a failure.
-
-    The original version hand-built the state the window produced: a mimic in
-    _active_mimics with its siblings unmapped. That state is now unreachable in
-    production, so asserting on it tested a situation the fix removes rather
-    than the fix itself. This asserts the ordering guarantee instead.
-    """
-
-    @pytest.mark.asyncio
-    async def test_the_mimic_is_not_published_before_its_services_are_mapped(
-        self, db
-    ):
-        orch = _orchestrator_for_status(monkeypatch=None, db=db,
-                                        verified_ips={"192.168.1.200"})
-        primary = 100
-        observed = {}
-
-        original = orch._refresh_service_mapping
-
-        async def observing_refresh(decoy_id):
-            # If the mimic is already published here, every sibling resolves to
-            # itself for the duration of this await and reports degraded.
-            observed["published_during_mapping"] = decoy_id in orch._active_mimics
-            orch._service_to_primary[decoy_id] = decoy_id
-            orch._service_to_primary[decoy_id + 1] = decoy_id
-            return []
-
-        orch._refresh_service_mapping = observing_refresh
-        await orch._refresh_service_mapping(primary)
-        orch._active_mimics[primary] = SimpleNamespace(
-            bind_address="192.168.1.200", name="office.local"
-        )
-        orch._refresh_service_mapping = original
-
-        assert observed["published_during_mapping"] is False, (
-            "the mimic must not be visible while its service mapping is still "
-            "being resolved"
-        )
+    """B-09: mapped siblings of an operational host stay operational."""
 
     @pytest.mark.asyncio
     async def test_a_mapped_sibling_is_active_once_registration_completes(

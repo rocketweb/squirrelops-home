@@ -1,10 +1,12 @@
 # SquirrelOps Home: Defect Findings
 
-Branch: `bugfix/decoy-status-defects` (off `origin/main` @ acf1cf4)
+Originally produced on `bugfix/decoy-status-defects` (off `origin/main` @ acf1cf4).
+All confirmed fixes are now integrated on `hardening-and-bugfix-260810`.
 Run date: 2026-08-07
 Original policy: reported, not fixed. **DEF-002 through DEF-007 were
-subsequently fixed on this branch at the maintainer's request.** DEF-001 is
-fixed on PR #23 and is untouched here.
+subsequently fixed at the maintainer's request.** DEF-001 is also integrated,
+including the additional push-token and provider-switch remediation found in
+the follow-up review.
 
 **7 defects confirmed. 4 candidate findings investigated and rejected.**
 116 automated assertions (15 fail, 101 pass) plus 9 live checks, across the full
@@ -18,7 +20,7 @@ Ordered by what to do first, not by discovery order.
 
 | # | Sev | Defect | Effort | Notes |
 |---|---|---|---|---|
-| **DEF-001** | Critical | `GET /config` returns every stored credential | open | Fixed on PR #23. Merge and ship. Not on this branch. |
+| **DEF-001** | Critical | `GET /config` returns every stored credential | **fixed** | Responses fail closed, write-back preserves secrets, and vault persistence covers push tokens. |
 | **DEF-002** | High | Rolling decoy-trip alerts notify once, then go silent | **fixed** | Embeds a behavior decision. See the note below. |
 | **DEF-003** | Medium | Status read during registration invents a failure | **fixed** | Mapping now published before the mimic, three sites. |
 | **DEF-007** | Medium | Unpadded MAC reaches a cloud LLM unredacted | **fixed** | Regex accepts one or two digits per octet. Audit still open. |
@@ -90,8 +92,9 @@ extraction on this machine during the session.
 **Code:** [routes_config.py:270](../sensor/src/squirrelops_home_sensor/api/routes_config.py)
 returns `config` directly.
 
-**Status.** A fix exists on `security/redact-config-secrets`, PR #23, unmerged.
-It is not on this branch, so these failures are the correct result for main.
+**Status.** Fixed on `hardening-and-bugfix-260810`. Config responses are
+non-cacheable and redacted, alert methods fail closed for unfamiliar fields,
+and known credentials are removed from plaintext YAML persistence.
 
 ```
 .venv/bin/python -m pytest tests/functional/test_known_defects.py::TestG01ConfigDoesNotReturnSecrets -p no:randomly

@@ -18,6 +18,8 @@ HELPER_DEST="/Library/PrivilegedHelperTools/$HELPER_BUNDLE_ID"
 PLIST_DEST="/Library/LaunchDaemons/${HELPER_BUNDLE_ID}.plist"
 HELPER_STATE_DIR="/var/db/com.squirrelops.helper"
 HELPER_REQUIREMENT="identifier \"${HELPER_BUNDLE_ID}\" and anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_TEAM_ID}\""
+LOCAL_TEST_MARKER="$APP_PATH/Contents/Resources/com.squirrelops.local-test-build"
+LOCAL_TEST_BUILD=0
 HELPER_TEMP=""
 PLIST_TEMP=""
 
@@ -30,6 +32,37 @@ cleanup_staged_files() {
     fi
 }
 trap cleanup_staged_files EXIT
+
+if [ -e "$LOCAL_TEST_MARKER" ]; then
+    if [ -L "$LOCAL_TEST_MARKER" ] || [ ! -f "$LOCAL_TEST_MARKER" ] \
+        || ! /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+    then
+        echo "[app-postinstall] Local test marker or app signature is invalid." >&2
+        exit 1
+    fi
+    if ! APP_SIGNATURE=$(
+        /usr/bin/codesign -d --verbose=4 "$APP_PATH" 2>&1
+    ) || ! printf '%s\n' "$APP_SIGNATURE" \
+        | /usr/bin/grep -Fxq 'Signature=adhoc'
+    then
+        echo "[app-postinstall] Local test build must use an ad-hoc app signature." >&2
+        exit 1
+    fi
+    LOCAL_TEST_BUILD=1
+    echo "[app-postinstall] Installing explicit ad-hoc local test build." >&2
+fi
+
+verify_local_test_helper() {
+    local path="$1"
+    local signature
+    /usr/bin/codesign --verify --strict --verbose=2 "$path" || return 1
+    signature=$(/usr/bin/codesign -d --verbose=4 "$path" 2>&1) || return 1
+    printf '%s\n' "$signature" \
+        | /usr/bin/grep -Fxq "Identifier=${HELPER_BUNDLE_ID}" \
+        || return 1
+    printf '%s\n' "$signature" \
+        | /usr/bin/grep -Fxq 'Signature=adhoc'
+}
 
 path_has_no_extended_acl() {
     local path="$1"
@@ -88,11 +121,18 @@ then
     echo "[app-postinstall] Cannot secure the staged privileged helper." >&2
     exit 1
 fi
-if ! /usr/bin/codesign --verify --strict --verbose=2 \
-    -R "=${HELPER_REQUIREMENT}" "$HELPER_TEMP"
-then
-    echo "[app-postinstall] Staged helper has an untrusted code signature." >&2
-    exit 1
+if [ "$LOCAL_TEST_BUILD" = "1" ]; then
+    if ! verify_local_test_helper "$HELPER_TEMP"; then
+        echo "[app-postinstall] Staged local test helper signature is invalid." >&2
+        exit 1
+    fi
+else
+    if ! /usr/bin/codesign --verify --strict --verbose=2 \
+        -R "=${HELPER_REQUIREMENT}" "$HELPER_TEMP"
+    then
+        echo "[app-postinstall] Staged helper has an untrusted code signature." >&2
+        exit 1
+    fi
 fi
 if ! /bin/mv -fh "$HELPER_TEMP" "$HELPER_DEST"; then
     echo "[app-postinstall] Cannot install the verified helper." >&2
@@ -108,11 +148,18 @@ then
     echo "[app-postinstall] Installed helper ownership or file type is unsafe." >&2
     exit 1
 fi
-if ! /usr/bin/codesign --verify --strict --verbose=2 \
-    -R "=${HELPER_REQUIREMENT}" "$HELPER_DEST"
-then
-    echo "[app-postinstall] Installed helper signature verification failed." >&2
-    exit 1
+if [ "$LOCAL_TEST_BUILD" = "1" ]; then
+    if ! verify_local_test_helper "$HELPER_DEST"; then
+        echo "[app-postinstall] Installed local test helper signature verification failed." >&2
+        exit 1
+    fi
+else
+    if ! /usr/bin/codesign --verify --strict --verbose=2 \
+        -R "=${HELPER_REQUIREMENT}" "$HELPER_DEST"
+    then
+        echo "[app-postinstall] Installed helper signature verification failed." >&2
+        exit 1
+    fi
 fi
 if [ ! -x "$HELPER_DEST" ]; then
     echo "[app-postinstall] Installed helper is not executable." >&2

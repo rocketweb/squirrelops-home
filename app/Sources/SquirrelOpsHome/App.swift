@@ -81,10 +81,6 @@ struct SquirrelOpsHomeApp: App {
                     connectToSensor(sensor)
                 }
 
-                // Check for a new release at launch so a user finds out without
-                // having to open Settings and press a button. Throttled to once
-                // a day inside the checker, so relaunches do not re-request.
-                await appState.updateChecker.check()
             }
         }
         .defaultSize(width: 1080, height: 720)

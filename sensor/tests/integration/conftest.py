@@ -10,6 +10,28 @@ from squirrelops_home_sensor.events.bus import EventBus
 from squirrelops_home_sensor.events.log import EventLog
 
 
+class MemorySecretStore:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str) -> None:
+        self.values[key] = value
+
+    async def delete(self, key: str) -> None:
+        self.values.pop(key, None)
+
+    async def list_keys(self) -> list[str]:
+        return list(self.values)
+
+
+@pytest.fixture
+def secret_store():
+    return MemorySecretStore()
+
+
 @pytest_asyncio.fixture
 async def db():
     """Create an in-memory SQLite database with full schema."""
@@ -60,12 +82,13 @@ def sensor_config(tmp_path):
 
 
 @pytest.fixture
-def app(db, event_bus, sensor_config):
+def app(db, event_bus, sensor_config, secret_store):
     """Create a FastAPI app with dependency overrides for testing."""
     from squirrelops_home_sensor.api.deps import (
         get_config,
         get_db,
         get_event_bus,
+        get_secret_store,
         verify_client_cert,
     )
     from squirrelops_home_sensor.app import create_app
@@ -87,6 +110,7 @@ def app(db, event_bus, sensor_config):
     application.dependency_overrides[get_db] = override_db
     application.dependency_overrides[get_event_bus] = override_event_bus
     application.dependency_overrides[get_config] = override_config
+    application.dependency_overrides[get_secret_store] = lambda: secret_store
     application.dependency_overrides[verify_client_cert] = override_auth
 
     return application

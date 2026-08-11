@@ -27,6 +27,9 @@
 #   SQUIRRELOPS_RELEASE_BUILD
 #                         Set to "1" in release automation to require signing,
 #                         notarization, stapling, and Gatekeeper acceptance
+#   SQUIRRELOPS_LOCAL_TEST_BUILD
+#                         Set to "1" for an explicitly ad-hoc-signed package
+#                         that can be installed only for local testing
 #
 set -euo pipefail
 
@@ -77,11 +80,26 @@ INSTALLER_IDENTITY="${INSTALLER_IDENTITY:-Developer ID Installer}"
 SKIP_PKG_SIGNING="${SKIP_PKG_SIGNING:-0}"
 PRODUCTSIGN_TIMESTAMP="${PRODUCTSIGN_TIMESTAMP:-}"
 RELEASE_BUILD="${SQUIRRELOPS_RELEASE_BUILD:-0}"
+LOCAL_TEST_BUILD="${SQUIRRELOPS_LOCAL_TEST_BUILD:-0}"
 
 case "$RELEASE_BUILD" in
     0|1) ;;
     *) error "SQUIRRELOPS_RELEASE_BUILD must be 0 or 1." ;;
 esac
+case "$LOCAL_TEST_BUILD" in
+    0|1) ;;
+    *) error "SQUIRRELOPS_LOCAL_TEST_BUILD must be 0 or 1." ;;
+esac
+
+if [ "$LOCAL_TEST_BUILD" = "1" ]; then
+    if [ "$RELEASE_BUILD" = "1" ]; then
+        error "A release build cannot be a local test build."
+    fi
+    if [ -z "${SIGNING_IDENTITY+x}" ] \
+        || [ "$SIGNING_IDENTITY" = "Developer ID Application" ]; then
+        SIGNING_IDENTITY="-"
+    fi
+fi
 
 if [ "$RELEASE_BUILD" = "1" ]; then
     if [ "$SKIP_PKG_SIGNING" = "1" ]; then
@@ -213,6 +231,12 @@ validate_macho_arch "$HELPER_PATH" "$BUILD_ARCH"
 
 info "App built: $APP_BUNDLE"
 
+if [ "$LOCAL_TEST_BUILD" = "1" ]; then
+    info "Marking app bundle as an explicit local test build..."
+    /usr/bin/touch \
+        "$APP_BUNDLE/Contents/Resources/com.squirrelops.local-test-build"
+fi
+
 # ===========================================================================
 # Step 2: Sign the app
 # ===========================================================================
@@ -266,8 +290,9 @@ if [ "$BUILT_SENSOR_VERSION" != "$SENSOR_VERSION" ]; then
     error "Embedded sensor reports $BUILT_SENSOR_VERSION, expected $SENSOR_VERSION."
 fi
 
-if security find-identity -v -p codesigning 2>/dev/null \
-    | grep -Fq -- "$SIGNING_IDENTITY"; then
+if { [ "$LOCAL_TEST_BUILD" = "1" ] && [ "$SIGNING_IDENTITY" = "-" ]; } \
+    || security find-identity -v -p codesigning 2>/dev/null \
+        | grep -Fq -- "$SIGNING_IDENTITY"; then
     # Find all Mach-O binaries: .so, .dylib, and the Python interpreter
     MACHO_FILES=()
     while IFS= read -r -d '' f; do
@@ -297,11 +322,16 @@ if security find-identity -v -p codesigning 2>/dev/null \
 
     SIGN_FAIL=0
     for macho in "${MACHO_FILES[@]}"; do
-        if codesign --force \
-                --options runtime \
-                --sign "$SIGNING_IDENTITY" \
-                --timestamp \
-                "$macho" 2>/dev/null \
+        SIGN_NATIVE_ARGS=(codesign --force --sign "$SIGNING_IDENTITY")
+        if [ "$SIGNING_IDENTITY" != "-" ]; then
+            # Developer ID binaries share a Team ID, so Hardened Runtime
+            # library validation accepts the bundled standalone Python dylibs.
+            # Ad-hoc signatures have no shared Team ID; enabling runtime here
+            # would make the explicit local-test sensor unable to launch.
+            SIGN_NATIVE_ARGS+=(--options runtime --timestamp)
+        fi
+        SIGN_NATIVE_ARGS+=("$macho")
+        if "${SIGN_NATIVE_ARGS[@]}" 2>/dev/null \
             && codesign --verify --strict --verbose=2 "$macho" 2>/dev/null; then
             :
         else

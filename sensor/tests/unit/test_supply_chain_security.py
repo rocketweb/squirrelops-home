@@ -1032,6 +1032,7 @@ def test_release_workflow_is_manual_main_pinned_and_approval_gated() -> None:
     assert 'SENSOR_TAG="sensor-v${SENSOR_VERSION}"' in home_workflow
     assert "docker/build-push-action@" not in home_workflow
     assert "sensor-v${SENSOR_VERSION}" in sensor_workflow
+    assert "--latest=false" in sensor_workflow
     assert "docker/build-push-action@" in sensor_workflow
     assert "check-linux-release-boundary.py" in sensor_workflow
     assert "git/ref/tags/" in (REPO_ROOT / "scripts/check-release-controls.sh").read_text(

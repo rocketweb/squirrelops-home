@@ -110,6 +110,45 @@ class TestUpdateConfig:
         response = client.put("/config", json={})
         assert response.status_code == 200
 
+    def test_updates_are_rate_limited_per_authenticated_client(self, client):
+        with patch(
+            "squirrelops_home_sensor.api.routes_config.CONFIG_UPDATES_PER_MINUTE",
+            2,
+        ):
+            assert client.put("/config", json={"sensor_name": "One"}).status_code == 200
+            assert client.put("/config", json={"sensor_name": "Two"}).status_code == 200
+            limited = client.put("/config", json={"sensor_name": "Three"})
+        assert limited.status_code == 429
+
+    def test_successful_update_writes_value_free_audit_event(
+        self, client, db
+    ):
+        import asyncio
+        import json
+
+        response = client.put(
+            "/config",
+            json={
+                "home_assistant": {
+                    "enabled": True,
+                    "url": "http://192.168.1.2:8123",
+                    "token": "never-log-this-token",
+                }
+            },
+        )
+        assert response.status_code == 200
+        cursor = asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                "SELECT payload FROM events WHERE event_type = 'config.updated' "
+                "ORDER BY seq DESC LIMIT 1"
+            )
+        )
+        row = asyncio.get_event_loop().run_until_complete(cursor.fetchone())
+        payload = json.loads(row[0])
+        assert payload["client_name"] == "test-client"
+        assert payload["sections"] == ["home_assistant"]
+        assert "never-log-this-token" not in row[0]
+
     def test_update_cannot_change_sensor_data_dir(self, client):
         """data_dir governs where the DB, CA, and secret store live and must be
         immutable at runtime (otherwise a paired client redirects trust state)."""
@@ -223,7 +262,7 @@ class TestUpdateConfig:
         assert sensor_config.get("decoys", {}) == original_decoys
 
     def test_persisted_config_is_private_and_keeps_mutable_sensor_fields(
-        self, client, sensor_config
+        self, client, sensor_config, secret_store
     ):
         response = client.put(
             "/config",
@@ -242,7 +281,8 @@ class TestUpdateConfig:
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
         saved = path.read_text()
         assert "Renamed Sensor" in saved
-        assert "secret-token" in saved
+        assert "secret-token" not in saved
+        assert secret_store.values["config.home_assistant.token"] == "secret-token"
         assert "data_dir" not in saved
         assert "test-sensor-001" not in saved
 
@@ -367,6 +407,66 @@ class TestUpdateConfig:
         assert classifier["llm_endpoint"] == (
             "https://api.fireworks.ai/inference/v1"
         )
+        assert classifier["llm_api_key"] is None
+
+    def test_provider_switch_with_redaction_marker_does_not_reuse_previous_secret(
+        self,
+        client,
+        sensor_config,
+    ):
+        sensor_config["classifier"] = {
+            "mode": "cloud_llm",
+            "confidence_threshold": 0.70,
+            "llm_provider": "openrouter",
+            "llm_endpoint": "https://openrouter.ai/api/v1",
+            "llm_model": "provider/model",
+            "llm_api_key": "openrouter-secret",
+        }
+
+        response = client.put(
+            "/config",
+            json={
+                "classifier": {
+                    "llm_provider": "custom",
+                    "llm_endpoint": "https://attacker.invalid/v1",
+                    "llm_model": "model",
+                    "llm_api_key": REDACTED,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        classifier = sensor_config["classifier"]
+        assert classifier["llm_endpoint"] == "https://attacker.invalid/v1"
+        assert classifier["llm_api_key"] is None
+
+    def test_custom_endpoint_switch_with_marker_does_not_reuse_previous_secret(
+        self,
+        client,
+        sensor_config,
+    ):
+        sensor_config["classifier"] = {
+            "mode": "cloud_llm",
+            "confidence_threshold": 0.70,
+            "llm_provider": "custom",
+            "llm_endpoint": "https://trusted.example/v1",
+            "llm_model": "model",
+            "llm_api_key": "custom-secret",
+        }
+
+        response = client.put(
+            "/config",
+            json={
+                "classifier": {
+                    "llm_endpoint": "https://attacker.invalid/v1",
+                    "llm_api_key": REDACTED,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        classifier = sensor_config["classifier"]
+        assert classifier["llm_endpoint"] == "https://attacker.invalid/v1"
         assert classifier["llm_api_key"] is None
 
 
@@ -564,11 +664,18 @@ class TestSecretRedaction:
 
     def test_get_config_redacts_every_secret(self, client, sensor_config):
         self._seed_secrets(sensor_config)
+        sensor_config["alert_methods"]["push"] = {
+            "enabled": True,
+            "relay_token": "relay-secret",
+            "device_token": "device-secret",
+        }
         data = client.get("/config").json()
         assert data["home_assistant"]["token"] == REDACTED
         assert data["classifier"]["llm_api_key"] == REDACTED
         assert data["sensor"]["secret_passphrase"] == REDACTED
         assert data["alert_methods"]["slack"]["webhook_url"] == REDACTED
+        assert data["alert_methods"]["push"]["relay_token"] == REDACTED
+        assert data["alert_methods"]["push"]["device_token"] == REDACTED
 
     def test_get_config_still_returns_non_secret_fields(self, client, sensor_config):
         self._seed_secrets(sensor_config)
@@ -596,6 +703,18 @@ class TestSecretRedaction:
         data = client.get("/config/alert-methods").json()
         assert data["slack"]["webhook_url"] == REDACTED
         assert data["slack"]["enabled"] is True
+
+    def test_get_alert_methods_redacts_push_credentials(self, client, sensor_config):
+        sensor_config["alert_methods"]["push"] = {
+            "enabled": True,
+            "relay_url": "https://push.example/relay",
+            "relay_token": "relay-secret",
+            "device_token": "device-secret",
+        }
+        data = client.get("/config/alert-methods").json()
+        assert data["push"]["relay_url"] == "https://push.example/relay"
+        assert data["push"]["relay_token"] == REDACTED
+        assert data["push"]["device_token"] == REDACTED
 
 
 class TestSecretWriteBack:
@@ -666,6 +785,28 @@ class TestSecretWriteBack:
         assert stored["min_severity"] == "high"
         assert response.json()["slack"]["webhook_url"] == REDACTED
 
+    def test_partial_push_update_preserves_tokens(self, client, sensor_config):
+        sensor_config["alert_methods"]["push"] = {
+            "enabled": True,
+            "min_severity": "low",
+            "relay_url": "https://push.example/relay",
+            "relay_token": "relay-secret",
+            "device_token": "device-secret",
+        }
+
+        response = client.put(
+            "/config/alert-methods",
+            json={"push": {"enabled": False, "min_severity": "high"}},
+        )
+
+        assert response.status_code == 200
+        stored = sensor_config["alert_methods"]["push"]
+        assert stored["enabled"] is False
+        assert stored["relay_token"] == "relay-secret"
+        assert stored["device_token"] == "device-secret"
+        assert response.json()["push"]["relay_token"] == REDACTED
+        assert response.json()["push"]["device_token"] == REDACTED
+
     def test_put_alert_methods_real_webhook_still_updates(self, client, sensor_config):
         sensor_config["alert_methods"]["slack"] = {
             "enabled": True,
@@ -688,7 +829,9 @@ class TestSecretWriteBack:
         )
         assert sensor_config["alert_methods"]["slack"]["webhook_url"] == ""
 
-    def test_marker_is_never_written_to_disk(self, client, sensor_config):
+    def test_marker_is_never_written_to_disk(
+        self, client, sensor_config, secret_store
+    ):
         sensor_config["alert_methods"]["slack"] = {
             "enabled": True,
             "webhook_url": "https://hooks.slack.com/services/T1/B2/real-secret",
@@ -700,7 +843,11 @@ class TestSecretWriteBack:
         persisted = Path(sensor_config["sensor"]["data_dir"]) / "config.yaml"
         text = persisted.read_text()
         assert REDACTED not in text
-        assert "real-secret" in text
+        assert "real-secret" not in text
+        assert (
+            "https://hooks.slack.com/services/T1/B2/real-secret"
+            in secret_store.values.values()
+        )
 
     def test_marker_without_a_stored_secret_is_dropped(self, client, sensor_config):
         sensor_config["alert_methods"]["slack"] = {"enabled": False}

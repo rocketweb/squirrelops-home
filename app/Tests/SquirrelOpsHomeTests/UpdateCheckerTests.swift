@@ -14,10 +14,32 @@ struct UpdateCheckerTests {
 
     private static func releaseJSON(
         tag: String,
-        htmlURL: String = "https://github.com/rocketweb/squirrelops-home/releases/tag/x"
+        htmlURL: String? = nil,
+        draft: Bool = false,
+        prerelease: Bool = false
     ) -> Data {
-        let object: [String: Any] = ["tag_name": tag, "html_url": htmlURL]
+        let object: [[String: Any]] = [[
+            "tag_name": tag,
+            "html_url": htmlURL
+                ?? "https://github.com/rocketweb/squirrelops-home/releases/tag/\(tag)",
+            "draft": draft,
+            "prerelease": prerelease,
+        ]]
         return try! JSONSerialization.data(withJSONObject: object)
+    }
+
+    private static func releaseListJSON(
+        _ tags: [String]
+    ) -> Data {
+        let releases = tags.map { tag in
+            [
+                "tag_name": tag,
+                "html_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/\(tag)",
+                "draft": false,
+                "prerelease": false,
+            ] as [String: Any]
+        }
+        return try! JSONSerialization.data(withJSONObject: releases)
     }
 
     private static func httpResponse(_ status: Int) -> URLResponse {
@@ -40,7 +62,7 @@ struct UpdateCheckerTests {
     private static func makeChecker(
         currentVersion: String = "2.0.1",
         tag: String = "home-v2.0.1",
-        htmlURL: String = "https://github.com/rocketweb/squirrelops-home/releases/tag/x",
+        htmlURL: String? = nil,
         status: Int = 200,
         body: Data? = nil,
         error: Error? = nil,
@@ -72,7 +94,7 @@ struct UpdateCheckerTests {
         let result = await checker.check(force: true)
         #expect(result == .available(AvailableUpdate(
             version: "2.1.0",
-            url: URL(string: "https://github.com/rocketweb/squirrelops-home/releases/tag/x")!
+            url: URL(string: "https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.1.0")!
         )))
         #expect(checker.availableUpdate?.version == "2.1.0")
     }
@@ -92,16 +114,26 @@ struct UpdateCheckerTests {
         #expect(await checker.check(force: true) == .upToDate(current: "2.0.1"))
     }
 
-    @Test("Strips both known tag prefixes", arguments: [
-        ("home-v2.1.0", "2.1.0"),
-        ("v2.1.0", "2.1.0"),
-        ("2.1.0", "2.1.0"),
-    ])
+    @Test("Reads the Home distribution tag")
     @MainActor
-    func stripsTagPrefixes(tag: String, expected: String) async {
-        let checker = Self.makeChecker(currentVersion: "2.0.1", tag: tag)
+    func readsHomeTag() async {
+        let checker = Self.makeChecker(currentVersion: "2.0.1", tag: "home-v2.1.0")
         _ = await checker.check(force: true)
-        #expect(checker.availableUpdate?.version == expected)
+        #expect(checker.availableUpdate?.version == "2.1.0")
+    }
+
+    @Test("Ignores component releases and chooses the newest Home release")
+    @MainActor
+    func ignoresComponentReleases() async {
+        let body = Self.releaseListJSON([
+            "sensor-v9.0.0",
+            "home-v2.1.0",
+            "app-v8.0.0",
+            "home-v2.0.9",
+        ])
+        let checker = Self.makeChecker(currentVersion: "2.0.1", body: body)
+        _ = await checker.check(force: true)
+        #expect(checker.availableUpdate?.version == "2.1.0")
     }
 
     // MARK: - Failures
@@ -297,16 +329,15 @@ struct UpdateCheckerTests {
         #expect(checker.availableUpdate == nil)
     }
 
-    @Test("A newer release under an unfamiliar prefix is still detected")
+    @Test("A component-only release list fails instead of comparing unrelated versions")
     @MainActor
-    func unfamiliarPrefixStillCompares() async {
-        // The old parser dropped "sensor-v3" entirely, compared as 0.0, and
-        // told the user they were up to date.
+    func componentOnlyListFails() async {
         let checker = Self.makeChecker(currentVersion: "2.0.1", tag: "sensor-v3.0.0")
-        #expect(await checker.check(force: true) == .available(AvailableUpdate(
-            version: "3.0.0",
-            url: URL(string: "https://github.com/rocketweb/squirrelops-home/releases/tag/x")!
-        )))
+        guard case .failed = await checker.check(force: true) else {
+            Issue.record("a sensor release must not be treated as a Home update")
+            return
+        }
+        #expect(checker.availableUpdate == nil)
     }
 
     @Test("An unreadable installed version fails rather than comparing")
@@ -322,8 +353,56 @@ struct UpdateCheckerTests {
     @Test("Multi-digit patch versions compare numerically")
     @MainActor
     func multiDigitPatchComparesNumerically() async {
-        let checker = Self.makeChecker(currentVersion: "1.1.9", tag: "v1.1.14")
+        let checker = Self.makeChecker(currentVersion: "1.1.9", tag: "home-v1.1.14")
         _ = await checker.check(force: true)
         #expect(checker.availableUpdate?.version == "1.1.14")
+    }
+
+    // MARK: - Link validation
+
+    @Test("Rejects a non-GitHub release link from a fresh response")
+    @MainActor
+    func rejectsFreshUntrustedURL() async {
+        let checker = Self.makeChecker(
+            currentVersion: "2.0.1",
+            tag: "home-v2.1.0",
+            htmlURL: "https://attacker.invalid/download"
+        )
+        guard case .failed = await checker.check(force: true) else {
+            Issue.record("an untrusted update URL must fail closed")
+            return
+        }
+        #expect(checker.availableUpdate == nil)
+    }
+
+    @Test("Does not restore an untrusted persisted release link")
+    @MainActor
+    func rejectsPersistedUntrustedURL() {
+        let defaults = Self.volatileDefaults()
+        defaults.set("2.1.0", forKey: UpdateChecker.latestVersionDefaultsKey)
+        defaults.set(
+            "https://attacker.invalid/download",
+            forKey: UpdateChecker.latestURLDefaultsKey
+        )
+
+        let checker = UpdateChecker(currentVersion: "2.0.1", defaults: defaults)
+
+        #expect(checker.latestRelease == nil)
+        #expect(checker.availableUpdate == nil)
+    }
+
+    @Test("Does not restore an HTTP link for the expected repository")
+    @MainActor
+    func rejectsPersistedInsecureURL() {
+        let defaults = Self.volatileDefaults()
+        defaults.set("2.1.0", forKey: UpdateChecker.latestVersionDefaultsKey)
+        defaults.set(
+            "http://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.1.0",
+            forKey: UpdateChecker.latestURLDefaultsKey
+        )
+
+        let checker = UpdateChecker(currentVersion: "2.0.1", defaults: defaults)
+
+        #expect(checker.latestRelease == nil)
     }
 }

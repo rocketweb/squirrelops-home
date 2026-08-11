@@ -137,44 +137,28 @@ public final class AppState {
         presentedCriticalAlerts.first
     }
 
-    /// Shared release check. Owned here so the launch check and the Settings
-    /// button read and write the same state rather than each keeping their own.
+    /// Shared manual release check for Settings and the menu bar.
     public let updateChecker: UpdateChecker
 
-    /// Separately installed pieces that a release can leave behind.
+    /// The Home distribution is the only version represented by ``home-v*``.
     public enum UpdatableComponent: String, Sendable, CaseIterable {
-        case app
-        case sensor
+        case home
     }
 
-    /// Which installed components are behind the newest known release.
-    ///
-    /// The app and the sensor ship from one release but install separately, so
-    /// upgrading one can leave the other stale. The sensor version arrives over
-    /// the authenticated status call, which is why the sensor never has to
-    /// reach the network to find out it is out of date.
+    /// Whether the installed Home distribution is behind the newest Home release.
     public var outdatedComponents: [UpdatableComponent] {
-        var outdated: [UpdatableComponent] = []
-        if updateChecker.availableUpdate != nil { outdated.append(.app) }
-        if updateChecker.isOutOfDate(sensorInfo?.version) { outdated.append(.sensor) }
-        return outdated
+        updateChecker.availableUpdate == nil ? [] : [.home]
     }
 
-    /// The release to offer when anything is behind it.
+    /// The Home distribution release to offer when the installed package is behind.
     public var pendingUpdate: AvailableUpdate? {
-        guard !outdatedComponents.isEmpty, let release = updateChecker.latestRelease else {
-            return nil
-        }
-        return AvailableUpdate(version: release.version.description, url: release.url)
+        updateChecker.availableUpdate
     }
 
-    /// One line naming what is behind, for the menu bar.
+    /// One line for the menu bar.
     public var pendingUpdateSummary: String? {
         guard let pending = pendingUpdate else { return nil }
-        let outdated = outdatedComponents
-        if outdated.count > 1 { return "Update to v\(pending.version)" }
-        if outdated.first == .sensor { return "Update sensor to v\(pending.version)" }
-        return "Update app to v\(pending.version)"
+        return "Update SquirrelOps Home to v\(pending.version)"
     }
 
     public init(updateChecker: UpdateChecker = UpdateChecker()) {

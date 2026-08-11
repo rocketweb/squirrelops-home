@@ -11,9 +11,10 @@ from __future__ import annotations
 import base64
 import dataclasses
 import os
-import random
 import secrets
 import string
+
+_RNG = secrets.SystemRandom()
 
 # Word lists for password generation (adjective + noun pattern)
 _ADJECTIVES = [
@@ -142,7 +143,7 @@ class CredentialGenerator:
 
         Password format: adjective + noun + number(2-4 digits) + symbol.
         """
-        count = random.randint(8, 12)
+        count = _RNG.randint(8, 12)
         creds: list[GeneratedCredential] = []
         used_usernames: set[str] = set()
 
@@ -151,16 +152,16 @@ class CredentialGenerator:
             available = [u for u in _USERNAMES if u not in used_usernames]
             if not available:
                 # Fallback: append a number
-                username = f"user{random.randint(100, 999)}"
+                username = f"user{_RNG.randint(100, 999)}"
             else:
-                username = random.choice(available)
+                username = _RNG.choice(available)
             used_usernames.add(username)
 
             # Generate password: adjective + noun + number + symbol
-            adj = random.choice(_ADJECTIVES).capitalize()
-            noun = random.choice(_NOUNS).capitalize()
-            num = str(random.randint(10, 9999))
-            symbol = random.choice(_SYMBOLS)
+            adj = _RNG.choice(_ADJECTIVES).capitalize()
+            noun = _RNG.choice(_NOUNS).capitalize()
+            num = str(_RNG.randint(10, 9999))
+            symbol = _RNG.choice(_SYMBOLS)
             password = f"{adj}{noun}{num}{symbol}"
 
             value = self._ensure_unique(f"{username}:{password}")
@@ -203,10 +204,10 @@ class CredentialGenerator:
         No canary hostname (DB connection strings don't trigger DNS lookups
         to canary domains).
         """
-        user = random.choice(["admin", "appuser", "dbuser", "root", "service"])
+        user = _RNG.choice(["admin", "appuser", "dbuser", "root", "service"])
         password = secrets.token_urlsafe(16)
-        host = random.choice(_DB_HOSTS)
-        db_name = random.choice(_DB_NAMES)
+        host = _RNG.choice(_DB_HOSTS)
+        db_name = _RNG.choice(_DB_NAMES)
 
         port_map = {
             "postgresql": 5432,
@@ -297,8 +298,8 @@ class CredentialGenerator:
         }
 
         # Pick 5-8 env vars
-        count = random.randint(5, 8)
-        templates = random.sample(_ENV_VAR_TEMPLATES, count)
+        count = _RNG.randint(5, 8)
+        templates = _RNG.sample(_ENV_VAR_TEMPLATES, count)
 
         lines = ["# Application environment configuration", ""]
         for tmpl in templates:

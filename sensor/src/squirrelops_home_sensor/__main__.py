@@ -1047,6 +1047,24 @@ async def run_sensor(
 
     runtime = _RuntimeResources(config)
     try:
+        # Configuration credentials live in the encrypted store, not YAML.
+        # Existing plaintext values are migrated before any subsystem reads
+        # them, and the legacy YAML copy is scrubbed atomically.
+        from squirrelops_home_sensor.config_vault import (
+            hydrate_vaulted_config_secrets,
+            scrub_persisted_config_file,
+        )
+
+        secret_store = create_secret_store(config)
+        await hydrate_vaulted_config_secrets(config, secret_store)
+        config_data_dir = Path(
+            config.get("sensor", {}).get("data_dir", "./data")
+        )
+        if scrub_persisted_config_file(config_data_dir):
+            logger.warning(
+                "Migrated plaintext configuration credentials into encrypted storage"
+            )
+
         # 2. Open database
         data_dir = config.get("sensor", {}).get("data_dir", "./data")
         db = await open_db(Path(data_dir) / "squirrelops.db")
@@ -1071,7 +1089,6 @@ async def run_sensor(
         if not no_tls:
             from squirrelops_home_sensor.tls import ensure_tls_certs
 
-            secret_store = create_secret_store(config)
             data_dir_path = Path(config.get("sensor", {}).get("data_dir", "./data"))
             sensor_name = config.get("sensor", {}).get(
                 "name",
@@ -1153,6 +1170,9 @@ async def run_sensor(
         from squirrelops_home_sensor.api.deps import (
             get_privileged_ops as _get_priv_ops_dep,
         )
+        from squirrelops_home_sensor.api.deps import (
+            get_secret_store as _get_secret_store_dep,
+        )
         from squirrelops_home_sensor.api.routes_system import (
             get_scan_loop as _get_scan_loop_dep,
         )
@@ -1169,6 +1189,9 @@ async def run_sensor(
         async def _prod_get_priv_ops():
             return priv_ops
 
+        async def _prod_get_secret_store():
+            return secret_store
+
         async def _prod_get_scan_loop():
             return scan_loop
 
@@ -1176,6 +1199,7 @@ async def run_sensor(
         app.dependency_overrides[_get_config_dep] = _prod_get_config
         app.dependency_overrides[_get_event_bus_dep] = _prod_get_event_bus
         app.dependency_overrides[_get_priv_ops_dep] = _prod_get_priv_ops
+        app.dependency_overrides[_get_secret_store_dep] = _prod_get_secret_store
         app.dependency_overrides[_get_scan_loop_dep] = _prod_get_scan_loop
 
         # 7b2. Wire scouts API dependencies
@@ -1252,11 +1276,22 @@ async def run_sensor(
         # 8b. Start scouts subsystem (restore virtual IPs, resume mimics,
         # start scheduler).
         if scouts:
-            assert scout_scheduler is not None
-            assert mimic_orchestrator is not None
-            assert ip_manager is not None
-            assert mimic_mdns is not None
-            assert port_fwd is not None
+            missing_components = [
+                name
+                for name, component in (
+                    ("scheduler", scout_scheduler),
+                    ("orchestrator", mimic_orchestrator),
+                    ("IP manager", ip_manager),
+                    ("mDNS advertiser", mimic_mdns),
+                    ("port-forward manager", port_fwd),
+                )
+                if component is None
+            ]
+            if missing_components:
+                raise RuntimeError(
+                    "Squirrel Scouts initialization omitted: "
+                    + ", ".join(missing_components)
+                )
             if not await priv_ops.is_available():
                 raise RuntimeError("Squirrel Scouts require a compatible privileged helper")
 

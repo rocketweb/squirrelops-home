@@ -26,6 +26,7 @@ from typing import Protocol, runtime_checkable
 
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 from squirrelops_home_sensor.privileged.helper import PrivilegedOperations
+from squirrelops_home_sensor.subprocess_security import trusted_executable
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +135,12 @@ def _interface_ipv4_addresses(interface: str) -> list[str]:
     """Enumerate IPv4 addresses for one configured interface in OS order."""
     try:
         if sys.platform == "darwin":
-            command = ["/sbin/ifconfig", interface]
+            command = [trusted_executable("ifconfig"), interface]
         else:
-            command = ["ip", "-4", "-o", "addr", "show", "dev", interface]
+            command = [
+                trusted_executable("ip"),
+                "-4", "-o", "addr", "show", "dev", interface,
+            ]
         result = subprocess.run(
             command,
             capture_output=True,

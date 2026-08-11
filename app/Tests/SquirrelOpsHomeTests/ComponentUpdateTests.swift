@@ -2,16 +2,18 @@ import Foundation
 import Testing
 @testable import SquirrelOpsHome
 
-/// The app and the sensor ship from one release but install separately, so
-/// either can be behind while the other is current.
+/// Home distribution releases must not be compared with independent component
+/// versions.
 @Suite("ComponentUpdates")
 struct ComponentUpdateTests {
 
     private static func releaseJSON(tag: String) -> Data {
-        let object: [String: Any] = [
+        let object: [[String: Any]] = [[
             "tag_name": tag,
-            "html_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/x",
-        ]
+            "html_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/\(tag)",
+            "draft": false,
+            "prerelease": false,
+        ]]
         return try! JSONSerialization.data(withJSONObject: object)
     }
 
@@ -50,31 +52,29 @@ struct ComponentUpdateTests {
         return state
     }
 
-    @Test("Both behind reports both components")
+    @Test("An older Home distribution reports one Home update")
     @MainActor
-    func bothBehind() async {
+    func homeBehind() async {
         let state = await Self.makeState(appVersion: "2.0.1", sensorVersion: "2.0.1")
-        #expect(state.outdatedComponents == [.app, .sensor])
-        #expect(state.pendingUpdateSummary == "Update to v2.1.0")
+        #expect(state.outdatedComponents == [.home])
+        #expect(state.pendingUpdateSummary == "Update SquirrelOps Home to v2.1.0")
     }
 
-    @Test("App updated but sensor left behind is still reported")
+    @Test("An older sensor does not create a nonexistent Home update")
     @MainActor
-    func sensorOnlyBehind() async {
-        // The case this feature exists for: updating the app does not update
-        // the sensor, and nothing used to say so.
+    func sensorVersionIsIndependent() async {
         let state = await Self.makeState(appVersion: "2.1.0", sensorVersion: "2.0.1")
-        #expect(state.outdatedComponents == [.sensor])
-        #expect(state.pendingUpdateSummary == "Update sensor to v2.1.0")
-        #expect(state.pendingUpdate?.version == "2.1.0")
+        #expect(state.outdatedComponents.isEmpty)
+        #expect(state.pendingUpdateSummary == nil)
+        #expect(state.pendingUpdate == nil)
     }
 
-    @Test("Sensor updated but app left behind is still reported")
+    @Test("The Home distribution is reported even when the sensor is newer")
     @MainActor
-    func appOnlyBehind() async {
+    func homeVersionIsAuthoritative() async {
         let state = await Self.makeState(appVersion: "2.0.1", sensorVersion: "2.1.0")
-        #expect(state.outdatedComponents == [.app])
-        #expect(state.pendingUpdateSummary == "Update app to v2.1.0")
+        #expect(state.outdatedComponents == [.home])
+        #expect(state.pendingUpdateSummary == "Update SquirrelOps Home to v2.1.0")
     }
 
     @Test("Nothing behind reports nothing")
@@ -86,7 +86,7 @@ struct ComponentUpdateTests {
         #expect(state.pendingUpdateSummary == nil)
     }
 
-    @Test("An unknown sensor version is not claimed to be out of date")
+    @Test("An unknown sensor version does not affect a current Home distribution")
     @MainActor
     func unknownSensorVersionIsNotFlagged() async {
         // /system/health omits the version before authentication, so it is
@@ -96,7 +96,7 @@ struct ComponentUpdateTests {
         #expect(state.pendingUpdate == nil)
     }
 
-    @Test("An unreadable sensor version is not claimed to be out of date")
+    @Test("An unreadable sensor version does not affect a current Home distribution")
     @MainActor
     func unreadableSensorVersionIsNotFlagged() async {
         let state = await Self.makeState(appVersion: "2.1.0", sensorVersion: "unknown")

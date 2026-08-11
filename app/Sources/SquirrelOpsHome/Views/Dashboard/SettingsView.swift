@@ -331,8 +331,13 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .font(Typography.mono)
                         .disabled(isLoading || isFixedCloudLLMProvider)
-                        .onChange(of: llmEndpoint) { _, _ in
+                        .onChange(of: llmEndpoint) { oldValue, newValue in
                             guard !isLoading else { return }
+                            if llmProvider == "custom" && oldValue != newValue {
+                                // A custom endpoint is the credential boundary.
+                                // Require a new key when its recipient changes.
+                                llmApiKey = ""
+                            }
                             scheduleLLMConfigSave()
                         }
                 }
@@ -567,28 +572,9 @@ struct SettingsView: View {
                 infoRow("URL", value: sensor.baseURL.absoluteString)
             }
             if let info = appState.sensorInfo {
-                if let sensorUpdate = appState.updateChecker
-                    .update(forComponentVersion: info.version) {
-                    HStack(alignment: .top, spacing: Spacing.sm) {
-                        Text("Sensor Version")
-                            .font(Typography.caption)
-                            .tracking(Typography.captionTracking)
-                            .foregroundStyle(Theme.textTertiary(colorScheme))
-                            .frame(width: 100, alignment: .trailing)
-
-                        VStack(alignment: .leading, spacing: Spacing.xs) {
-                            Text(info.version ?? "Unknown")
-                                .font(Typography.bodySmall)
-                                .foregroundStyle(Theme.textPrimary(colorScheme))
-                            Text("Sensor update available: v\(sensorUpdate.version)")
-                                .font(Typography.bodySmall)
-                                .foregroundStyle(Theme.statusWarning(colorScheme))
-                        }
-                        Spacer()
-                    }
-                } else {
-                    infoRow("Sensor Version", value: info.version ?? "Unknown")
-                }
+                // Sensor releases use independent sensor-v tags. The Home
+                // distribution feed cannot say whether this component is old.
+                infoRow("Sensor Version", value: info.version ?? "Unknown")
                 infoRow("Uptime", value: formatUptime(info.uptimeSeconds))
             }
         }

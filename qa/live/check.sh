@@ -18,6 +18,23 @@ ok()   { printf "  PASS  %-6s %s\n" "$1" "$2"; PASS=$((PASS+1)); }
 bad()  { printf "  FAIL  %-6s %s\n" "$1" "$2"; FAIL=$((FAIL+1)); }
 skip() { printf "  SKIP  %-6s %s\n" "$1" "$2"; SKIP=$((SKIP+1)); }
 
+# Run one command for a bounded interval using only tools present on stock
+# macOS. GNU coreutils' `timeout` is not installed by default.
+run_bounded() {
+    local duration=$1
+    shift
+    "$@" &
+    local command_pid=$!
+    (
+        sleep "$duration"
+        kill -TERM "$command_pid" 2>/dev/null || true
+    ) &
+    local timer_pid=$!
+    wait "$command_pid" 2>/dev/null || true
+    kill -TERM "$timer_pid" 2>/dev/null || true
+    wait "$timer_pid" 2>/dev/null || true
+}
+
 SENSOR_DIR=/Library/SquirrelOps/sensor
 SENSOR_DB="$SENSOR_DIR/data/squirrelops.db"
 
@@ -87,7 +104,7 @@ fi
 echo "        (observed $alias_count lo0 aliases: $(echo $aliases))"
 
 # --- F-07 -------------------------------------------------------------------
-adverts=$(timeout 6 dns-sd -B _squirrelops._tcp local. 2>/dev/null | grep -c 'Add' || true)
+adverts=$(run_bounded 6 dns-sd -B _squirrelops._tcp local. 2>/dev/null | grep -c 'Add' || true)
 if [ "$adverts" -ge 1 ]; then
     ok "F-07" "_squirrelops._tcp advertised ($adverts records)"
 else
@@ -100,7 +117,7 @@ if [ -n "$aliases" ]; then
     # A mimic hostname must not resolve to more than one address.
     if [ -r "$SENSOR_DB" ]; then
         for host in $(sqlite3 "$SENSOR_DB" "SELECT DISTINCT hostname FROM decoy_hosts WHERE retired_at IS NULL;" 2>/dev/null); do
-            n=$(timeout 4 dns-sd -G v4 "$host" 2>/dev/null | grep -c 'Add' || true)
+            n=$(run_bounded 4 dns-sd -G v4 "$host" 2>/dev/null | grep -c 'Add' || true)
             [ "$n" -gt 1 ] && conflict=1 && echo "        $host resolves to $n addresses"
         done
         [ "$conflict" -eq 0 ] && ok "F-08" "each mimic hostname resolves to one address" \

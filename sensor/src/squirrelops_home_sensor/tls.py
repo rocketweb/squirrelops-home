@@ -117,8 +117,9 @@ def generate_server_cert(
     -------
     tuple of (private_key, certificate)
         The server key pair and CA-signed certificate with
-        ``BasicConstraints(ca=False)`` and SAN entries for localhost,
-        127.0.0.1, and 0.0.0.0.
+        ``BasicConstraints(ca=False)`` and SAN entries for localhost and
+        127.0.0.1. The wildcard bind address is not an endpoint identity and
+        must never appear in the certificate.
     """
     server_key = generate_private_key(SECP256R1())
     subject = x509.Name([
@@ -139,9 +140,6 @@ def generate_server_cert(
                 x509.IPAddress(
                     __import__("ipaddress").IPv4Address("127.0.0.1")
                 ),
-                x509.IPAddress(
-                    __import__("ipaddress").IPv4Address("0.0.0.0")
-                ),
             ]),
             critical=False,
         )
@@ -155,6 +153,19 @@ def generate_server_cert(
 # ---------------------------------------------------------------------------
 
 _STORE_KEYS = ("tls.ca_key", "tls.ca_cert", "tls.server_key", "tls.server_cert")
+
+
+def _has_unspecified_ip_identity(cert: x509.Certificate) -> bool:
+    """Return whether a legacy certificate claims the wildcard bind address."""
+    import ipaddress
+
+    try:
+        san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    except x509.ExtensionNotFound:
+        return False
+    return ipaddress.IPv4Address("0.0.0.0") in san.value.get_values_for_type(
+        x509.IPAddress
+    )
 
 
 async def ensure_tls_certs(
@@ -195,6 +206,13 @@ async def ensure_tls_certs(
         ca_cert = _pem_to_cert(await store.get("tls.ca_cert"))  # type: ignore[arg-type]
         server_key = _pem_to_key(await store.get("tls.server_key"))  # type: ignore[arg-type]
         server_cert = _pem_to_cert(await store.get("tls.server_cert"))  # type: ignore[arg-type]
+        if _has_unspecified_ip_identity(server_cert):
+            logger.warning(
+                "Rotating legacy server certificate that identifies 0.0.0.0"
+            )
+            server_key, server_cert = generate_server_cert(ca_key, ca_cert)
+            await store.set("tls.server_key", _key_to_pem(server_key))  # type: ignore[union-attr]
+            await store.set("tls.server_cert", _cert_to_pem(server_cert))  # type: ignore[union-attr]
     else:
         logger.info("Generating new TLS certificate chain for sensor %r", sensor_name)
         ca_key, ca_cert = generate_ca(sensor_name)

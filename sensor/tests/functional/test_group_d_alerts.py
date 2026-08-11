@@ -426,3 +426,33 @@ class TestD15UpdatedAlertDelivery:
         await dispatcher._on_alert_updated({"payload": self._alert(severity="low")})
 
         assert delivered == [], "an update must respect the severity threshold"
+
+    @pytest.mark.asyncio
+    async def test_an_auto_resolved_alert_is_not_delivered(self):
+        dispatcher, delivered = self._dispatcher()
+        await dispatcher.dispatch(self._alert())
+
+        await dispatcher._on_alert_updated({
+            "payload": self._alert(
+                title="Resolved: ARP identity claims are no longer ambiguous",
+                read_at="2026-08-10T12:00:00Z",
+                actioned_at="2026-08-10T12:00:00Z",
+                detail={"resolved_at": "2026-08-10T12:00:00Z"},
+            )
+        })
+
+        assert len(delivered) == 1, "resolution must not page the user"
+
+    @pytest.mark.asyncio
+    async def test_a_dismissed_group_update_is_not_delivered(self):
+        dispatcher, delivered = self._dispatcher()
+        await dispatcher.dispatch(self._alert())
+
+        await dispatcher._on_alert_updated({
+            "payload": self._alert(
+                title="Risky service now affects 2 devices",
+                read_at="2026-08-10T12:00:00Z",
+            )
+        })
+
+        assert len(delivered) == 1, "a dismissed alert must stay quiet"

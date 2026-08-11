@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,10 @@ import pytest
 
 from squirrelops_home_sensor.plugins.base import BaseAgentModule
 from squirrelops_home_sensor.plugins.loader import PluginLoader
+
+
+def _loader(path: Path) -> PluginLoader:
+    return PluginLoader(path, trusted_owner_uids={os.getuid()})
 
 # ---------------------------------------------------------------------------
 # Helpers -- concrete plugin for testing the ABC
@@ -178,13 +183,13 @@ class TestPluginLoaderDiscover:
     """PluginLoader.discover finds valid plugin module names."""
 
     def test_empty_directory(self, plugin_dir: Path) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         assert loader.discover() == []
 
     def test_discovers_valid_plugin(
         self, plugin_dir: Path, valid_plugin_file: Path
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         names = loader.discover()
         assert "sample_agent" in names
 
@@ -194,7 +199,7 @@ class TestPluginLoaderDiscover:
         valid_plugin_file: Path,
         second_valid_plugin_file: Path,
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         names = loader.discover()
         assert len(names) == 2
         assert "sample_agent" in names
@@ -202,24 +207,24 @@ class TestPluginLoaderDiscover:
 
     def test_skips_init_file(self, plugin_dir: Path) -> None:
         (plugin_dir / "__init__.py").write_text("")
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         assert loader.discover() == []
 
     def test_skips_pycache_directory(self, plugin_dir: Path) -> None:
         cache_dir = plugin_dir / "__pycache__"
         cache_dir.mkdir()
         (cache_dir / "cached.pyc").write_bytes(b"\x00")
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         assert loader.discover() == []
 
     def test_skips_non_python_files(self, plugin_dir: Path) -> None:
         (plugin_dir / "readme.txt").write_text("hello")
         (plugin_dir / "data.json").write_text("{}")
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         assert loader.discover() == []
 
     def test_nonexistent_directory(self, tmp_path: Path) -> None:
-        loader = PluginLoader(tmp_path / "does_not_exist")
+        loader = _loader(tmp_path / "does_not_exist")
         assert loader.discover() == []
 
 
@@ -230,7 +235,7 @@ class TestPluginLoaderLoad:
     async def test_load_valid_plugin(
         self, plugin_dir: Path, valid_plugin_file: Path
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         plugin = await loader.load("sample_agent")
         assert isinstance(plugin, BaseAgentModule)
         assert plugin.name == "sample_agent"
@@ -240,7 +245,7 @@ class TestPluginLoaderLoad:
     async def test_load_invalid_module_raises_value_error(
         self, plugin_dir: Path, invalid_plugin_no_subclass: Path
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         with pytest.raises(ValueError, match="No BaseAgentModule subclass"):
             await loader.load("not_a_plugin")
 
@@ -248,15 +253,42 @@ class TestPluginLoaderLoad:
     async def test_load_nonexistent_module_raises_file_not_found(
         self, plugin_dir: Path
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         with pytest.raises(FileNotFoundError):
             await loader.load("nonexistent")
+
+    @pytest.mark.asyncio
+    async def test_rejects_module_name_path_traversal(
+        self, plugin_dir: Path
+    ) -> None:
+        loader = _loader(plugin_dir)
+        with pytest.raises(ValueError, match="Invalid plugin module name"):
+            await loader.load("../outside")
+
+    @pytest.mark.asyncio
+    async def test_rejects_group_writable_plugin_directory(
+        self, plugin_dir: Path, valid_plugin_file: Path
+    ) -> None:
+        plugin_dir.chmod(0o770)
+        loader = _loader(plugin_dir)
+        with pytest.raises(PermissionError, match="group/other writable"):
+            await loader.load("sample_agent")
+
+    @pytest.mark.asyncio
+    async def test_rejects_symlinked_plugin_file(
+        self, plugin_dir: Path, valid_plugin_file: Path
+    ) -> None:
+        linked = plugin_dir / "linked.py"
+        linked.symlink_to(valid_plugin_file)
+        loader = _loader(plugin_dir)
+        with pytest.raises(PermissionError, match="Unsafe plugin path type"):
+            await loader.load("linked")
 
     @pytest.mark.asyncio
     async def test_load_syntax_error_raises(
         self, plugin_dir: Path, syntax_error_plugin: Path
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         with pytest.raises(SyntaxError):
             await loader.load("broken_plugin")
 
@@ -266,7 +298,7 @@ class TestPluginLoaderLoadAll:
 
     @pytest.mark.asyncio
     async def test_load_all_empty_dir(self, plugin_dir: Path) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         plugins = await loader.load_all()
         assert plugins == []
 
@@ -277,7 +309,7 @@ class TestPluginLoaderLoadAll:
         valid_plugin_file: Path,
         second_valid_plugin_file: Path,
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         plugins = await loader.load_all()
         assert len(plugins) == 2
         names = {p.name for p in plugins}
@@ -291,7 +323,7 @@ class TestPluginLoaderLoadAll:
         invalid_plugin_no_subclass: Path,
     ) -> None:
         """A bad plugin is logged and skipped; valid plugins still load."""
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         plugins = await loader.load_all()
         assert len(plugins) == 1
         assert plugins[0].name == "sample_agent"
@@ -303,7 +335,7 @@ class TestPluginLoaderLoadAll:
         valid_plugin_file: Path,
         syntax_error_plugin: Path,
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         plugins = await loader.load_all()
         assert len(plugins) == 1
         assert plugins[0].name == "sample_agent"
@@ -316,7 +348,7 @@ class TestPluginLifecycle:
     async def test_full_lifecycle(
         self, plugin_dir: Path, valid_plugin_file: Path
     ) -> None:
-        loader = PluginLoader(plugin_dir)
+        loader = _loader(plugin_dir)
         plugin = await loader.load("sample_agent")
 
         # Setup

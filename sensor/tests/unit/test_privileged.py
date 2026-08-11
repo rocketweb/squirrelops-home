@@ -546,7 +546,8 @@ COMMIT
             assert await ops._run_iptables_restore(payload, test=True) is True
 
         args = spawn.await_args.args
-        assert args[:1] == ("iptables-restore",)
+        assert args[0].startswith("/")
+        assert args[0].endswith("/iptables-restore")
         assert "--noflush" in args
         assert args[args.index("-w"):args.index("-w") + 2] == ("-w", "5")
         assert "--test" in args

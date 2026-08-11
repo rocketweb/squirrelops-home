@@ -45,14 +45,32 @@ CONFIG_SECRET_PATHS: tuple[SecretPath, ...] = (
     ("sensor", "secret_passphrase"),
     ("classifier", "llm_api_key"),
     ("home_assistant", "token"),
+    ("apns_relay_token",),
     ("alert_methods", WILDCARD, "webhook_url"),
+    ("alert_methods", WILDCARD, "relay_token"),
+    ("alert_methods", WILDCARD, "device_token"),
 )
 
 # The same secrets, relative to the ``alert_methods`` subtree that
 # ``/config/alert-methods`` returns on its own.
 ALERT_METHOD_SECRET_PATHS: tuple[SecretPath, ...] = (
     (WILDCARD, "webhook_url"),
+    (WILDCARD, "relay_token"),
+    (WILDCARD, "device_token"),
 )
+
+# ``alert_methods`` is intentionally extensible, so enumerating secret names
+# fails open: a future ``smtp_password`` or ``bot_token`` would be returned by
+# the API until somebody remembered to update the list above. Only fields that
+# are safe and needed by clients are exposed. Every other configured value is
+# treated as secret at the API boundary while explicit paths above continue to
+# define the values managed by today's encrypted config vault.
+ALERT_METHOD_PUBLIC_FIELDS = frozenset({
+    "enabled",
+    "include_device_info",
+    "min_severity",
+    "relay_url",
+})
 
 
 class _Missing:
@@ -151,21 +169,82 @@ def restore(
     return out
 
 
+def _redact_alert_method_unknowns(methods: Any) -> Any:
+    """Hide every non-public alert-method field.
+
+    This is deliberately fail closed. Alert methods accept arbitrary keys for
+    forward compatibility, but an arbitrary key must never become an arbitrary
+    credential disclosure through a GET endpoint.
+    """
+    out = deepcopy(methods)
+    if not isinstance(out, MutableMapping):
+        return out
+    for method in out.values():
+        if not isinstance(method, MutableMapping):
+            continue
+        for key in list(method):
+            if key not in ALERT_METHOD_PUBLIC_FIELDS and not _is_unset(method[key]):
+                method[key] = REDACTED
+    return out
+
+
+def _restore_alert_method_unknowns(incoming: Any, stored: Any) -> Any:
+    """Resolve fail-closed markers for arbitrary alert-method fields."""
+    out = deepcopy(incoming)
+    if not isinstance(out, MutableMapping):
+        return out
+    for method_name, method in out.items():
+        if not isinstance(method, MutableMapping):
+            continue
+        stored_method = (
+            stored.get(method_name, {}) if isinstance(stored, Mapping) else {}
+        )
+        for key in list(method):
+            if key in ALERT_METHOD_PUBLIC_FIELDS or method[key] != REDACTED:
+                continue
+            kept = (
+                stored_method.get(key, _MISSING)
+                if isinstance(stored_method, Mapping)
+                else _MISSING
+            )
+            if isinstance(kept, _Missing) or kept == REDACTED:
+                del method[key]
+            else:
+                method[key] = kept
+    return out
+
+
 def redact_config(config: Any) -> Any:
     """Redact secrets in a full config document."""
-    return redact(config, CONFIG_SECRET_PATHS)
+    out = redact(config, CONFIG_SECRET_PATHS)
+    if isinstance(out, MutableMapping) and "alert_methods" in out:
+        out["alert_methods"] = _redact_alert_method_unknowns(out["alert_methods"])
+    return out
 
 
 def restore_config_secrets(incoming: Any, stored: Any) -> Any:
     """Resolve redaction markers in a full or partial config update."""
-    return restore(incoming, stored, CONFIG_SECRET_PATHS)
+    out = restore(incoming, stored, CONFIG_SECRET_PATHS)
+    if isinstance(out, MutableMapping) and "alert_methods" in out:
+        stored_methods = (
+            stored.get("alert_methods", {}) if isinstance(stored, Mapping) else {}
+        )
+        out["alert_methods"] = _restore_alert_method_unknowns(
+            out["alert_methods"], stored_methods
+        )
+    return out
 
 
 def redact_alert_methods(methods: Any) -> Any:
     """Redact secrets in a bare ``alert_methods`` subtree."""
-    return redact(methods, ALERT_METHOD_SECRET_PATHS)
+    return _redact_alert_method_unknowns(
+        redact(methods, ALERT_METHOD_SECRET_PATHS)
+    )
 
 
 def restore_alert_method_secrets(incoming: Any, stored: Any) -> Any:
     """Resolve redaction markers in an ``alert_methods`` update."""
-    return restore(incoming, stored, ALERT_METHOD_SECRET_PATHS)
+    return _restore_alert_method_unknowns(
+        restore(incoming, stored, ALERT_METHOD_SECRET_PATHS),
+        stored,
+    )

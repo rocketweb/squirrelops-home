@@ -17,8 +17,8 @@ observed, so a later re-run can be compared honestly rather than assumed.
 
 ## Preconditions
 
-- Sensor 2.0.1 running from `/Library/SquirrelOps/sensor`
-- Repo checked out at `bugfix/decoy-status-defects`
+- Sensor 2.0.2 running from `/Library/SquirrelOps/sensor`
+- Repo checked out at `hardening-and-bugfix-260810`
 - `sensor/.venv` present, and `swift build` succeeds
 - `LIVE` cases needing root are marked, and emit the command rather than running it
 

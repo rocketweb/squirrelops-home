@@ -203,13 +203,13 @@ class PortScanner:
             try:
                 banner = await self._grab_banner(reader, writer, port, banner_timeout)
             except Exception:
-                pass  # Banner grab is best-effort
+                logger.debug("Unexpected banner-grab failure", exc_info=True)
 
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
-                pass
+            except (ConnectionError, OSError, RuntimeError):
+                logger.debug("Port-scan connection cleanup failed", exc_info=True)
 
             service_name = get_service_name(port)
             return (
@@ -253,10 +253,7 @@ class PortScanner:
 
 def _sanitize_banner(raw: bytes) -> str:
     """Decode and clean up raw banner bytes."""
-    try:
-        text = raw.decode("utf-8", errors="replace")
-    except Exception:
-        text = raw.decode("latin-1", errors="replace")
+    text = raw.decode("utf-8", errors="replace")
 
     # Strip control chars except space/tab/newline, collapse whitespace
     cleaned = []

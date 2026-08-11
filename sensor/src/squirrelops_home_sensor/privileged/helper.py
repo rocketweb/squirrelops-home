@@ -23,6 +23,8 @@ from datetime import datetime
 
 import defusedxml.ElementTree as ET
 
+from squirrelops_home_sensor.subprocess_security import trusted_executable
+
 logger = logging.getLogger(__name__)
 
 _MIMIC_CHAIN = "SQUIRRELOPS_MIMIC"
@@ -310,7 +312,8 @@ class LinuxPrivilegedOps(PrivilegedOperations):
 
         # All options (including "-oX -") must precede "--"; targets follow it.
         proc = await asyncio.create_subprocess_exec(
-            "nmap", "-sV", "-p", port_str, "-oX", "-", "--", *targets,
+            trusted_executable("nmap"),
+            "-sV", "-p", port_str, "-oX", "-", "--", *targets,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -387,7 +390,8 @@ class LinuxPrivilegedOps(PrivilegedOperations):
         prefix = _ipa.IPv4Network(f"0.0.0.0/{mask}").prefixlen
         try:
             proc = await asyncio.create_subprocess_exec(
-                "ip", "addr", "add", f"{ip}/{prefix}", "dev", interface,
+                trusted_executable("ip"),
+                "addr", "add", f"{ip}/{prefix}", "dev", interface,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -410,7 +414,8 @@ class LinuxPrivilegedOps(PrivilegedOperations):
         _ipa.IPv4Address(ip)
         try:
             proc = await asyncio.create_subprocess_exec(
-                "ip", "addr", "del", f"{ip}/32", "dev", interface,
+                trusted_executable("ip"),
+                "addr", "del", f"{ip}/32", "dev", interface,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -846,7 +851,7 @@ class LinuxPrivilegedOps(PrivilegedOperations):
         """Capture a table so its owned subset can be inspected."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                "iptables-save",
+                trusted_executable("iptables-save"),
                 "-t",
                 table,
                 stdout=asyncio.subprocess.PIPE,
@@ -867,7 +872,7 @@ class LinuxPrivilegedOps(PrivilegedOperations):
 
     async def _run_iptables_restore(self, payload: str, *, test: bool) -> bool:
         """Validate or apply an owned-only iptables-restore payload."""
-        args = ["iptables-restore", "--noflush", "-w", "5"]
+        args = [trusted_executable("iptables-restore"), "--noflush", "-w", "5"]
         if test:
             args.append("--test")
         try:

@@ -11,6 +11,8 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import logging
+import re
+import stat
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -21,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Files that are never treated as plugins.
 _SKIP_NAMES = {"__init__.py"}
+_MODULE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class PluginLoader:
@@ -32,8 +35,27 @@ class PluginLoader:
         Path to the directory that holds ``*.py`` plugin files.
     """
 
-    def __init__(self, plugin_dir: Path) -> None:
+    def __init__(
+        self,
+        plugin_dir: Path,
+        *,
+        trusted_owner_uids: set[int] | None = None,
+    ) -> None:
         self._plugin_dir = plugin_dir
+        self._trusted_owner_uids = frozenset(
+            {0} if trusted_owner_uids is None else trusted_owner_uids
+        )
+
+    def _validate_trusted_path(self, path: Path, *, directory: bool) -> None:
+        """Reject writable, linked, or untrusted plugin filesystem objects."""
+        metadata = path.lstat()
+        expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+        if not expected_type(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            raise PermissionError(f"Unsafe plugin path type: {path}")
+        if metadata.st_uid not in self._trusted_owner_uids:
+            raise PermissionError(f"Plugin path has an untrusted owner: {path}")
+        if stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise PermissionError(f"Plugin path is group/other writable: {path}")
 
     # ------------------------------------------------------------------
     # Discovery
@@ -47,6 +69,7 @@ class PluginLoader:
         """
         if not self._plugin_dir.is_dir():
             return []
+        self._validate_trusted_path(self._plugin_dir, directory=True)
 
         names: list[str] = []
         for path in sorted(self._plugin_dir.iterdir()):
@@ -56,6 +79,7 @@ class PluginLoader:
                 continue
             if path.name in _SKIP_NAMES:
                 continue
+            self._validate_trusted_path(path, directory=False)
             names.append(path.stem)
         return names
 
@@ -75,9 +99,13 @@ class PluginLoader:
         ValueError
             If the module contains no ``BaseAgentModule`` subclass.
         """
+        if not _MODULE_NAME.fullmatch(module_name):
+            raise ValueError(f"Invalid plugin module name: {module_name!r}")
+        self._validate_trusted_path(self._plugin_dir, directory=True)
         file_path = self._plugin_dir / f"{module_name}.py"
         if not file_path.is_file():
             raise FileNotFoundError(f"Plugin file not found: {file_path}")
+        self._validate_trusted_path(file_path, directory=False)
 
         module = self._import_file(module_name, file_path)
         cls = self._find_plugin_class(module, module_name)

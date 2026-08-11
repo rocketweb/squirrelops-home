@@ -1,6 +1,6 @@
 [project]
 name = "squirrelops-home-sensor"
-version = "2.0.1"
+version = "2.0.2"
 description = "SquirrelOps Home network security sensor"
 requires-python = ">=3.11"
 dependencies = [
@@ -9,12 +9,12 @@ dependencies = [
     "uvicorn[standard]>=0.51.0",
     "websockets>=14.0",
     "scapy>=2.6.0",
-    "cryptography>=48.0.1",
+    "cryptography>=50.0.0",
     "zeroconf>=0.149.16",
     "pydantic>=2.10.0",
     "aiosqlite>=0.21.0",
     "httpx>=0.28.0",
-    "aiohttp>=3.14.1",
+    "aiohttp>=3.14.3",
     "click>=8.3.3",
     "idna>=3.15",
     "psutil>=7.0.0",

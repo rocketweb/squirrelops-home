@@ -120,6 +120,19 @@ class AlertDispatcher:
         if payload is None:
             return
 
+        # ``alert.updated`` is also used for lifecycle bookkeeping. A resolved,
+        # dismissed, or otherwise actioned alert is no longer notification
+        # eligible even if its retained severity and title happen to change.
+        # Producers include these timestamps in the event snapshot, so filter
+        # before the summary/cooldown logic can turn closure into a new page.
+        detail = payload.get("detail")
+        if (
+            payload.get("read_at")
+            or payload.get("actioned_at")
+            or (isinstance(detail, dict) and detail.get("resolved_at"))
+        ):
+            return
+
         alert_id = payload.get("id")
         summary = (str(payload.get("severity", "")), str(payload.get("title", "")))
         now = self._clock()

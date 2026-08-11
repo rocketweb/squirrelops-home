@@ -17,6 +17,13 @@ import aiosqlite
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _lastrowid(cursor: aiosqlite.Cursor, operation: str) -> int:
+    """Return an inserted row ID or fail explicitly in optimized runtimes."""
+    row_id = cursor.lastrowid
+    if row_id is None:
+        raise RuntimeError(f"{operation} did not return a row ID")
+    return int(row_id)
+
 async def _fetchone(
     db: aiosqlite.Connection, sql: str, params: tuple = ()
 ) -> dict[str, Any] | None:
@@ -70,8 +77,7 @@ async def insert_device_fingerprint(
          signal_count, confidence, first_seen, last_seen),
     )
     await db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    return _lastrowid(cursor, "Device fingerprint insert")
 
 
 async def get_device_fingerprints(
@@ -153,8 +159,7 @@ async def insert_alert(
          source_mac, device_id, decoy_id, event_seq, created_at),
     )
     await db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    return _lastrowid(cursor, "Alert insert")
 
 
 async def get_alert(
@@ -248,8 +253,7 @@ async def insert_incident(
         (source_ip, source_mac, severity, first_alert_at, last_alert_at, summary),
     )
     await db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    return _lastrowid(cursor, "Incident insert")
 
 
 async def get_incident(
@@ -371,8 +375,7 @@ async def insert_decoy(
         (name, decoy_type, bind_address, port, config, created_at, updated_at),
     )
     await db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    return _lastrowid(cursor, "Decoy insert")
 
 
 async def get_decoy(
@@ -462,8 +465,7 @@ async def insert_decoy_connection(
          credential_used, credential_id, event_seq, timestamp),
     )
     await db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    return _lastrowid(cursor, "Decoy connection insert")
 
 
 async def list_decoy_connections(
@@ -515,8 +517,7 @@ async def insert_planted_credential(
          planted_location, decoy_id, created_at),
     )
     await db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    return _lastrowid(cursor, "Planted credential insert")
 
 
 async def get_planted_credential(
@@ -604,8 +605,7 @@ async def insert_canary_observation(
          queried_by_mac, event_seq, observed_at),
     )
     await db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    return _lastrowid(cursor, "Canary observation insert")
 
 
 async def list_canary_observations(
@@ -653,8 +653,7 @@ async def insert_pairing(
         (client_name, client_cert_fingerprint, int(is_local), paired_at),
     )
     await db.commit()
-    assert cursor.lastrowid is not None
-    return cursor.lastrowid
+    return _lastrowid(cursor, "Pairing insert")
 
 
 async def get_pairing(

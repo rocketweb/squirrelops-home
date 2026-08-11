@@ -22,6 +22,12 @@ def _config() -> dict:
         "home_assistant": {"enabled": True, "url": "http://ha.local", "token": "eyJhbG"},
         "alert_methods": {
             "slack": {"enabled": True, "webhook_url": "https://hooks.slack.com/services/X/Y/Z"},
+            "push": {
+                "enabled": True,
+                "relay_url": "https://push.example/relay",
+                "relay_token": "relay-secret",
+                "device_token": "device-secret",
+            },
             "log": {"enabled": True},
         },
         "network": {"scan_interval": 60},
@@ -35,12 +41,15 @@ class TestRedactConfig:
         assert out["classifier"]["llm_api_key"] == REDACTED
         assert out["home_assistant"]["token"] == REDACTED
         assert out["alert_methods"]["slack"]["webhook_url"] == REDACTED
+        assert out["alert_methods"]["push"]["relay_token"] == REDACTED
+        assert out["alert_methods"]["push"]["device_token"] == REDACTED
 
     def test_leaves_non_secret_values_intact(self) -> None:
         out = redact_config(_config())
         assert out["network"]["scan_interval"] == 60
         assert out["home_assistant"]["url"] == "http://ha.local"
         assert out["alert_methods"]["slack"]["enabled"] is True
+        assert out["alert_methods"]["push"]["relay_url"] == "https://push.example/relay"
         assert out["alert_methods"]["log"] == {"enabled": True}
 
     def test_does_not_mutate_the_live_config(self) -> None:
@@ -63,6 +72,16 @@ class TestRedactConfig:
         cfg["alert_methods"]["teams"] = {"webhook_url": "https://outlook.office.com/hook"}
         out = redact_config(cfg)
         assert out["alert_methods"]["teams"]["webhook_url"] == REDACTED
+
+    def test_unknown_alert_method_fields_fail_closed(self) -> None:
+        cfg = _config()
+        cfg["alert_methods"]["smtp"] = {
+            "enabled": True,
+            "smtp_password": "future-secret",
+        }
+        out = redact_config(cfg)
+        assert out["alert_methods"]["smtp"]["enabled"] is True
+        assert out["alert_methods"]["smtp"]["smtp_password"] == REDACTED
 
     def test_tolerates_missing_and_malformed_sections(self) -> None:
         assert redact({}, CONFIG_SECRET_PATHS) == {}
@@ -123,6 +142,23 @@ class TestRestoreConfigSecrets:
         assert out["alert_methods"]["slack"]["webhook_url"].endswith("/X/Y/Z")
         assert out["alert_methods"]["teams"]["webhook_url"].endswith("/new")
 
+    def test_restores_push_tokens_and_future_secret_fields(self) -> None:
+        stored = _config()
+        stored["alert_methods"]["push"]["smtp_password"] = "future-secret"
+        incoming = {
+            "alert_methods": {
+                "push": {
+                    "relay_token": REDACTED,
+                    "device_token": REDACTED,
+                    "smtp_password": REDACTED,
+                }
+            }
+        }
+        out = restore_config_secrets(incoming, stored)
+        assert out["alert_methods"]["push"]["relay_token"] == "relay-secret"
+        assert out["alert_methods"]["push"]["device_token"] == "device-secret"
+        assert out["alert_methods"]["push"]["smtp_password"] == "future-secret"
+
     def test_tolerates_missing_stored_sections(self) -> None:
         out = restore({"home_assistant": {"token": REDACTED}}, {}, CONFIG_SECRET_PATHS)
         assert "token" not in out["home_assistant"]
@@ -133,6 +169,8 @@ class TestAlertMethodSubtreeHelpers:
         methods = _config()["alert_methods"]
         out = redact_alert_methods(methods)
         assert out["slack"]["webhook_url"] == REDACTED
+        assert out["push"]["relay_token"] == REDACTED
+        assert out["push"]["device_token"] == REDACTED
         assert out["slack"]["enabled"] is True
         assert out["log"] == {"enabled": True}
 
@@ -144,6 +182,8 @@ class TestAlertMethodSubtreeHelpers:
 
     def test_subtree_paths_are_relative_to_alert_methods(self) -> None:
         assert ("*", "webhook_url") in ALERT_METHOD_SECRET_PATHS
+        assert ("*", "relay_token") in ALERT_METHOD_SECRET_PATHS
+        assert ("*", "device_token") in ALERT_METHOD_SECRET_PATHS
         assert ("alert_methods", "*", "webhook_url") in CONFIG_SECRET_PATHS
 
 

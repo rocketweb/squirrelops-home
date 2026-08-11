@@ -354,7 +354,7 @@ jobs:
             --source-ref refs/heads/main
 
           gh release edit "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" --draft=false
+            --repo "$GITHUB_REPOSITORY" --draft=false --latest=false
           VERIFIED=0
           for ATTEMPT in 1 2 3 4 5 6; do
             if bash scripts/verify-github-release.sh \

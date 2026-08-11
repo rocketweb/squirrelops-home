@@ -5,9 +5,9 @@ import Observation
 
 /// The newest release the update source knows about.
 ///
-/// Stored separately from any one component's version because the app and the
-/// sensor ship from the same release but are versioned and installed
-/// independently. Either can be behind while the other is current.
+/// This is specifically a ``home-v*`` distribution release. App and sensor
+/// component tags have independent versions and are not interchangeable with
+/// the version of the installed Home package.
 public struct ReleaseSnapshot: Sendable, Equatable {
     public let version: SemanticVersion
     public let url: URL
@@ -46,9 +46,7 @@ public enum UpdateCheckResult: Sendable, Equatable {
 
 /// Checks the public release feed for a newer distribution.
 ///
-/// Lives outside any view so the launch check and the Settings button share one
-/// piece of state: the launch check populates it, and Settings renders whatever
-/// the last check found instead of starting from blank.
+/// Lives outside any view so Settings and the menu bar share one piece of state.
 ///
 /// Only the app reaches the network. The sensor's version arrives over the
 /// existing authenticated status call, so a privileged daemon whose job is
@@ -64,19 +62,17 @@ public final class UpdateChecker {
     public typealias ReleaseFetcher = @MainActor (URLRequest) async throws -> (Data, URLResponse)
 
     public nonisolated static let releasesURL = URL(
-        string: "https://api.github.com/repos/rocketweb/squirrelops-home/releases/latest"
+        string: "https://api.github.com/repos/rocketweb/squirrelops-home/releases?per_page=100"
     )!
 
-    /// Automatic checks run at most once a day. The release feed is
-    /// unauthenticated and rate limited per IP, and a new build is not
-    /// something a user needs to hear about more often than that.
+    /// Non-forced callers are throttled. The shipped UI only checks after an
+    /// explicit click and passes ``force: true``.
     public nonisolated static let automaticInterval: TimeInterval = 24 * 60 * 60
 
     public nonisolated static let lastCheckDefaultsKey = "lastUpdateCheckAt"
 
-    // The newest known release outlives the process. Without this, relaunching
-    // inside the throttle window would skip the check, leave the state empty,
-    // and silently drop the update indicator while it was still pending.
+    // The newest known release outlives the process so an update found by an
+    // explicit check remains visible after relaunch.
     public nonisolated static let latestVersionDefaultsKey = "latestReleaseVersion"
     public nonisolated static let latestURLDefaultsKey = "latestReleaseURL"
 
@@ -88,7 +84,7 @@ public final class UpdateChecker {
 
     /// A release newer than the running app.
     public var availableUpdate: AvailableUpdate? {
-        update(forComponentVersion: currentVersion)
+        update(forDistributionVersion: currentVersion)
     }
 
     private let currentVersion: String
@@ -125,24 +121,14 @@ public final class UpdateChecker {
 
     // MARK: - Comparison
 
-    /// A release newer than `raw`, or `nil` when `raw` is current, unreadable,
-    /// or no release has been seen yet.
-    ///
-    /// Used for the sensor as well as the app: both ship from one release but
-    /// are installed separately, so each is compared on its own.
-    public func update(forComponentVersion raw: String?) -> AvailableUpdate? {
+    /// A Home release newer than the installed distribution version.
+    private func update(forDistributionVersion raw: String) -> AvailableUpdate? {
         guard
-            let raw,
             let component = SemanticVersion(parsing: raw),
             let release = latestRelease,
             release.version > component
         else { return nil }
         return AvailableUpdate(version: release.version.description, url: release.url)
-    }
-
-    /// Whether `raw` is behind the newest known release.
-    public func isOutOfDate(_ raw: String?) -> Bool {
-        update(forComponentVersion: raw) != nil
     }
 
     // MARK: - Checking
@@ -211,20 +197,37 @@ public final class UpdateChecker {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             return .problem("Could not reach GitHub. Try again later.")
         }
-        guard
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let tagName = json["tag_name"] as? String,
-            let htmlURL = json["html_url"] as? String,
-            let url = URL(string: htmlURL)
-        else {
+        guard let releases = try? JSONSerialization.jsonObject(with: data)
+            as? [[String: Any]] else {
             return .problem("Unexpected response from GitHub.")
         }
-        // An unreadable version is reported, never assumed. Guessing here would
-        // tell someone on an old build that they are current.
-        guard let version = SemanticVersion(parsing: tagName) else {
-            return .problem("Could not read a version from release tag \"\(tagName)\".")
+
+        var newest: ReleaseSnapshot?
+        for release in releases {
+            if release["draft"] as? Bool == true || release["prerelease"] as? Bool == true {
+                continue
+            }
+            guard let tagName = release["tag_name"] as? String,
+                  tagName.hasPrefix("home-v") else {
+                continue
+            }
+            guard let version = SemanticVersion(parsing: tagName),
+                  tagName == "home-v\(version.description)" else {
+                return .problem("Could not read a Home version from release tag \"\(tagName)\".")
+            }
+            guard let htmlURL = release["html_url"] as? String,
+                  let url = validatedReleaseURL(htmlURL, tag: tagName) else {
+                return .problem("GitHub returned an invalid Home release link.")
+            }
+            let candidate = ReleaseSnapshot(version: version, url: url)
+            if newest == nil || version > newest!.version {
+                newest = candidate
+            }
         }
-        return .found(ReleaseSnapshot(version: version, url: url))
+        guard let newest else {
+            return .problem("GitHub did not return a published Home release.")
+        }
+        return .found(newest)
     }
 
     /// Render the display outcome for one component against a known release.
@@ -250,8 +253,33 @@ public final class UpdateChecker {
             let raw = defaults.string(forKey: latestVersionDefaultsKey),
             let version = SemanticVersion(parsing: raw),
             let rawURL = defaults.string(forKey: latestURLDefaultsKey),
-            let url = URL(string: rawURL)
+            let url = validatedReleaseURL(
+                rawURL,
+                tag: "home-v\(version.description)"
+            )
         else { return nil }
         return ReleaseSnapshot(version: version, url: url)
+    }
+
+    /// Only links to the expected repository's exact release-tag page can be
+    /// restored or shown. UserDefaults is writable by the local user and must
+    /// not be treated as authority for a clickable destination.
+    private nonisolated static func validatedReleaseURL(
+        _ raw: String,
+        tag: String
+    ) -> URL? {
+        guard let components = URLComponents(string: raw),
+              components.scheme?.lowercased() == "https",
+              components.host?.lowercased() == "github.com",
+              components.port == nil,
+              components.user == nil,
+              components.password == nil,
+              components.query == nil,
+              components.fragment == nil,
+              components.path == "/rocketweb/squirrelops-home/releases/tag/\(tag)",
+              let url = components.url else {
+            return nil
+        }
+        return url
     }
 }

@@ -9,5 +9,6 @@ from tests.integration.conftest import (  # noqa: F401
     client,
     db,
     event_bus,
+    secret_store,
     sensor_config,
 )
