@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
+
+# Only these owners may control an executable the sensor runs. Named so the
+# policy is patchable in tests that build a real symlink chain under a
+# temporary directory owned by the test user.
+_TRUSTED_UIDS: frozenset[int] = frozenset({0})
 
 _TRUSTED_EXECUTABLE_PATHS: dict[str, tuple[str, ...]] = {
     "ifconfig": ("/sbin/ifconfig", "/usr/sbin/ifconfig"),
@@ -46,9 +52,9 @@ def trusted_executable(name: str) -> str:
 
     if present:
         raise PermissionError(
-            f"No trusted {name!r} executable: "
-            f"{', '.join(present)} exist but are not root-owned, "
-            "are group/other writable, or are not regular executable files"
+            f"No trusted {name!r} executable: {', '.join(present)} exist, but "
+            "the resolved binary or a directory on its path is not root-owned, "
+            "is group/other writable, or is not a regular executable file"
         )
 
     # Nothing is installed. Return an absolute path so the caller's subprocess
@@ -57,16 +63,54 @@ def trusted_executable(name: str) -> str:
     return candidates[0]
 
 
-def _is_trusted_executable(path: Path) -> bool:
-    """Require a root-owned executable with no group/other write access."""
+def _is_trusted_directory(path: Path) -> bool:
+    """Whether only a trusted uid can create or replace names in ``path``."""
     try:
-        metadata = path.lstat()
+        # Follow symlinks deliberately. On a usrmerge system /sbin is a link to
+        # /usr/sbin, and the real directory is what governs write access.
+        metadata = path.stat()
     except OSError:
         return False
     return (
-        path.is_file()
-        and not path.is_symlink()
-        and metadata.st_uid == 0
+        stat.S_ISDIR(metadata.st_mode)
+        and metadata.st_uid in _TRUSTED_UIDS
         and metadata.st_mode & 0o022 == 0
-        and os.access(path, os.X_OK)
+    )
+
+
+def _is_trusted_executable(path: Path) -> bool:
+    """Whether no untrusted user can change what running ``path`` executes.
+
+    Rejecting symlinks outright was wrong. Debian and Ubuntu route every
+    iptables tool through ``/etc/alternatives``, so the normal packaged layout
+    is a symlink chain and the check failed on the one platform that uses
+    these binaries. Refusing the standard layout is not a security property,
+    it just moved the whole allowlist onto the unvalidated fallback path.
+
+    What actually matters is who can swap the target. A symlink's own mode is
+    meaningless on Linux, and its ownership is not the control either: writing
+    a name into a directory requires write permission on that directory. So
+    this resolves the chain, checks the real executable, and then checks every
+    directory along both the literal and resolved paths.
+    """
+    if not path.is_absolute():
+        return False
+    try:
+        resolved = Path(os.path.realpath(path, strict=True))
+        metadata = resolved.stat()
+    except OSError:
+        return False
+
+    if not stat.S_ISREG(metadata.st_mode):
+        return False
+    if metadata.st_uid not in _TRUSTED_UIDS:
+        return False
+    if metadata.st_mode & 0o022:
+        return False
+    if not os.access(resolved, os.X_OK):
+        return False
+
+    return all(
+        _is_trusted_directory(ancestor)
+        for ancestor in (*path.parents, *resolved.parents)
     )
