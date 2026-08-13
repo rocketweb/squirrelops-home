@@ -16,7 +16,10 @@ import sys
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
 
-from squirrelops_home_sensor.subprocess_security import trusted_executable
+from squirrelops_home_sensor.subprocess_security import (
+    UntrustedExecutableError,
+    trusted_executable,
+)
 
 logger = logging.getLogger("squirrelops_home_sensor")
 
@@ -93,6 +96,14 @@ def _collect_interface_ips() -> list[str]:
                 address = match.group(2)
                 if interface != "lo" and not address.startswith("127."):
                     ips.append(address)
+    except UntrustedExecutableError:
+        # Degrade, but never at debug level. An interface probe is best effort;
+        # a host whose ifconfig cannot be trusted is not a debug detail.
+        logger.error(
+            "Could not enumerate interfaces for mDNS: no trusted interface "
+            "tool on this host",
+            exc_info=True,
+        )
     except (OSError, subprocess.SubprocessError):
         logger.debug("Could not enumerate interfaces for mDNS", exc_info=True)
 
@@ -166,6 +177,12 @@ def _get_mdns_hostname() -> str:
             name = result.stdout.strip()
             if name:
                 return f"{name}.local."
+        except UntrustedExecutableError:
+            logger.error(
+                "Could not read the macOS Bonjour hostname: no trusted scutil "
+                "on this host",
+                exc_info=True,
+            )
         except (OSError, subprocess.SubprocessError):
             logger.debug("Could not read the macOS Bonjour hostname", exc_info=True)
 

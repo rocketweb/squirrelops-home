@@ -190,3 +190,25 @@ def test_nmap_allowlist_holds_no_admin_writable_prefix() -> None:
         candidate.startswith(("/usr/local/", "/opt/homebrew/"))
         for candidate in candidates
     )
+
+
+@pytest.mark.usefixtures("trust_this_user")
+def test_untrusted_executable_error_is_distinguishable(tmp_path: Path) -> None:
+    """The refusal must be its own type, not a generic failure.
+
+    "The tool is missing" and "somebody replaced the tool" look identical to a
+    caller that only checks for a falsy return, which is how a compromised host
+    reads as merely degraded.
+    """
+    insecure = _executable(tmp_path / "local" / "ip", mode=0o777)
+
+    with patch.dict(
+        subprocess_security._TRUSTED_EXECUTABLE_PATHS, {"ip": (str(insecure),)}
+    ):
+        with pytest.raises(subprocess_security.UntrustedExecutableError):
+            trusted_executable("ip")
+
+    # Still an OSError, so best-effort probes keep degrading through the
+    # handlers they already have instead of taking the sensor down.
+    assert issubclass(subprocess_security.UntrustedExecutableError, PermissionError)
+    assert issubclass(subprocess_security.UntrustedExecutableError, OSError)

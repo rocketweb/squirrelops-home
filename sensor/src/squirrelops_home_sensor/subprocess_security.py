@@ -11,6 +11,20 @@ from pathlib import Path
 # temporary directory owned by the test user.
 _TRUSTED_UIDS: frozenset[int] = frozenset({0})
 
+
+class UntrustedExecutableError(PermissionError):
+    """An allow-listed tool exists but nothing here may be trusted to run it.
+
+    Distinct from a plain failure on purpose. "nmap is missing" and "something
+    replaced nmap with a binary a non-root user controls" are the same return
+    value to a caller that only checks for falsy, and folding the second into
+    an ordinary operational warning is how a compromised host looks healthy.
+
+    Still a ``PermissionError``, so best-effort probes that already catch
+    ``OSError`` keep degrading rather than taking the sensor down. Callers that
+    execute as root re-raise it instead.
+    """
+
 _TRUSTED_EXECUTABLE_PATHS: dict[str, tuple[str, ...]] = {
     "ifconfig": ("/sbin/ifconfig", "/usr/sbin/ifconfig"),
     "ip": ("/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip"),
@@ -33,7 +47,7 @@ def trusted_executable(name: str) -> str:
     ------
     ValueError
         If ``name`` is not allow-listed.
-    PermissionError
+    UntrustedExecutableError
         If every allow-listed path that exists fails the trust check. Returning
         the first candidate in that case would hand back the exact untrusted
         binary the allowlist exists to reject, so this fails closed instead.
@@ -51,7 +65,7 @@ def trusted_executable(name: str) -> str:
             present.append(candidate)
 
     if present:
-        raise PermissionError(
+        raise UntrustedExecutableError(
             f"No trusted {name!r} executable: {', '.join(present)} exist, but "
             "the resolved binary or a directory on its path is not root-owned, "
             "is group/other writable, or is not a regular executable file"
