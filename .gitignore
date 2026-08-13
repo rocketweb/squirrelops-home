@@ -40,3 +40,9 @@ Package.resolved
 
 # Worktrees
 .worktrees/
+.claude/settings.local.json
+.claude/worktrees/
+
+# QA working artifacts. FINDINGS.md carries reproduction detail for defects in
+# releases that are still published, so it stays out of a public repository.
+qa/FINDINGS.md

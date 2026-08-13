@@ -24,6 +24,24 @@ from squirrelops_home_sensor.privileged.helper import (
 from squirrelops_home_sensor.privileged.linux_sidecar import LinuxNetworkHelperClient
 from squirrelops_home_sensor.privileged.xpc import MacOSPrivilegedOps
 
+
+@pytest.fixture(autouse=True)
+def stub_trusted_executable():
+    """Decouple these tests from the host's packaging of nmap and iptables.
+
+    These assert how arguments are built, not whether this machine happens to
+    ship a trustworthy binary. Resolving for real made the suite depend on the
+    runner: CI installs iptables through ``/etc/alternatives``, so a trust
+    check that rejected symlinks failed here rather than where it belonged.
+    The resolution rules have their own coverage in
+    ``test_subprocess_security.py``, against a real symlink chain.
+    """
+    with patch(
+        "squirrelops_home_sensor.privileged.helper.trusted_executable",
+        side_effect=lambda name: f"/usr/sbin/{name}",
+    ):
+        yield
+
 # ---------------------------------------------------------------------------
 # ABC contract
 # ---------------------------------------------------------------------------
@@ -546,7 +564,8 @@ COMMIT
             assert await ops._run_iptables_restore(payload, test=True) is True
 
         args = spawn.await_args.args
-        assert args[:1] == ("iptables-restore",)
+        assert args[0].startswith("/")
+        assert args[0].endswith("/iptables-restore")
         assert "--noflush" in args
         assert args[args.index("-w"):args.index("-w") + 2] == ("-w", "5")
         assert "--test" in args

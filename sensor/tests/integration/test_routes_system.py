@@ -465,16 +465,3 @@ class TestLearningEndpoint:
         response = client.get("/system/learning")
         data = response.json()
         assert data["phase"] == "complete"
-
-
-class TestUpdateCheckEndpoint:
-    """GET /system/updates -- update checking."""
-
-    def test_check_updates_no_manifest(self, client):
-        """Update check returns gracefully when no manifest URL configured."""
-        resp = client.get("/system/updates")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "current_version" in data
-        assert data["update_available"] is False
-        assert "No update source" in data["message"]

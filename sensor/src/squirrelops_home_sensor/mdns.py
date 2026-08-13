@@ -16,6 +16,11 @@ import sys
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
 
+from squirrelops_home_sensor.subprocess_security import (
+    UntrustedExecutableError,
+    trusted_executable,
+)
+
 logger = logging.getLogger("squirrelops_home_sensor")
 
 # Standard private LAN ranges (RFC 1918).
@@ -59,7 +64,7 @@ def _collect_interface_ips() -> list[str]:
     try:
         if sys.platform == "darwin":
             result = subprocess.run(
-                ["ifconfig"],
+                [trusted_executable("ifconfig")],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -75,7 +80,7 @@ def _collect_interface_ips() -> list[str]:
                     ips.append(match.group(1))
         else:
             result = subprocess.run(
-                ["ip", "-4", "-o", "addr", "show"],
+                [trusted_executable("ip"), "-4", "-o", "addr", "show"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -91,8 +96,16 @@ def _collect_interface_ips() -> list[str]:
                 address = match.group(2)
                 if interface != "lo" and not address.startswith("127."):
                     ips.append(address)
-    except Exception:
-        pass
+    except UntrustedExecutableError:
+        # Degrade, but never at debug level. An interface probe is best effort;
+        # a host whose ifconfig cannot be trusted is not a debug detail.
+        logger.error(
+            "Could not enumerate interfaces for mDNS: no trusted interface "
+            "tool on this host",
+            exc_info=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("Could not enumerate interfaces for mDNS", exc_info=True)
 
     return ips
 
@@ -158,14 +171,20 @@ def _get_mdns_hostname() -> str:
     if sys.platform == "darwin":
         try:
             result = subprocess.run(
-                ["scutil", "--get", "LocalHostName"],
+                [trusted_executable("scutil"), "--get", "LocalHostName"],
                 capture_output=True, text=True, timeout=5,
             )
             name = result.stdout.strip()
             if name:
                 return f"{name}.local."
-        except Exception:
-            pass
+        except UntrustedExecutableError:
+            logger.error(
+                "Could not read the macOS Bonjour hostname: no trusted scutil "
+                "on this host",
+                exc_info=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            logger.debug("Could not read the macOS Bonjour hostname", exc_info=True)
 
     # Fallback: short hostname
     name = socket.gethostname().split(".")[0]

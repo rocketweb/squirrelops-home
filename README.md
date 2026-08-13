@@ -47,6 +47,9 @@ The sensor is made up of three internal engines:
 
 Communication between the app and sensor uses mutual TLS with certificates exchanged during an on-device pairing flow (challenge-response with ECDSA P-256).
 
+The documented trust boundaries and intentional exceptions are in the
+[security model](docs/SECURITY_MODEL.md).
+
 ### Decoy Types
 
 | Type | What It Mimics | Planted Credentials |

@@ -5,13 +5,20 @@ and DNS canary hostname generation.
 """
 
 import re
+import secrets
 
 import pytest
 
+from squirrelops_home_sensor.decoys import credentials as credential_module
 from squirrelops_home_sensor.decoys.credentials import (
     CredentialGenerator,
     GeneratedCredential,
 )
+
+
+def test_credential_selection_uses_a_cryptographic_rng() -> None:
+    """Prevent a refactor from restoring predictable decoy credentials."""
+    assert isinstance(credential_module._RNG, secrets.SystemRandom)
 
 # ---------------------------------------------------------------------------
 # GeneratedCredential dataclass

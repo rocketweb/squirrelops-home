@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 
 import aiosqlite
@@ -21,6 +22,8 @@ router = APIRouter(tags=["websocket"])
 PING_INTERVAL_SECONDS = 30
 MAX_MISSED_PONGS = 3
 AUTH_TIMEOUT_SECONDS = 10
+
+logger = logging.getLogger(__name__)
 
 
 class WebSocketClient:
@@ -243,8 +246,11 @@ async def ws_events(ws: WebSocket):
         if auth_result is None:
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except (OSError, RuntimeError, WebSocketDisconnect):
+                logger.warning(
+                    "Failed to close unauthenticated WebSocket cleanly",
+                    exc_info=True,
+                )
             return
 
         client_name, fingerprint = auth_result
@@ -286,5 +292,10 @@ async def ws_events(ws: WebSocket):
         if db_gen is not None:
             try:
                 await db_gen.__anext__()
-            except (StopAsyncIteration, Exception):
+            except StopAsyncIteration:
                 pass
+            except Exception:
+                logger.warning(
+                    "WebSocket database dependency cleanup failed",
+                    exc_info=True,
+                )

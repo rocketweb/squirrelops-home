@@ -43,6 +43,7 @@ from squirrelops_home_sensor.privileged.helper import (
     ServiceResult,
 )
 from squirrelops_home_sensor.scanner.port_scanner import PortScanner
+from squirrelops_home_sensor.subprocess_security import trusted_executable
 
 logger = logging.getLogger(__name__)
 
@@ -484,7 +485,7 @@ class LinuxNetworkHelperServer:
             return self.interface
         del requested
         result = subprocess.run(
-            ["ip", "-4", "route", "show", "default"],
+            [trusted_executable("ip"), "-4", "route", "show", "default"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -500,7 +501,7 @@ class LinuxNetworkHelperServer:
         if not interface:
             host_ip = self._host_lan_ip()
             addresses = subprocess.run(
-                ["ip", "-4", "-o", "addr", "show"],
+                [trusted_executable("ip"), "-4", "-o", "addr", "show"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -1127,9 +1128,11 @@ class LinuxNetworkHelperServer:
 
     async def serve_forever(self) -> None:
         await self.start()
-        assert self._server is not None
+        server = self._server
+        if server is None:
+            raise RuntimeError("Network helper server did not start")
         try:
-            await self._server.serve_forever()
+            await server.serve_forever()
         finally:
             await self.stop()
 

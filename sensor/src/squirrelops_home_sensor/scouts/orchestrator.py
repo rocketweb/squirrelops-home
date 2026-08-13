@@ -1139,6 +1139,8 @@ class MimicOrchestrator:
                 ),
             )
             template_id = template_cursor.lastrowid
+            if template_id is None:
+                raise RuntimeError("Mimic template insert did not return an ID")
 
             # Generate mDNS hostname for this mimic
             existing_cursor = await self._db.execute(
@@ -1275,9 +1277,9 @@ class MimicOrchestrator:
                 device_id,
             )
             return False
-        assert template_id is not None
-        assert decoy_id is not None
-        assert host_id is not None
+        if template_id is None or decoy_id is None or host_id is None:
+            self._ip_manager.release_reservation(virtual_ip)
+            raise RuntimeError("Mimic provisioning completed without durable IDs")
 
         # Request a private backend for every advertised port.
         port_remaps = self._compute_port_remaps(port_configs)
@@ -1353,8 +1355,10 @@ class MimicOrchestrator:
             await self._db.commit()
             await mimic.start()
 
-            assert self._port_fwd is not None
-            isolated = await self._port_fwd.add_forwards(
+            port_fwd = self._port_fwd
+            if port_fwd is None:
+                raise RuntimeError("Mimic port-forward manager is unavailable")
+            isolated = await port_fwd.add_forwards(
                 decoy_id,
                 virtual_ip,
                 mimic.port_remaps,
@@ -1389,9 +1393,13 @@ class MimicOrchestrator:
             )
             return False
 
-        self._active_mimics[decoy_id] = mimic
+        # Map every service to its primary BEFORE publishing the mimic. A
+        # status read that observes _active_mimics without the mapping resolves
+        # a sibling to itself, misses the dict, and reports a running host as
+        # degraded.
         for service_id in service_ids:
             self._service_to_primary[service_id] = decoy_id
+        self._active_mimics[decoy_id] = mimic
 
         # Register every credible service under the shared host identity.
         if self._mdns is not None:
@@ -2837,7 +2845,8 @@ class MimicOrchestrator:
         if row is None and mimic is None:
             return False
         if row is None:
-            assert mimic is not None
+            if mimic is None:
+                raise RuntimeError("Mimic removal lost both runtime and durable state")
             logger.error(
                 "Mimic %d exists in runtime without a durable row; cleaning "
                 "network state before forgetting it",
@@ -3092,8 +3101,10 @@ class MimicOrchestrator:
             await mimic.start()
 
             exposed_ports = {config["port"] for config in port_configs}
-            assert self._port_fwd is not None
-            isolated = await self._port_fwd.add_forwards(
+            port_fwd = self._port_fwd
+            if port_fwd is None:
+                raise RuntimeError("Mimic port-forward manager is unavailable")
+            isolated = await port_fwd.add_forwards(
                 decoy_id,
                 bind_address,
                 mimic.port_remaps,
@@ -3111,8 +3122,11 @@ class MimicOrchestrator:
                 )
                 return False
 
-            self._active_mimics[decoy_id] = mimic
+            # Resolve and install the mapping first. This awaits a DB query,
+            # so publishing the mimic before it leaves a window in which a
+            # concurrent status read reports the host's siblings as degraded.
             service_rows = await self._refresh_service_mapping(decoy_id)
+            self._active_mimics[decoy_id] = mimic
 
             # Re-register every credible service under the shared hostname.
             if self._mdns is not None:
@@ -3798,8 +3812,10 @@ class MimicOrchestrator:
                 # Only then is this endpoint changed to its advertised ports.
                 await mimic.start()
                 exposed_ports = {config["port"] for config in port_configs}
-                assert self._port_fwd is not None
-                isolated = await self._port_fwd.add_forwards(
+                port_fwd = self._port_fwd
+                if port_fwd is None:
+                    raise RuntimeError("Mimic port-forward manager is unavailable")
+                isolated = await port_fwd.add_forwards(
                     decoy_id,
                     bind_address,
                     mimic.port_remaps,
@@ -3823,10 +3839,10 @@ class MimicOrchestrator:
                         )
                     continue
 
+                # Mapping first, for the same reason as the restart path.
+                await self._refresh_service_mapping(decoy_id)
                 self._active_mimics[decoy_id] = mimic
                 resumed_ips.add(bind_address)
-
-                await self._refresh_service_mapping(decoy_id)
 
                 # Re-register every credible service.
                 if self._mdns is not None:

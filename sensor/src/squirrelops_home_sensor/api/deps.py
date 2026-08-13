@@ -48,6 +48,11 @@ async def get_config() -> dict:
     raise NotImplementedError("Must be overridden via app.state or dependency_overrides")
 
 
+async def get_secret_store():
+    """Return the encrypted SecretStore used by runtime configuration."""
+    raise NotImplementedError("Must be overridden via app.state or dependency_overrides")
+
+
 async def get_privileged_ops():
     """Return the PrivilegedOperations instance from app state.
 

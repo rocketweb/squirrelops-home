@@ -2352,6 +2352,34 @@ async def test_stopped_restart_withdraws_and_verifies_before_republishing(
 
 
 @pytest.mark.asyncio
+async def test_restart_maps_services_before_publishing_runtime(
+    mimic_setup,
+    monkeypatch,
+):
+    """Exercise the production restart path and observe the former race."""
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    assert await mimic_setup.orchestrator.disable_mimic(1) is True
+
+    observed_published_state: list[bool] = []
+    original_refresh = mimic_setup.orchestrator._refresh_service_mapping
+
+    async def observing_refresh(decoy_id):
+        observed_published_state.append(
+            decoy_id in mimic_setup.orchestrator._active_mimics
+        )
+        return await original_refresh(decoy_id)
+
+    monkeypatch.setattr(
+        mimic_setup.orchestrator,
+        "_refresh_service_mapping",
+        observing_refresh,
+    )
+
+    assert await mimic_setup.orchestrator.restart_mimic(1) is True
+    assert observed_published_state == [False]
+
+
+@pytest.mark.asyncio
 async def test_resume_refuses_persisted_ip_now_owned_by_real_device(
     mimic_setup, db,
 ):

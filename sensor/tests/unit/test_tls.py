@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from cryptography import x509
@@ -155,7 +156,7 @@ class TestGenerateServerCert:
         dns_names = san.value.get_values_for_type(x509.DNSName)
         assert "localhost" in dns_names
 
-    def test_san_contains_ipv4_addresses(
+    def test_san_contains_only_valid_loopback_identity(
         self, ca_pair: tuple[EllipticCurvePrivateKey, x509.Certificate]
     ) -> None:
         _, server_cert = generate_server_cert(*ca_pair)
@@ -164,7 +165,7 @@ class TestGenerateServerCert:
         )
         ip_addrs = san.value.get_values_for_type(x509.IPAddress)
         assert ipaddress.IPv4Address("127.0.0.1") in ip_addrs
-        assert ipaddress.IPv4Address("0.0.0.0") in ip_addrs
+        assert ipaddress.IPv4Address("0.0.0.0") not in ip_addrs
 
     def test_ten_year_validity(
         self, ca_pair: tuple[EllipticCurvePrivateKey, x509.Certificate]
@@ -289,6 +290,30 @@ class TestEnsureTlsCerts:
         )
         # CA cert fingerprint should be the same
         assert ca_cert1.fingerprint(hashes.SHA256()) == ca_cert2.fingerprint(
+            hashes.SHA256()
+        )
+
+    async def test_legacy_unspecified_server_identity_is_rotated(
+        self, store: _InMemoryStore, tmp_path: Path
+    ) -> None:
+        cert_path, _, _, ca_cert = await ensure_tls_certs(
+            store, tmp_path, "TestSensor"
+        )
+        original = x509.load_pem_x509_certificate(cert_path.read_bytes())
+
+        with patch(
+            "squirrelops_home_sensor.tls._has_unspecified_ip_identity",
+            return_value=True,
+        ):
+            rotated_path, _, _, rotated_ca = await ensure_tls_certs(
+                store, tmp_path, "TestSensor"
+            )
+
+        rotated = x509.load_pem_x509_certificate(rotated_path.read_bytes())
+        assert rotated.fingerprint(hashes.SHA256()) != original.fingerprint(
+            hashes.SHA256()
+        )
+        assert rotated_ca.fingerprint(hashes.SHA256()) == ca_cert.fingerprint(
             hashes.SHA256()
         )
 

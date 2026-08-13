@@ -37,7 +37,6 @@ public enum Endpoint: Sendable {
     case status
     case profile
     case learning
-    case checkUpdates
     case updateProfile(profile: String)
 
     // Devices
@@ -111,8 +110,6 @@ public enum Endpoint: Sendable {
             return "/system/profile"
         case .learning:
             return "/system/learning"
-        case .checkUpdates:
-            return "/system/updates"
         case .devices:
             return "/devices"
         case .device(let id):
@@ -202,7 +199,7 @@ public enum Endpoint: Sendable {
 
     public var method: String {
         switch self {
-        case .health, .status, .profile, .learning, .checkUpdates,
+        case .health, .status, .profile, .learning,
              .devices, .device, .deviceFingerprints, .devicePorts,
              .alerts, .alert, .incident,
              .exportAlerts,

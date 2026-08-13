@@ -23,6 +23,11 @@ from datetime import datetime
 
 import defusedxml.ElementTree as ET
 
+from squirrelops_home_sensor.subprocess_security import (
+    UntrustedExecutableError,
+    trusted_executable,
+)
+
 logger = logging.getLogger(__name__)
 
 _MIMIC_CHAIN = "SQUIRRELOPS_MIMIC"
@@ -309,8 +314,17 @@ class LinuxPrivilegedOps(PrivilegedOperations):
         port_str = ",".join(str(p) for p in ports)
 
         # All options (including "-oX -") must precede "--"; targets follow it.
+        try:
+            binary = trusted_executable("nmap")
+        except UntrustedExecutableError:
+            logger.critical(
+                "Refusing to run a service scan: no trusted nmap on this host",
+                exc_info=True,
+            )
+            raise
         proc = await asyncio.create_subprocess_exec(
-            "nmap", "-sV", "-p", port_str, "-oX", "-", "--", *targets,
+            binary,
+            "-sV", "-p", port_str, "-oX", "-", "--", *targets,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -387,7 +401,8 @@ class LinuxPrivilegedOps(PrivilegedOperations):
         prefix = _ipa.IPv4Network(f"0.0.0.0/{mask}").prefixlen
         try:
             proc = await asyncio.create_subprocess_exec(
-                "ip", "addr", "add", f"{ip}/{prefix}", "dev", interface,
+                trusted_executable("ip"),
+                "addr", "add", f"{ip}/{prefix}", "dev", interface,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -396,6 +411,15 @@ class LinuxPrivilegedOps(PrivilegedOperations):
                 logger.warning("ip addr add failed: %s", stderr.decode().strip())
                 return False
             return True
+        except UntrustedExecutableError:
+            logger.critical(
+                "Refusing to add IP alias %s on %s: no trusted ip(8) on this "
+                "host",
+                ip,
+                interface,
+                exc_info=True,
+            )
+            raise
         except Exception:
             logger.exception("Failed to add IP alias %s on %s", ip, interface)
             return False
@@ -410,7 +434,8 @@ class LinuxPrivilegedOps(PrivilegedOperations):
         _ipa.IPv4Address(ip)
         try:
             proc = await asyncio.create_subprocess_exec(
-                "ip", "addr", "del", f"{ip}/32", "dev", interface,
+                trusted_executable("ip"),
+                "addr", "del", f"{ip}/32", "dev", interface,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -419,6 +444,15 @@ class LinuxPrivilegedOps(PrivilegedOperations):
                 logger.warning("ip addr del failed: %s", stderr.decode().strip())
                 return False
             return True
+        except UntrustedExecutableError:
+            logger.critical(
+                "Refusing to remove IP alias %s on %s: no trusted ip(8) on "
+                "this host",
+                ip,
+                interface,
+                exc_info=True,
+            )
+            raise
         except Exception:
             logger.exception("Failed to remove IP alias %s on %s", ip, interface)
             return False
@@ -846,7 +880,7 @@ class LinuxPrivilegedOps(PrivilegedOperations):
         """Capture a table so its owned subset can be inspected."""
         try:
             proc = await asyncio.create_subprocess_exec(
-                "iptables-save",
+                trusted_executable("iptables-save"),
                 "-t",
                 table,
                 stdout=asyncio.subprocess.PIPE,
@@ -861,13 +895,34 @@ class LinuxPrivilegedOps(PrivilegedOperations):
                 )
                 return None
             return stdout.decode()
+        except UntrustedExecutableError:
+            logger.critical(
+                "Refusing to inspect the %s iptables table: no trusted "
+                "iptables-save on this host",
+                table,
+                exc_info=True,
+            )
+            raise
         except Exception:
             logger.exception("Could not capture the %s iptables table", table)
             return None
 
     async def _run_iptables_restore(self, payload: str, *, test: bool) -> bool:
         """Validate or apply an owned-only iptables-restore payload."""
-        args = ["iptables-restore", "--noflush", "-w", "5"]
+        try:
+            binary = trusted_executable("iptables-restore")
+        except UntrustedExecutableError:
+            # Deliberately ahead of the operational handler below. Running an
+            # untrusted iptables-restore as root is not a degraded mode, and
+            # returning False would file it as an ordinary rule failure. Keep
+            # this resolution outside that try block.
+            logger.critical(
+                "Refusing to run iptables-restore: no trusted binary on this "
+                "host",
+                exc_info=True,
+            )
+            raise
+        args = [binary, "--noflush", "-w", "5"]
         if test:
             args.append("--test")
         try:

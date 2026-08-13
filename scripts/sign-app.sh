@@ -46,11 +46,22 @@ fi
 APP_BUNDLE="$1"
 IDENTITY="${2:-Developer ID Application}"
 RELEASE_BUILD="${SQUIRRELOPS_RELEASE_BUILD:-0}"
+LOCAL_TEST_BUILD="${SQUIRRELOPS_LOCAL_TEST_BUILD:-0}"
 
 case "$RELEASE_BUILD" in
     0|1) ;;
     *) error "SQUIRRELOPS_RELEASE_BUILD must be 0 or 1." ;;
 esac
+case "$LOCAL_TEST_BUILD" in
+    0|1) ;;
+    *) error "SQUIRRELOPS_LOCAL_TEST_BUILD must be 0 or 1." ;;
+esac
+if [ "$IDENTITY" = "-" ] && [ "$LOCAL_TEST_BUILD" != "1" ]; then
+    error "Ad-hoc signing is restricted to explicit local test builds."
+fi
+if [ "$LOCAL_TEST_BUILD" = "1" ] && [ "$RELEASE_BUILD" = "1" ]; then
+    error "A release build cannot be a local test build."
+fi
 
 # Resolve paths relative to the repo root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -85,7 +96,8 @@ fi
 # ---------------------------------------------------------------------------
 info "Checking for signing identity: ${BOLD}$IDENTITY${NC}"
 
-if ! security find-identity -v -p codesigning | grep -Fq -- "$IDENTITY"; then
+if [ "$IDENTITY" != "-" ] \
+    && ! security find-identity -v -p codesigning | grep -Fq -- "$IDENTITY"; then
     if [ "$RELEASE_BUILD" = "1" ]; then
         error "Release builds require an available app signing identity: $IDENTITY"
     fi
@@ -96,17 +108,28 @@ fi
 
 info "Signing identity found."
 
+USE_TIMESTAMP=1
+if [ "$IDENTITY" = "-" ]; then
+    USE_TIMESTAMP=0
+    warn "Using an ad-hoc signature for an explicit local test build."
+fi
+
 # ---------------------------------------------------------------------------
 # Step 1: Sign the helper binary (inside-out signing order)
 # ---------------------------------------------------------------------------
 info "Signing helper binary: $HELPER_PATH"
-codesign --force \
-    --options runtime \
-    --identifier "$HELPER_BUNDLE_ID" \
-    --entitlements "$HELPER_ENTITLEMENTS" \
-    --sign "$IDENTITY" \
-    --timestamp \
-    "$HELPER_PATH"
+HELPER_SIGN_ARGS=(
+    codesign --force
+    --options runtime
+    --identifier "$HELPER_BUNDLE_ID"
+    --entitlements "$HELPER_ENTITLEMENTS"
+    --sign "$IDENTITY"
+)
+if [ "$USE_TIMESTAMP" = "1" ]; then
+    HELPER_SIGN_ARGS+=(--timestamp)
+fi
+HELPER_SIGN_ARGS+=("$HELPER_PATH")
+"${HELPER_SIGN_ARGS[@]}"
 if ! HELPER_SIGNATURE="$(codesign -d --verbose=4 "$HELPER_PATH" 2>&1)"; then
     error "Could not read the helper signature."
 fi
@@ -122,13 +145,18 @@ info "Helper signed successfully."
 # Step 2: Sign the app bundle
 # ---------------------------------------------------------------------------
 info "Signing app bundle: $APP_BUNDLE"
-codesign --force \
-    --options runtime \
-    --deep \
-    --entitlements "$APP_ENTITLEMENTS" \
-    --sign "$IDENTITY" \
-    --timestamp \
-    "$APP_BUNDLE"
+APP_SIGN_ARGS=(
+    codesign --force
+    --options runtime
+    --deep
+    --entitlements "$APP_ENTITLEMENTS"
+    --sign "$IDENTITY"
+)
+if [ "$USE_TIMESTAMP" = "1" ]; then
+    APP_SIGN_ARGS+=(--timestamp)
+fi
+APP_SIGN_ARGS+=("$APP_BUNDLE")
+"${APP_SIGN_ARGS[@]}"
 info "App bundle signed successfully."
 
 # ---------------------------------------------------------------------------

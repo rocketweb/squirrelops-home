@@ -156,8 +156,8 @@ class _MimicEndpoint:
             writer.close()
             try:
                 await writer.wait_closed()
-            except Exception:
-                pass
+            except (ConnectionError, OSError, RuntimeError):
+                logger.debug("Mimic overload connection cleanup failed", exc_info=True)
             self._notified_connections.discard(id(writer))
             return
 
@@ -210,10 +210,12 @@ class _MimicEndpoint:
         writer: asyncio.StreamWriter,
     ) -> None:
         """Upgrade an accepted connection to TLS before serving a protocol."""
-        assert self.ssl_context is not None
+        ssl_context = self.ssl_context
+        if ssl_context is None:
+            raise RuntimeError("TLS connection accepted without an SSL context")
         try:
             await writer.start_tls(
-                self.ssl_context,
+                ssl_context,
                 ssl_handshake_timeout=5.0,
             )
         except Exception:
@@ -221,8 +223,8 @@ class _MimicEndpoint:
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
-                pass
+            except (ConnectionError, OSError, RuntimeError):
+                logger.debug("Mimic TLS connection cleanup failed", exc_info=True)
             return
 
         if self.routes:
@@ -448,8 +450,8 @@ class _MimicEndpoint:
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
-                pass
+            except (ConnectionError, OSError, RuntimeError):
+                logger.debug("Mimic HTTP connection cleanup failed", exc_info=True)
 
     async def _read_chunked_body(
         self,
@@ -625,8 +627,8 @@ class _MimicEndpoint:
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
-                pass
+            except (ConnectionError, OSError, RuntimeError):
+                logger.debug("Mimic banner connection cleanup failed", exc_info=True)
 
     async def _send_response(
         self, writer: asyncio.StreamWriter, route: dict,

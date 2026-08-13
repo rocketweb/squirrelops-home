@@ -657,7 +657,7 @@ Displays sensor information:
 
 ### Updates
 
-Shows the current sensor version with a **Check for Updates** button. The sensor checks a version manifest for available updates. Updates are never automatic — you must confirm them.
+Shows the installed Home distribution and sensor versions with a **Check for Updates** button. The app queries published `home-v*` releases on GitHub only when you click the button. Update checks and installations are never automatic.
 
 ---
 
@@ -881,7 +881,7 @@ Everything, by default. All device data, alert history, scan results, and config
 | **Push Notifications** | Alert title and body text | Apple Push Notification Service (via relay) | Toggle off in Settings > Alert Methods |
 | **Cloud AI Classification and Decoy Naming** | Classification: OUI prefix, sanitized DNS and mDNS names, open port numbers, detected services, DHCP option codes, mDNS service types, and available UPnP metadata. Naming: a bounded, sanitized sample of observed hostnames. No fingerprint hashes, connection destinations, IP addresses, full MAC address, packet contents, alerts, or credentials. | OpenRouter, Fireworks.ai, or your configured OpenAI-compatible provider, using your own API key | Choose **None** or switch to Lite |
 | **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers." | Your Slack workspace | Toggle off in Settings > Alert Methods |
-| **Update Checks** | Current version number and platform identifier | SquirrelOps update endpoint | Don't click "Check for Updates" |
+| **Update Checks** | Standard request metadata, such as your public IP address and HTTP headers | GitHub Releases API | Don't click "Check for Updates" |
 
 With LM Studio or Ollama on the local network, classification and naming data
 stay on that network.

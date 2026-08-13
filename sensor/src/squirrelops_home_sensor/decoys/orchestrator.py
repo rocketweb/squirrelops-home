@@ -26,6 +26,10 @@ from typing import Protocol, runtime_checkable
 
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 from squirrelops_home_sensor.privileged.helper import PrivilegedOperations
+from squirrelops_home_sensor.subprocess_security import (
+    UntrustedExecutableError,
+    trusted_executable,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +138,12 @@ def _interface_ipv4_addresses(interface: str) -> list[str]:
     """Enumerate IPv4 addresses for one configured interface in OS order."""
     try:
         if sys.platform == "darwin":
-            command = ["/sbin/ifconfig", interface]
+            command = [trusted_executable("ifconfig"), interface]
         else:
-            command = ["ip", "-4", "-o", "addr", "show", "dev", interface]
+            command = [
+                trusted_executable("ip"),
+                "-4", "-o", "addr", "show", "dev", interface,
+            ]
         result = subprocess.run(
             command,
             capture_output=True,
@@ -144,6 +151,17 @@ def _interface_ipv4_addresses(interface: str) -> list[str]:
             timeout=5,
             check=False,
         )
+    except UntrustedExecutableError:
+        # Still degrades to "no addresses", because a decoy that cannot pick a
+        # bind address should not take the sensor down. But an untrusted
+        # interface tool is reported, not swallowed with everything else.
+        logger.error(
+            "Could not enumerate addresses for %s: no trusted interface tool "
+            "on this host",
+            interface,
+            exc_info=True,
+        )
+        return []
     except (OSError, subprocess.SubprocessError):
         return []
     return re.findall(r"inet (?:addr:)?(\d+\.\d+\.\d+\.\d+)", result.stdout)

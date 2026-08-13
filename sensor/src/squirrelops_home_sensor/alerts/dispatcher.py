@@ -13,6 +13,7 @@ Built-in method factories:
 
 import json
 import logging
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
@@ -79,16 +80,139 @@ class AlertDispatcher:
         *,
         failure_backoff_base: float = 30.0,
         failure_backoff_max: float = 900.0,
+        renotify_cooldown: float = 300.0,
+        max_tracked_alerts: int = 4096,
     ) -> None:
         self._methods = [MethodConfig(m) for m in methods]
         self._failure_states: dict[str, _DeliveryFailureState] = {}
         self._failure_backoff_base = failure_backoff_base
         self._failure_backoff_max = failure_backoff_max
         self._clock: Callable[[], float] = monotonic
+        # alert id -> ((severity, title), time of last re-notification or None)
+        if max_tracked_alerts < 1:
+            raise ValueError("max_tracked_alerts must be positive")
+        self._notified_summaries: OrderedDict[
+            Any, tuple[tuple[str, str], float | None]
+        ] = OrderedDict()
+        self._renotify_cooldown = renotify_cooldown
+        self._max_tracked_alerts = max_tracked_alerts
 
     def subscribe_to(self, event_bus: EventBusProtocol) -> None:
-        """Subscribe to ``alert.new`` events on the given event bus."""
+        """Subscribe to new alerts and to material changes to open ones."""
         event_bus.subscribe(["alert.new"], self._on_alert_event)
+        event_bus.subscribe(["alert.updated"], self._on_alert_updated)
+
+    async def _on_alert_updated(
+        self,
+        event: dict[str, Any] | str,
+        payload: AlertPayload | None = None,
+        *args: Any,
+    ) -> None:
+        """Deliver an updated alert only when what the user would read changed.
+
+        A decoy-trip alert folds every repeat connection from one source into a
+        single open row, so a scan burst can update the same alert hundreds of
+        times. Delivering each update would be worse than the silence it
+        replaces, so an update is only notified when its visible summary
+        changes, meaning severity or title, and at most once per cooldown.
+
+        Severity and title are the right signal because they are what the alert
+        row shows: the title promotes to "Port scan detected from X" the moment
+        a second endpoint is touched, which is the moment the character of the
+        event actually changed.
+        """
+        payload = self._payload_of(event, payload)
+        if payload is None:
+            return
+
+        # ``alert.updated`` is also used for lifecycle bookkeeping. A resolved,
+        # dismissed, or otherwise actioned alert is no longer notification
+        # eligible even if its retained severity and title happen to change.
+        # Producers include these timestamps in the event snapshot, so filter
+        # before the summary/cooldown logic can turn closure into a new page.
+        detail = payload.get("detail")
+        if (
+            payload.get("read_at")
+            or payload.get("actioned_at")
+            or (isinstance(detail, dict) and detail.get("resolved_at"))
+        ):
+            alert_id = payload.get("id")
+            if alert_id is not None:
+                # A lifecycle timestamp ends this notification episode. If the
+                # same row is later reactivated, its unchanged summary is fresh
+                # signal and must be eligible for delivery again.
+                self._notified_summaries.pop(alert_id, None)
+            return
+
+        alert_id = payload.get("id")
+        summary = (str(payload.get("severity", "")), str(payload.get("title", "")))
+        now = self._clock()
+
+        if alert_id is not None:
+            previous = self._notified_summaries.get(alert_id)
+            if previous is not None:
+                last_summary, last_renotified_at = previous
+                if summary == last_summary:
+                    return
+                # The cooldown governs the gap between re-notifications, not
+                # the gap from the original alert. last_renotified_at is None
+                # until this alert has been re-notified once, so the first
+                # material change (usually the title promoting to a port scan)
+                # is never held back.
+                if (
+                    last_renotified_at is not None
+                    and now - last_renotified_at < self._renotify_cooldown
+                ):
+                    # Too soon. Leave the baseline alone so this change is still
+                    # pending and gets delivered once the cooldown expires.
+                    return
+
+        await self.dispatch(payload)
+
+        # After dispatch, not before: dispatch records the delivered summary
+        # with no re-notification time, and this is the write that starts the
+        # cooldown for the next material change.
+        if alert_id is not None:
+            self._remember_summary(alert_id, summary, now)
+
+    def record_delivered_summary(self, alert_payload: AlertPayload) -> None:
+        """Seed the summary an alert was last notified with."""
+        alert_id = alert_payload.get("id")
+        if alert_id is None:
+            return
+        self._remember_summary(
+            alert_id,
+            (
+                str(alert_payload.get("severity", "")),
+                str(alert_payload.get("title", "")),
+            ),
+            None,
+        )
+
+    def _remember_summary(
+        self,
+        alert_id: Any,
+        summary: tuple[str, str],
+        renotified_at: float | None,
+    ) -> None:
+        """Record a bounded, least-recently-updated notification baseline."""
+        self._notified_summaries.pop(alert_id, None)
+        self._notified_summaries[alert_id] = (summary, renotified_at)
+        while len(self._notified_summaries) > self._max_tracked_alerts:
+            self._notified_summaries.popitem(last=False)
+
+    @staticmethod
+    def _payload_of(
+        event: dict[str, Any] | str,
+        payload: AlertPayload | None,
+    ) -> AlertPayload | None:
+        if payload is not None:
+            return payload
+        if isinstance(event, dict) and isinstance(event.get("payload"), dict):
+            return event["payload"]
+        if isinstance(event, dict):
+            return event
+        return None
 
     async def _on_alert_event(
         self,
@@ -119,6 +243,7 @@ class AlertDispatcher:
         dispatch continues to remaining methods (best-effort fan-out).
         """
         severity = Severity(alert_payload["severity"])
+        self.record_delivered_summary(alert_payload)
 
         for method in self._methods:
             if not method.accepts(severity):

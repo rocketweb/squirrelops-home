@@ -38,8 +38,10 @@ class EventLog:
             (event_type, payload_json, source_id),
         )
         await self._db.commit()
-        assert cursor.lastrowid is not None
-        return cursor.lastrowid
+        sequence = cursor.lastrowid
+        if sequence is None:
+            raise RuntimeError("Event append did not return a sequence number")
+        return int(sequence)
 
     async def entity_exists_for_event(
         self,

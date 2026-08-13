@@ -137,11 +137,40 @@ public final class AppState {
         presentedCriticalAlerts.first
     }
 
-    public init() {}
+    /// Shared manual release check for Settings and the menu bar.
+    public let updateChecker: UpdateChecker
+
+    /// The Home distribution is the only version represented by ``home-v*``.
+    public enum UpdatableComponent: String, Sendable, CaseIterable {
+        case home
+    }
+
+    /// Whether the installed Home distribution is behind the newest Home release.
+    public var outdatedComponents: [UpdatableComponent] {
+        updateChecker.availableUpdate == nil ? [] : [.home]
+    }
+
+    /// The Home distribution release to offer when the installed package is behind.
+    public var pendingUpdate: AvailableUpdate? {
+        updateChecker.availableUpdate
+    }
+
+    /// One line for the menu bar.
+    public var pendingUpdateSummary: String? {
+        guard let pending = pendingUpdate else { return nil }
+        return "Update SquirrelOps Home to v\(pending.version)"
+    }
+
+    public init(updateChecker: UpdateChecker = UpdateChecker()) {
+        self.updateChecker = updateChecker
+    }
 
     public static func decoyDeviceIPs(in decoys: [DecoySummary]) -> Set<String> {
         Set(decoys.compactMap { decoy in
-            guard decoy.decoyType == "mimic", decoy.status == "active" else {
+            // isOperationalDeployment, not an inline status check. A degraded
+            // mimic keeps its alias, so treating it as inactive would let a
+            // fake host render as a real device in the user's inventory.
+            guard decoy.isVirtualMimic, decoy.isOperationalDeployment else {
                 return nil
             }
             guard !["", "0.0.0.0", "127.0.0.1", "::"].contains(decoy.bindAddress) else {

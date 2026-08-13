@@ -49,6 +49,24 @@ extension SensorClientError: LocalizedError {
 
 public final class SensorClient: Sendable {
 
+    /// A session configuration that never writes a response to disk.
+    ///
+    /// Sensor responses carry credentials. `URLSessionConfiguration.default`
+    /// shares an on-disk `URLCache`, so a cached `/config` body outlives the
+    /// process in a file readable by any process running as the paired user.
+    /// The sensor now sends `Cache-Control: no-store`, but the client must not
+    /// depend on a header to keep secrets off the disk, and the same headers
+    /// were absent from every release before 2.0.2.
+    ///
+    /// Ephemeral also keeps cookies and credentials in memory. Neither is used
+    /// here: the client identity arrives through the TLS delegate.
+    static func nonPersistentConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
+    }
+
     let baseURL: URL
     let session: URLSession
     let certFingerprint: String?
@@ -70,7 +88,7 @@ public final class SensorClient: Sendable {
         self.certFingerprint = nil
         let delegate = TLSPinningDelegate(serverTrustMode: .pairingTOFU)
         self.session = URLSession(
-            configuration: .default,
+            configuration: Self.nonPersistentConfiguration(),
             delegate: delegate,
             delegateQueue: nil
         )
@@ -92,7 +110,7 @@ public final class SensorClient: Sendable {
             serverTrustMode: .pinnedCA(caCertData),
             clientIdentity: clientIdentity
         )
-        let config = URLSessionConfiguration.default
+        let config = Self.nonPersistentConfiguration()
         self.session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
 
         let decoder = JSONDecoder()

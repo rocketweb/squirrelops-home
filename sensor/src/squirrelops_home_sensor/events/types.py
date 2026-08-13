@@ -36,6 +36,9 @@ class EventType:
     MIMIC_DEPLOYED = "mimic.deployed"
     MIMIC_REMOVED = "mimic.removed"
 
+    # Configuration events
+    CONFIG_UPDATED = "config.updated"
+
     # System events
     SYSTEM_SCAN_COMPLETE = "system.scan_complete"
     SYSTEM_PROFILE_CHANGED = "system.profile_changed"

@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
+import plistlib
 import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_unsandboxed_macos_targets_keep_hardened_runtime_and_library_validation() -> None:
+    sign_script = (REPO_ROOT / "scripts/sign-app.sh").read_text(encoding="utf-8")
+    for entitlement_path in (
+        REPO_ROOT / "app/entitlements/app.entitlements",
+        REPO_ROOT / "app/entitlements/helper.entitlements",
+    ):
+        entitlements = plistlib.loads(entitlement_path.read_bytes())
+        assert entitlements["com.apple.security.app-sandbox"] is False
+        assert "com.apple.security.cs.disable-library-validation" not in entitlements
+
+    assert sign_script.count("--options runtime") >= 2
 
 
 def test_sensor_sdist_allowlists_source_and_package_metadata() -> None:
@@ -44,6 +58,55 @@ def test_app_installer_verifies_the_copied_helper_identity_before_install() -> N
     )
     assert verify_temp < install_temp < verify_installed
     assert 'cp "$HELPER_SRC" "$HELPER_DEST"' not in script
+
+
+def test_local_test_package_is_explicit_and_cannot_weaken_release_signing() -> None:
+    builder = (REPO_ROOT / "scripts/build-pkg.sh").read_text(encoding="utf-8")
+    signer = (REPO_ROOT / "scripts/sign-app.sh").read_text(encoding="utf-8")
+    postinstall = (
+        REPO_ROOT / "scripts/pkg/app-scripts/postinstall"
+    ).read_text(encoding="utf-8")
+
+    assert 'LOCAL_TEST_BUILD="${SQUIRRELOPS_LOCAL_TEST_BUILD:-0}"' in builder
+    assert 'error "A release build cannot be a local test build."' in builder
+    assert "com.squirrelops.local-test-build" in builder
+    assert 'SIGNING_IDENTITY="-"' in builder
+    assert "Ad-hoc signing is restricted to explicit local test builds" in signer
+    assert '/usr/bin/codesign --verify --deep --strict' in postinstall
+    assert "Local test build must use an ad-hoc app signature" in postinstall
+    assert "verify_local_test_helper" in postinstall
+    assert 'LOCAL_TEST_OPT_IN="/var/db/com.squirrelops.allow-local-test"' in postinstall
+    assert "root:wheel:600:1" in postinstall
+    assert "one-time root-owned operator opt-in" in postinstall
+    assert '/bin/rm -f -- "$LOCAL_TEST_OPT_IN"' in postinstall
+    assert postinstall.index("one-time root-owned operator opt-in") < postinstall.index(
+        'verify_local_test_helper "$HELPER_TEMP"'
+    )
+    # The opt-in is consumed as soon as it authorizes the run, before any
+    # install step can fail. Consuming it only after RPC readiness left the
+    # token armed for every earlier exit, so a failed install silently
+    # authorized the next one.
+    assert postinstall.index('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') < postinstall.index(
+        'verify_local_test_helper "$HELPER_TEMP"'
+    )
+    assert postinstall.index('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') < postinstall.index(
+        'verify_helper_rpc; do'
+    )
+    assert postinstall.count('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') == 1
+
+    assert (
+        'error "A local test build cannot use a real signing identity: '
+        '$SIGNING_IDENTITY"'
+        in builder
+    )
+    assert '[ -z "${SIGNING_IDENTITY+x}" ]' not in builder
+
+    native_signing = builder[
+        builder.index('SIGN_NATIVE_ARGS=(codesign --force --sign "$SIGNING_IDENTITY")'):
+        builder.index('SIGN_NATIVE_ARGS+=("$macho")')
+    ]
+    assert 'if [ "$SIGNING_IDENTITY" != "-" ]; then' in native_signing
+    assert "SIGN_NATIVE_ARGS+=(--options runtime --timestamp)" in native_signing
 
 
 def test_app_installer_initializes_the_root_owned_alias_state_marker() -> None:
@@ -151,6 +214,15 @@ def test_helper_authorized_client_requirement_pins_the_release_team() -> None:
     assert 'identifier "com.squirrelops.home"' in helper_info
     assert "anchor apple generic" in helper_info
     assert 'certificate leaf[subject.OU] = "PSQ5HK5U65"' in helper_info
+
+
+def test_live_qa_timeout_is_compatible_with_stock_macos() -> None:
+    script = (REPO_ROOT / "qa/live/check.sh").read_text(encoding="utf-8")
+
+    assert "run_bounded()" in script
+    assert "run_bounded 6 dns-sd" in script
+    assert "run_bounded 4 dns-sd" in script
+    assert "$(timeout " not in script
 
 
 def test_helper_alias_mutations_are_policy_and_ownership_gated() -> None:

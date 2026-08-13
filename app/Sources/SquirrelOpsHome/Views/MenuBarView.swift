@@ -134,6 +134,24 @@ public struct MenuBarView: View {
 
     private var actionButtons: some View {
         VStack(spacing: Spacing.xs) {
+            if let summary = appState.pendingUpdateSummary,
+               let update = appState.pendingUpdate {
+                Divider()
+
+                Link(destination: update.url) {
+                    HStack {
+                        Image(systemName: "arrow.down.circle.fill")
+                        Text(summary)
+                            .font(Typography.bodySmall)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.statusWarning(colorScheme))
+                .padding(.vertical, Spacing.xs)
+            }
+
             Divider()
 
             Button {
