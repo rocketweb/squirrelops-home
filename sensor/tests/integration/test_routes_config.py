@@ -110,6 +110,26 @@ class TestUpdateConfig:
         response = client.put("/config", json={})
         assert response.status_code == 200
 
+    def test_empty_updates_are_rate_limited(self, client):
+        with patch(
+            "squirrelops_home_sensor.api.routes_config.CONFIG_UPDATES_PER_MINUTE",
+            2,
+        ):
+            assert client.put("/config", json={}).status_code == 200
+            assert client.put("/config", json={}).status_code == 200
+            limited = client.put("/config", json={})
+        assert limited.status_code == 429
+
+    def test_rate_limiter_prunes_expired_identities(self, client, app):
+        app.state.config_update_requests = {
+            "expired-client": [0.0],
+        }
+
+        response = client.put("/config", json={})
+
+        assert response.status_code == 200
+        assert "expired-client" not in app.state.config_update_requests
+
     def test_updates_are_rate_limited_per_authenticated_client(self, client):
         with patch(
             "squirrelops_home_sensor.api.routes_config.CONFIG_UPDATES_PER_MINUTE",

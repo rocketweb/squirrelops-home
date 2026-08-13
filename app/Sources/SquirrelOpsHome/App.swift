@@ -80,7 +80,6 @@ struct SquirrelOpsHomeApp: App {
                 if let sensor = appState.pairedSensor {
                     connectToSensor(sensor)
                 }
-
             }
         }
         .defaultSize(width: 1080, height: 720)

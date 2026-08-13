@@ -213,11 +213,14 @@ public final class UpdateChecker {
             }
             guard let version = SemanticVersion(parsing: tagName),
                   tagName == "home-v\(version.description)" else {
-                return .problem("Could not read a Home version from release tag \"\(tagName)\".")
+                // One malformed historical release must not suppress every
+                // valid Home release in the feed. The aggregate still fails
+                // closed below if no usable release remains.
+                continue
             }
             guard let htmlURL = release["html_url"] as? String,
                   let url = validatedReleaseURL(htmlURL, tag: tagName) else {
-                return .problem("GitHub returned an invalid Home release link.")
+                continue
             }
             let candidate = ReleaseSnapshot(version: version, url: url)
             if newest == nil || version > newest!.version {

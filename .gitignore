@@ -40,3 +40,5 @@ Package.resolved
 
 # Worktrees
 .worktrees/
+.claude/settings.local.json
+.claude/worktrees/

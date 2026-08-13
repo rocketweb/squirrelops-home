@@ -22,9 +22,24 @@ def trusted_executable(name: str) -> str:
         raise ValueError(f"Executable is not allow-listed: {name!r}")
     for candidate in candidates:
         path = Path(candidate)
-        if path.is_file() and os.access(path, os.X_OK):
+        if _is_trusted_executable(path):
             return str(path)
     # Preserve an absolute, fail-closed lookup even when an optional tool is
     # absent. The subprocess call will report FileNotFoundError without ever
     # falling back to PATH, and mocked unit tests remain platform-independent.
     return candidates[0]
+
+
+def _is_trusted_executable(path: Path) -> bool:
+    """Require a root-owned executable with no group/other write access."""
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    return (
+        path.is_file()
+        and not path.is_symlink()
+        and metadata.st_uid == 0
+        and metadata.st_mode & 0o022 == 0
+        and os.access(path, os.X_OK)
+    )

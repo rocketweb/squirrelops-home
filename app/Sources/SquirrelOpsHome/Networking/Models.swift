@@ -1505,7 +1505,6 @@ public struct CompleteResponse: Codable, Sendable {
     }
 }
 
-
 // MARK: - Squirrel Scouts
 
 public struct ScoutStatusResponse: Codable, Sendable {

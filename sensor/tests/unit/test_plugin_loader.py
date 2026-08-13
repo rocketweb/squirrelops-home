@@ -227,6 +227,20 @@ class TestPluginLoaderDiscover:
         loader = _loader(tmp_path / "does_not_exist")
         assert loader.discover() == []
 
+    def test_unsafe_optional_directory_is_ignored(
+        self, plugin_dir: Path, valid_plugin_file: Path
+    ) -> None:
+        plugin_dir.chmod(0o770)
+
+        assert _loader(plugin_dir).discover() == []
+
+    def test_unsafe_optional_file_is_ignored(
+        self, plugin_dir: Path, valid_plugin_file: Path
+    ) -> None:
+        valid_plugin_file.chmod(0o666)
+
+        assert _loader(plugin_dir).discover() == []
+
 
 class TestPluginLoaderLoad:
     """PluginLoader.load imports and instantiates a single plugin."""

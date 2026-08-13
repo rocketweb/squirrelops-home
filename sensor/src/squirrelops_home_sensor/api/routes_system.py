@@ -82,8 +82,6 @@ class LearningResponse(BaseModel):
     hours_total: int
     phase: str  # "learning" or "complete"
 
-
-
 # ---------- Routes ----------
 
 @router.get("/health", response_model=HealthResponse)

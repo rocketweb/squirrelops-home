@@ -69,7 +69,19 @@ class PluginLoader:
         """
         if not self._plugin_dir.is_dir():
             return []
-        self._validate_trusted_path(self._plugin_dir, directory=True)
+        try:
+            self._validate_trusted_path(self._plugin_dir, directory=True)
+        except (OSError, PermissionError):
+            # Plugins are optional and not loaded in packaged production.
+            # Bulk discovery fails closed without turning an unsafe optional
+            # directory into a sensor-startup failure. Direct load() remains
+            # strict and raises the validation error to its caller.
+            logger.warning(
+                "Ignoring unsafe plugin directory %s",
+                self._plugin_dir,
+                exc_info=True,
+            )
+            return []
 
         names: list[str] = []
         for path in sorted(self._plugin_dir.iterdir()):
@@ -79,7 +91,11 @@ class PluginLoader:
                 continue
             if path.name in _SKIP_NAMES:
                 continue
-            self._validate_trusted_path(path, directory=False)
+            try:
+                self._validate_trusted_path(path, directory=False)
+            except (OSError, PermissionError):
+                logger.warning("Ignoring unsafe plugin file %s", path, exc_info=True)
+                continue
             names.append(path.stem)
         return names
 

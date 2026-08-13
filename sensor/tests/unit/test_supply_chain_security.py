@@ -1030,6 +1030,7 @@ def test_release_workflow_is_manual_main_pinned_and_approval_gated() -> None:
     assert "home-v${DISTRIBUTION_VERSION}" in home_workflow
     assert 'APP_TAG="app-v${APP_VERSION_VALUE}"' in home_workflow
     assert 'SENSOR_TAG="sensor-v${SENSOR_VERSION}"' in home_workflow
+    assert "--draft=false --latest" in home_workflow
     assert "docker/build-push-action@" not in home_workflow
     assert "sensor-v${SENSOR_VERSION}" in sensor_workflow
     assert "--latest=false" in sensor_workflow

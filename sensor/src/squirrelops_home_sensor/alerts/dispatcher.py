@@ -13,6 +13,7 @@ Built-in method factories:
 
 import json
 import logging
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
@@ -80,6 +81,7 @@ class AlertDispatcher:
         failure_backoff_base: float = 30.0,
         failure_backoff_max: float = 900.0,
         renotify_cooldown: float = 300.0,
+        max_tracked_alerts: int = 4096,
     ) -> None:
         self._methods = [MethodConfig(m) for m in methods]
         self._failure_states: dict[str, _DeliveryFailureState] = {}
@@ -87,10 +89,13 @@ class AlertDispatcher:
         self._failure_backoff_max = failure_backoff_max
         self._clock: Callable[[], float] = monotonic
         # alert id -> ((severity, title), time of last re-notification or None)
-        self._notified_summaries: dict[
+        if max_tracked_alerts < 1:
+            raise ValueError("max_tracked_alerts must be positive")
+        self._notified_summaries: OrderedDict[
             Any, tuple[tuple[str, str], float | None]
-        ] = {}
+        ] = OrderedDict()
         self._renotify_cooldown = renotify_cooldown
+        self._max_tracked_alerts = max_tracked_alerts
 
     def subscribe_to(self, event_bus: EventBusProtocol) -> None:
         """Subscribe to new alerts and to material changes to open ones."""
@@ -131,6 +136,12 @@ class AlertDispatcher:
             or payload.get("actioned_at")
             or (isinstance(detail, dict) and detail.get("resolved_at"))
         ):
+            alert_id = payload.get("id")
+            if alert_id is not None:
+                # A lifecycle timestamp ends this notification episode. If the
+                # same row is later reactivated, its unchanged summary is fresh
+                # signal and must be eligible for delivery again.
+                self._notified_summaries.pop(alert_id, None)
             return
 
         alert_id = payload.get("id")
@@ -162,20 +173,33 @@ class AlertDispatcher:
         # with no re-notification time, and this is the write that starts the
         # cooldown for the next material change.
         if alert_id is not None:
-            self._notified_summaries[alert_id] = (summary, now)
+            self._remember_summary(alert_id, summary, now)
 
     def record_delivered_summary(self, alert_payload: AlertPayload) -> None:
         """Seed the summary an alert was last notified with."""
         alert_id = alert_payload.get("id")
         if alert_id is None:
             return
-        self._notified_summaries[alert_id] = (
+        self._remember_summary(
+            alert_id,
             (
                 str(alert_payload.get("severity", "")),
                 str(alert_payload.get("title", "")),
             ),
             None,
         )
+
+    def _remember_summary(
+        self,
+        alert_id: Any,
+        summary: tuple[str, str],
+        renotified_at: float | None,
+    ) -> None:
+        """Record a bounded, least-recently-updated notification baseline."""
+        self._notified_summaries.pop(alert_id, None)
+        self._notified_summaries[alert_id] = (summary, renotified_at)
+        while len(self._notified_summaries) > self._max_tracked_alerts:
+            self._notified_summaries.popitem(last=False)
 
     @staticmethod
     def _payload_of(

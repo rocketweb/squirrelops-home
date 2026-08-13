@@ -95,10 +95,11 @@ if [ "$LOCAL_TEST_BUILD" = "1" ]; then
     if [ "$RELEASE_BUILD" = "1" ]; then
         error "A release build cannot be a local test build."
     fi
-    if [ -z "${SIGNING_IDENTITY+x}" ] \
-        || [ "$SIGNING_IDENTITY" = "Developer ID Application" ]; then
-        SIGNING_IDENTITY="-"
+    if [ "$SIGNING_IDENTITY" != "Developer ID Application" ] \
+        && [ "$SIGNING_IDENTITY" != "-" ]; then
+        error "A local test build cannot use a real signing identity: $SIGNING_IDENTITY"
     fi
+    SIGNING_IDENTITY="-"
 fi
 
 if [ "$RELEASE_BUILD" = "1" ]; then
@@ -616,6 +617,12 @@ echo "  Output:       $OUTPUT_DIR/$PKG_NAME"
 echo "  Checksum:     $CHECKSUM_FILE"
 PKG_SIZE=$(du -sh "$OUTPUT_DIR/$PKG_NAME" | cut -f1)
 echo "  Size:       $PKG_SIZE"
+if [ "$LOCAL_TEST_BUILD" = "1" ]; then
+    echo ""
+    echo "  Before installing this local test package, create the one-time opt-in:"
+    echo "  sudo /usr/bin/install -o root -g wheel -m 600 /dev/null /var/db/com.squirrelops.allow-local-test"
+    echo "  The installer consumes the opt-in after a successful helper installation."
+fi
 echo ""
 
 # ===========================================================================

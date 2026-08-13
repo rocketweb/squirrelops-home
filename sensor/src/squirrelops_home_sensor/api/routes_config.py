@@ -95,6 +95,7 @@ ALLOWED_CONFIG_KEYS = {
 
 MUTABLE_CONFIG_KEYS = ALLOWED_CONFIG_KEYS - PROTECTED_FIELDS
 CONFIG_UPDATES_PER_MINUTE = 20
+MAX_CONFIG_UPDATE_IDENTITIES = 1024
 
 
 def _enforce_config_update_limit(request: Request, auth: dict[str, Any]) -> None:
@@ -105,17 +106,32 @@ def _enforce_config_update_limit(request: Request, auth: dict[str, Any]) -> None
     if requests_by_client is None:
         requests_by_client = {}
         request.app.state.config_update_requests = requests_by_client
-    recent = [
-        timestamp
-        for timestamp in requests_by_client.get(identity, [])
-        if now - timestamp <= 60
-    ]
+
+    # Remove expired identities as part of normal request handling. Paired
+    # certificates bound the cardinality in practice, but the limiter itself
+    # must not become an unbounded process-lifetime cache.
+    for client_identity, timestamps in list(requests_by_client.items()):
+        active = [timestamp for timestamp in timestamps if now - timestamp <= 60]
+        if active:
+            requests_by_client[client_identity] = active
+        else:
+            requests_by_client.pop(client_identity, None)
+
+    recent = list(requests_by_client.get(identity, []))
     if len(recent) >= CONFIG_UPDATES_PER_MINUTE:
         logger.warning("Rate-limited configuration updates for client %s", identity)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many configuration updates. Try again shortly.",
         )
+    if identity not in requests_by_client and (
+        len(requests_by_client) >= MAX_CONFIG_UPDATE_IDENTITIES
+    ):
+        oldest_identity = min(
+            requests_by_client,
+            key=lambda key: max(requests_by_client[key]),
+        )
+        requests_by_client.pop(oldest_identity, None)
     recent.append(now)
     requests_by_client[identity] = recent
 
@@ -427,9 +443,9 @@ async def update_config(
             ),
         )
 
+    _enforce_config_update_limit(request, auth)
     if not body:
         return redact_config(config)
-    _enforce_config_update_limit(request, auth)
 
     # A client that echoes back a redacted secret means "leave it alone", not
     # "set the credential to this marker". Resolve those before validation so

@@ -75,6 +75,23 @@ def test_local_test_package_is_explicit_and_cannot_weaken_release_signing() -> N
     assert '/usr/bin/codesign --verify --deep --strict' in postinstall
     assert "Local test build must use an ad-hoc app signature" in postinstall
     assert "verify_local_test_helper" in postinstall
+    assert 'LOCAL_TEST_OPT_IN="/var/db/com.squirrelops.allow-local-test"' in postinstall
+    assert "root:wheel:600:1" in postinstall
+    assert "one-time root-owned operator opt-in" in postinstall
+    assert '/bin/rm -f -- "$LOCAL_TEST_OPT_IN"' in postinstall
+    assert postinstall.index("one-time root-owned operator opt-in") < postinstall.index(
+        'verify_local_test_helper "$HELPER_TEMP"'
+    )
+    assert postinstall.index('verify_helper_rpc; do') < postinstall.index(
+        '/bin/rm -f -- "$LOCAL_TEST_OPT_IN"'
+    )
+
+    assert (
+        'error "A local test build cannot use a real signing identity: '
+        '$SIGNING_IDENTITY"'
+        in builder
+    )
+    assert '[ -z "${SIGNING_IDENTITY+x}" ]' not in builder
 
     native_signing = builder[
         builder.index('SIGN_NATIVE_ARGS=(codesign --force --sign "$SIGNING_IDENTITY")'):

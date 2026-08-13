@@ -456,3 +456,36 @@ class TestD15UpdatedAlertDelivery:
         })
 
         assert len(delivered) == 1, "a dismissed alert must stay quiet"
+
+    @pytest.mark.asyncio
+    async def test_reactivation_starts_a_fresh_notification_episode(self):
+        dispatcher, delivered = self._dispatcher()
+        await dispatcher.dispatch(self._alert())
+        await dispatcher._on_alert_updated({
+            "payload": self._alert(read_at="2026-08-10T12:00:00Z")
+        })
+
+        # Grouped alerts can reactivate the same row by clearing lifecycle
+        # timestamps. Even an unchanged title and severity must notify again.
+        await dispatcher._on_alert_updated({"payload": self._alert(read_at=None)})
+
+        assert len(delivered) == 2
+
+    @pytest.mark.asyncio
+    async def test_notification_baselines_are_bounded(self):
+        from squirrelops_home_sensor.alerts.dispatcher import AlertDispatcher
+
+        delivered = []
+
+        async def handler(payload):
+            delivered.append(payload)
+
+        dispatcher = AlertDispatcher(
+            methods=[{"name": "test", "handler": handler, "min_severity": "low"}],
+            max_tracked_alerts=2,
+        )
+        await dispatcher.dispatch(self._alert(id=1))
+        await dispatcher.dispatch(self._alert(id=2))
+        await dispatcher.dispatch(self._alert(id=3))
+
+        assert list(dispatcher._notified_summaries) == [2, 3]

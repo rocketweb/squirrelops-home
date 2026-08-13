@@ -42,6 +42,12 @@ struct UpdateCheckerTests {
         return try! JSONSerialization.data(withJSONObject: releases)
     }
 
+    private static func releaseListJSON(
+        _ releases: [[String: Any]]
+    ) -> Data {
+        try! JSONSerialization.data(withJSONObject: releases)
+    }
+
     private static func httpResponse(_ status: Int) -> URLResponse {
         HTTPURLResponse(
             url: UpdateChecker.releasesURL,
@@ -134,6 +140,46 @@ struct UpdateCheckerTests {
         let checker = Self.makeChecker(currentVersion: "2.0.1", body: body)
         _ = await checker.check(force: true)
         #expect(checker.availableUpdate?.version == "2.1.0")
+    }
+
+    @Test("Skips a malformed Home tag when a valid Home release remains")
+    @MainActor
+    func skipsMalformedHomeTag() async {
+        let body = Self.releaseListJSON([
+            "home-v2.1.0-rc1",
+            "home-v2.0.2",
+        ])
+        let checker = Self.makeChecker(currentVersion: "2.0.1", body: body)
+
+        #expect(await checker.check(force: true) == .available(AvailableUpdate(
+            version: "2.0.2",
+            url: URL(string: "https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.0.2")!
+        )))
+    }
+
+    @Test("Skips an invalid Home link when a valid Home release remains")
+    @MainActor
+    func skipsInvalidHomeLink() async {
+        let body = Self.releaseListJSON([
+            [
+                "tag_name": "home-v9.0.0",
+                "html_url": "https://attacker.invalid/download",
+                "draft": false,
+                "prerelease": false,
+            ],
+            [
+                "tag_name": "home-v2.0.2",
+                "html_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.0.2",
+                "draft": false,
+                "prerelease": false,
+            ],
+        ])
+        let checker = Self.makeChecker(currentVersion: "2.0.1", body: body)
+
+        #expect(await checker.check(force: true) == .available(AvailableUpdate(
+            version: "2.0.2",
+            url: URL(string: "https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.0.2")!
+        )))
     }
 
     // MARK: - Failures
@@ -360,7 +406,7 @@ struct UpdateCheckerTests {
 
     // MARK: - Link validation
 
-    @Test("Rejects a non-GitHub release link from a fresh response")
+    @Test("Fails when no release has a trusted GitHub link")
     @MainActor
     func rejectsFreshUntrustedURL() async {
         let checker = Self.makeChecker(

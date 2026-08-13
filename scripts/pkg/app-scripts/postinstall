@@ -19,6 +19,7 @@ PLIST_DEST="/Library/LaunchDaemons/${HELPER_BUNDLE_ID}.plist"
 HELPER_STATE_DIR="/var/db/com.squirrelops.helper"
 HELPER_REQUIREMENT="identifier \"${HELPER_BUNDLE_ID}\" and anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_TEAM_ID}\""
 LOCAL_TEST_MARKER="$APP_PATH/Contents/Resources/com.squirrelops.local-test-build"
+LOCAL_TEST_OPT_IN="/var/db/com.squirrelops.allow-local-test"
 LOCAL_TEST_BUILD=0
 HELPER_TEMP=""
 PLIST_TEMP=""
@@ -32,6 +33,15 @@ cleanup_staged_files() {
     fi
 }
 trap cleanup_staged_files EXIT
+
+path_has_no_extended_acl() {
+    local path="$1"
+    /bin/ls -lde "$path" 2>/dev/null \
+        | /usr/bin/awk '
+            NR > 1 { extra = 1 }
+            END { exit !(NR == 1 && extra == 0) }
+        '
+}
 
 if [ -e "$LOCAL_TEST_MARKER" ]; then
     if [ -L "$LOCAL_TEST_MARKER" ] || [ ! -f "$LOCAL_TEST_MARKER" ] \
@@ -48,6 +58,15 @@ if [ -e "$LOCAL_TEST_MARKER" ]; then
         echo "[app-postinstall] Local test build must use an ad-hoc app signature." >&2
         exit 1
     fi
+    if [ -L "$LOCAL_TEST_OPT_IN" ] || [ ! -f "$LOCAL_TEST_OPT_IN" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l' "$LOCAL_TEST_OPT_IN")" \
+            != "root:wheel:600:1" ] \
+        || ! path_has_no_extended_acl "$LOCAL_TEST_OPT_IN"
+    then
+        echo "[app-postinstall] Local test builds require a one-time root-owned operator opt-in." >&2
+        echo "[app-postinstall] Create it before retrying: sudo /usr/bin/install -o root -g wheel -m 600 /dev/null $LOCAL_TEST_OPT_IN" >&2
+        exit 1
+    fi
     LOCAL_TEST_BUILD=1
     echo "[app-postinstall] Installing explicit ad-hoc local test build." >&2
 fi
@@ -62,15 +81,6 @@ verify_local_test_helper() {
         || return 1
     printf '%s\n' "$signature" \
         | /usr/bin/grep -Fxq 'Signature=adhoc'
-}
-
-path_has_no_extended_acl() {
-    local path="$1"
-    /bin/ls -lde "$path" 2>/dev/null \
-        | /usr/bin/awk '
-            NR > 1 { extra = 1 }
-            END { exit !(NR == 1 && extra == 0) }
-        '
 }
 
 # ---------------------------------------------------------------------------
@@ -334,5 +344,15 @@ until verify_helper_rpc; do
 done
 
 echo "[app-postinstall] Helper RPC is ready (socket: $SOCKET_PATH)."
+if [ "$LOCAL_TEST_BUILD" = "1" ]; then
+    # The opt-in is deliberately one-shot. A later local package requires a
+    # fresh, explicit administrator action instead of inheriting permission
+    # from an earlier test installation.
+    if ! /bin/rm -f -- "$LOCAL_TEST_OPT_IN"; then
+        echo "[app-postinstall] Could not consume the local test opt-in." >&2
+        exit 1
+    fi
+    echo "[app-postinstall] Consumed one-time local test operator opt-in." >&2
+fi
 echo "[app-postinstall] Done."
 exit 0

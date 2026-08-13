@@ -42,13 +42,3 @@ Changing predictability is good. Changing appearance needs review.
 
 Canonical rule, full surface classification, review checklist, and testing notes live in the
 umbrella repo at `squirrelops/docs/deception-integrity.md`.
-
-## Open testing items
-
-- `decoys/types/mimic.py` narrowed `except Exception` to three specific types in connection-cleanup
-  paths. Inject an unexpected exception type into each path and assert the socket still closes the
-  way the imitated service closes.
-- Add a regression guard asserting decoy credential generation uses a CSPRNG, so a future refactor
-  cannot quietly revert to `random`.
-- Add byte-exact snapshot tests for decoy responses so any attacker-visible change fails CI and
-  requires explicit review.
