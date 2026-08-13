@@ -32,7 +32,7 @@ They are expected failures on this branch.
 | KD-1 | `_service_to_primary` populated after `_active_mimics`, with an await between, so siblings render degraded during the window | B-08, B-09 |
 | KD-2 | `buildPFRules` tcp pass branch unreachable from macOS, since `direct_ports` is always empty | C-04, C-05 |
 | KD-3 | `AlertDispatcher` subscribes only to `alert.new`, so rolling decoy-trip alerts notify once | D-06, D-07 |
-| KD-4 | `GET /config` returns secrets in plaintext with no `Cache-Control`, fixed on another branch but present here | G-01, G-02 |
+| KD-4 | Config responses must never carry secret values and must never be cacheable, on the wire or on a client disk | G-01, G-02, G-06 |
 
 ---
 
@@ -187,6 +187,7 @@ Every endpoint reachable, correctly authenticated, and correct on the unhappy pa
 |---|---|---|
 | G-01 | **KD-4** `GET /config` does not return secret values | AUTO-S |
 | G-02 | **KD-4** Config responses are marked `no-store` | AUTO-S |
+| G-06 | **KD-4** The app never persists a sensor response to disk, and an upgrade purges what earlier versions cached | AUTO-A |
 | G-03 | `config.yaml` and the secret store are not world-readable | LIVE |
 | G-04 | `PUT /config` cannot relocate `data_dir` or set `secret_passphrase` | AUTO-S |
 | G-05 | `credential_filename` path traversal is sanitized | AUTO-S |

@@ -15,6 +15,10 @@ struct SquirrelOpsHomeApp: App {
     private let notificationService = MacNotificationService.shared
 
     init() {
+        // Before anything can reach the network. An upgrade from 2.0.x still
+        // has plaintext /config responses in the on-disk URL cache, and
+        // redaction on the sensor does not reach a file already written.
+        ResponseCacheHygiene.purgeLegacyResponseCacheIfNeeded()
         FontRegistration.registerAllFonts()
         HelperManager.installIfNeeded()
     }

@@ -33,6 +33,7 @@ from squirrelops_home_sensor.config_vault import (
     strip_vaulted_config_secrets,
     sync_vaulted_config_secrets,
 )
+from squirrelops_home_sensor.events.types import EventType
 from squirrelops_home_sensor.integrations.home_assistant import HomeAssistantClient
 from squirrelops_home_sensor.netvalidation import is_safe_lan_url
 from squirrelops_home_sensor.secure_io import atomic_write_private_text
@@ -156,7 +157,7 @@ async def _audit_config_change(
         ", ".join(payload["sections"]),
     )
     try:
-        await event_bus.publish("config.updated", payload)
+        await event_bus.publish(EventType.CONFIG_UPDATED, payload)
     except Exception:
         logger.error("Failed to persist configuration audit event", exc_info=True)
 

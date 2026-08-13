@@ -82,9 +82,17 @@ def test_local_test_package_is_explicit_and_cannot_weaken_release_signing() -> N
     assert postinstall.index("one-time root-owned operator opt-in") < postinstall.index(
         'verify_local_test_helper "$HELPER_TEMP"'
     )
-    assert postinstall.index('verify_helper_rpc; do') < postinstall.index(
-        '/bin/rm -f -- "$LOCAL_TEST_OPT_IN"'
+    # The opt-in is consumed as soon as it authorizes the run, before any
+    # install step can fail. Consuming it only after RPC readiness left the
+    # token armed for every earlier exit, so a failed install silently
+    # authorized the next one.
+    assert postinstall.index('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') < postinstall.index(
+        'verify_local_test_helper "$HELPER_TEMP"'
     )
+    assert postinstall.index('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') < postinstall.index(
+        'verify_helper_rpc; do'
+    )
+    assert postinstall.count('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') == 1
 
     assert (
         'error "A local test build cannot use a real signing identity: '

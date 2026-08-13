@@ -67,7 +67,20 @@ if [ -e "$LOCAL_TEST_MARKER" ]; then
         echo "[app-postinstall] Create it before retrying: sudo /usr/bin/install -o root -g wheel -m 600 /dev/null $LOCAL_TEST_OPT_IN" >&2
         exit 1
     fi
+    # Consume the opt-in the moment it authorizes this run, not after the
+    # install succeeds. Every later step can fail, and each of those exits
+    # would otherwise leave the opt-in armed for an install the operator never
+    # authorized. The token's job is to permit one attempt, not one success.
+    if ! /bin/rm -f -- "$LOCAL_TEST_OPT_IN"; then
+        echo "[app-postinstall] Could not consume the local test opt-in." >&2
+        exit 1
+    fi
+    if [ -e "$LOCAL_TEST_OPT_IN" ]; then
+        echo "[app-postinstall] Local test opt-in survived removal." >&2
+        exit 1
+    fi
     LOCAL_TEST_BUILD=1
+    echo "[app-postinstall] Consumed one-time local test operator opt-in." >&2
     echo "[app-postinstall] Installing explicit ad-hoc local test build." >&2
 fi
 
@@ -344,15 +357,5 @@ until verify_helper_rpc; do
 done
 
 echo "[app-postinstall] Helper RPC is ready (socket: $SOCKET_PATH)."
-if [ "$LOCAL_TEST_BUILD" = "1" ]; then
-    # The opt-in is deliberately one-shot. A later local package requires a
-    # fresh, explicit administrator action instead of inheriting permission
-    # from an earlier test installation.
-    if ! /bin/rm -f -- "$LOCAL_TEST_OPT_IN"; then
-        echo "[app-postinstall] Could not consume the local test opt-in." >&2
-        exit 1
-    fi
-    echo "[app-postinstall] Consumed one-time local test operator opt-in." >&2
-fi
 echo "[app-postinstall] Done."
 exit 0

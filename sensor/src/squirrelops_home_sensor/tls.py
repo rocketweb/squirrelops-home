@@ -12,6 +12,7 @@ and LibreSSL (macOS system curl) do not support Ed25519 TLS certificates.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -138,7 +139,7 @@ def generate_server_cert(
             x509.SubjectAlternativeName([
                 x509.DNSName("localhost"),
                 x509.IPAddress(
-                    __import__("ipaddress").IPv4Address("127.0.0.1")
+                    ipaddress.IPv4Address("127.0.0.1")
                 ),
             ]),
             critical=False,
@@ -157,8 +158,6 @@ _STORE_KEYS = ("tls.ca_key", "tls.ca_cert", "tls.server_key", "tls.server_cert")
 
 def _has_unspecified_ip_identity(cert: x509.Certificate) -> bool:
     """Return whether a legacy certificate claims the wildcard bind address."""
-    import ipaddress
-
     try:
         san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
     except x509.ExtensionNotFound:
