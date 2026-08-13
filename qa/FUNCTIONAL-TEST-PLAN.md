@@ -1,8 +1,10 @@
 # SquirrelOps Home: Functional Test Plan
 
-Branch: `bugfix/decoy-status-defects` (off `origin/main` @ acf1cf4)
 Scope: full product, meaning sensor, app, and live install.
-Policy: **findings are reported, not fixed.** Failures go to `qa/FINDINGS.md`.
+Policy: **findings are reported, not fixed.** Failures go to `qa/FINDINGS.md`,
+which is deliberately untracked and gitignored: it carries reproduction detail
+for defects in releases that may still be published, so it stays out of a
+public repository. Expect to create it locally.
 
 ## Method
 
