@@ -210,6 +210,26 @@ The helper isn't running or can't execute `ifconfig`. Reinstall and check logs.
 | App (debug) | `cd app && bash build-app.sh` |
 | App (release) | `cd app && BUILD_CONFIG=release bash build-app.sh` |
 | Installer (.pkg) | `bash scripts/build-pkg.sh` |
+| Installable local test .pkg | `SQUIRRELOPS_LOCAL_TEST_BUILD=1 bash scripts/build-pkg.sh` |
+
+A plain `build-pkg.sh` run produces a package you cannot install unless you
+hold the Developer ID identities, because the postinstall requires the helper
+to satisfy the release designated requirement. Use the local test mode to get
+something installable on your own Mac. It ad-hoc signs the app and helper and
+writes a marker into the bundle, and release mode rejects the flag, so a local
+test package can never be published.
+
+Installing one also requires a one-time administrator opt-in on the target Mac:
+
+```bash
+sudo /usr/bin/install -o root -g wheel -m 600 /dev/null \
+  /var/db/com.squirrelops.allow-local-test
+sudo /usr/sbin/installer -pkg build/pkg/output/SquirrelOpsHome-X.Y.Z.pkg -target /
+```
+
+The installer consumes the opt-in as soon as it accepts it, before any step
+that can fail. It authorizes one attempt, not one success, so a failed install
+still spends it and a retry needs a fresh one.
 
 The source Linux Compose file deliberately has no guessed LAN. Set the directly
 connected private CIDR explicitly before using it:
@@ -273,12 +293,36 @@ git tag -s app-vX.Y.Z -m "SquirrelOps Home App X.Y.Z"
 git push origin app-vX.Y.Z
 git tag -s sensor-vX.Y.Z -m "SquirrelOps Home Sensor X.Y.Z"
 git push origin sensor-vX.Y.Z
-# After the sensor release is independently verified:
+# The component tags must already exist and must point at this same commit,
+# or the Home verify job fails before reaching the release environment.
 git tag -s home-vX.Y.Z -m "SquirrelOps Home X.Y.Z"
 git push origin home-vX.Y.Z
 ```
 
-Dispatch `Release Sensor` before `Release Home Distribution` when both changed.
+`tag.gpgsign` is not set in this repository, so `-s` is required on each tag.
+The tag ruleset restricts creation to the single release-signer account and
+restricts deletion, so a tag pointed at the wrong commit cannot be moved.
+
+Push `app-vX.Y.Z` and `sensor-vX.Y.Z` before dispatching
+`Release Home Distribution`. Its first job reads `APP_VERSION` and
+`sensor/pyproject.toml`, requires a tag matching each, and then requires the
+component sources to be identical between that tag and the Home tag. Tagging
+all three at the same commit satisfies the comparison. Dispatching without
+them fails in the verify job with `The embedded app must have an existing
+independent component tag.` or the equivalent sensor message, which does not
+name the missing tag.
+
+A macOS Home release needs the `sensor-vX.Y.Z` tag to exist. It does not need
+a sensor release to have been published: the workflow checks for the tag, not
+for a release.
+
+`Release Sensor` currently fails closed by design and has never been
+dispatched. It runs `scripts/check-linux-release-boundary.py`, and
+`linux_release.mode` in `.github/release-policy.json` is `blocked`, so the run
+stops before building. Unblocking it is an independent review decision
+described in [Release security](RELEASE_SECURITY.md), not a policy edit made
+to get a release through.
+
 After publication, verify each immutable release and attestation. Verify the
 package digest and notarization for Home releases and the GHCR digest for
 sensor releases before opening website and Homebrew promotion pull requests.
