@@ -405,3 +405,16 @@ def test_embedded_sensor_runtime_uses_hash_locked_dependencies() -> None:
         '    "$SENSOR_INSTALL/build-requirements.lock"'
         in package_builder
     )
+
+
+def test_local_test_guidance_matches_when_the_opt_in_is_consumed() -> None:
+    """Operator guidance must not contradict the postinstall ordering.
+
+    The opt-in is spent the moment the installer accepts it, so a failed
+    install still requires a fresh one. Telling an operator it is consumed
+    after a successful install sends them to retry with a token that is
+    already gone, and describes the security control backwards.
+    """
+    builder = (REPO_ROOT / "scripts/build-pkg.sh").read_text(encoding="utf-8")
+    assert "after a successful helper installation" not in builder
+    assert "consumes the opt-in as soon as it accepts it" in builder

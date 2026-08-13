@@ -621,7 +621,8 @@ if [ "$LOCAL_TEST_BUILD" = "1" ]; then
     echo ""
     echo "  Before installing this local test package, create the one-time opt-in:"
     echo "  sudo /usr/bin/install -o root -g wheel -m 600 /dev/null /var/db/com.squirrelops.allow-local-test"
-    echo "  The installer consumes the opt-in after a successful helper installation."
+    echo "  The installer consumes the opt-in as soon as it accepts it, before"
+    echo "  any install step. A failed install still spends it; retry with a new one."
 fi
 echo ""
 
