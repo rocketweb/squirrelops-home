@@ -1991,6 +1991,55 @@ def test_release_docs_require_remote_trust_controls_and_reviewed_promotion() -> 
     assert "`15368`" in policy
 
 
+def test_post_release_site_manifest_advertises_only_published_home() -> None:
+    distribution_version = (REPO_ROOT / "VERSION").read_text().strip()
+    app_version = (REPO_ROOT / "APP_VERSION").read_text().strip()
+    sensor_project = tomllib.loads(
+        (REPO_ROOT / "sensor/pyproject.toml").read_text(encoding="utf-8")
+    )
+    sensor_version = sensor_project["project"]["version"]
+    manifest = json.loads((REPO_ROOT / "site/public/manifest.json").read_text(encoding="utf-8"))
+    release_policy = json.loads(
+        (REPO_ROOT / ".github/release-policy.json").read_text(encoding="utf-8")
+    )
+    index = (REPO_ROOT / "site/public/index.html").read_text(encoding="utf-8")
+    package_url = (
+        "https://github.com/rocketweb/squirrelops-home/releases/download/"
+        f"home-v{distribution_version}/SquirrelOpsHome-{distribution_version}.pkg"
+    )
+
+    assert manifest["latest"] == {
+        "distribution": distribution_version,
+        "app": app_version,
+    }
+    assert manifest["downloads"]["macos_pkg"] == package_url
+    assert re.fullmatch(
+        r"[0-9a-f]{64}",
+        manifest["downloads"]["macos_pkg_sha256"],
+    )
+    assert manifest["distribution"] == {
+        "latest_version": distribution_version,
+        "app_version": app_version,
+        "sensor_version": sensor_version,
+        "release_notes_url": (
+            "https://github.com/rocketweb/squirrelops-home/releases/tag/"
+            f"home-v{distribution_version}"
+        ),
+    }
+    assert manifest["app"]["latest_version"] == app_version
+    assert manifest["app"]["download_url"] == package_url
+    assert manifest["app"]["sha256"] == manifest["downloads"]["macos_pkg_sha256"]
+    assert f'id="version-badge">v{distribution_version}</span>' in index
+    assert f'id="pkg-download" href="{package_url}"' in index
+
+    if release_policy["linux_release"]["mode"] == "blocked":
+        assert "sensor" not in manifest["latest"]
+        assert "sensor" not in manifest
+        assert "docker_image" not in manifest["downloads"]
+        assert "Linux / NAS" not in index
+        assert "install.sh" not in index
+
+
 def test_required_supply_chain_ci_always_runs_and_validates_controls() -> None:
     workflow = (REPO_ROOT / ".github/workflows/supply-chain-ci.yml").read_text(encoding="utf-8")
 
