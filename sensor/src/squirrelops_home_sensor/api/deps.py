@@ -77,7 +77,8 @@ async def verify_client_cert(request: Request) -> dict:
         db = await db_gen.__anext__()
         try:
             cursor = await db.execute(
-                "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ?",
+                """SELECT client_name FROM pairing
+                   WHERE client_cert_fingerprint = ? AND status = 'active'""",
                 (cert_fingerprint,),
             )
             row = await cursor.fetchone()
@@ -105,7 +106,9 @@ async def verify_client_cert(request: Request) -> dict:
         db = await db_gen.__anext__()
         try:
             cursor = await db.execute(
-                "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ? AND is_local = 1",
+                """SELECT client_name FROM pairing
+                   WHERE client_cert_fingerprint = ?
+                     AND is_local = 1 AND status = 'active'""",
                 (token,),
             )
             row = await cursor.fetchone()

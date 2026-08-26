@@ -817,6 +817,11 @@ def _local_pairing_socket(config: dict[str, Any]) -> Path:
     return data_dir.parent / "run" / "pairing.sock"
 
 
+def _local_enrollment_socket(config: dict[str, Any]) -> Path:
+    data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
+    return data_dir.parent / "run" / "enrollment.sock"
+
+
 def _display_pairing_code(code: str, config: dict[str, Any]) -> None:
     """Print the setup key and store a private recovery copy.
 
@@ -885,6 +890,8 @@ class _RuntimeResources:
         self.mdns_start_attempted = False
         self.local_pairing: Any | None = None
         self.local_pairing_start_attempted = False
+        self.local_enrollment: Any | None = None
+        self.local_enrollment_start_attempted = False
         self.cleaned = False
 
 
@@ -920,6 +927,12 @@ async def _cleanup_runtime(runtime: _RuntimeResources) -> list[BaseException]:
         await stop_step(
             "Stopping local pairing socket",
             runtime.local_pairing.stop,
+        )
+
+    if runtime.local_enrollment is not None and runtime.local_enrollment_start_attempted:
+        await stop_step(
+            "Stopping local enrollment socket",
+            runtime.local_enrollment.stop,
         )
 
     if runtime.mdns is not None and runtime.mdns_start_attempted:
@@ -1366,12 +1379,49 @@ async def run_sensor(
             _maybe_regenerate_code,
         )
 
-        _init_pairing_state(app.state, config)
+        pairing_state = _init_pairing_state(app.state, config)
 
         # Display the pairing setup key and store a private recovery copy.
         pairing_code = getattr(app.state, "pairing_code", None)
         if isinstance(pairing_code, str) and pairing_code:
             _display_pairing_code(pairing_code, config)
+
+        local_enrollment_enabled = bool(
+            config.get("pairing", {}).get(
+                "local_enrollment_enabled",
+                False,
+            )
+        )
+        if local_enrollment_enabled:
+            from squirrelops_home_sensor.api.local_enrollment import (
+                LocalEnrollmentAuthority,
+                LocalEnrollmentServer,
+            )
+
+            sensor_config = config.get("sensor", {})
+            authority = LocalEnrollmentAuthority(
+                db=db,
+                ca_key=pairing_state["ca_key"],
+                ca_cert=pairing_state["ca_cert"],
+                sensor_id=str(
+                    sensor_config.get("id")
+                    or config.get("sensor_id")
+                    or "squirrelops-local"
+                ),
+                sensor_name=str(
+                    sensor_config.get("name")
+                    or config.get("sensor_name")
+                    or "SquirrelOps Home Sensor"
+                ),
+            )
+            app.state.local_enrollment_authority = authority
+            local_enrollment = LocalEnrollmentServer(
+                str(_local_enrollment_socket(config)),
+                authority,
+            )
+            runtime.local_enrollment = local_enrollment
+            runtime.local_enrollment_start_attempted = True
+            await local_enrollment.start()
 
         # The local socket is deliberately development-only. Kernel peer
         # identity authenticates the process that connected, not necessarily
@@ -1407,9 +1457,14 @@ async def run_sensor(
                     "Failed to start development local pairing socket",
                     exc_info=True,
                 )
+        elif local_enrollment_enabled:
+            logger.info(
+                "Development setup-key socket disabled; signed-app local "
+                "enrollment enabled"
+            )
         else:
             logger.info(
-                "Automatic local pairing disabled; retrieve the setup key "
+                "Local enrollment disabled; retrieve the setup key "
                 "with --show-pairing-code"
             )
 

@@ -24,6 +24,10 @@ from squirrelops_home_sensor.decoys.types.mimic import (
 )
 
 
+class _UnexpectedCleanupError(Exception):
+    """Exception outside the deliberately tolerated stream-close failures."""
+
+
 def _encode_chunked_body(*chunks: bytes) -> bytes:
     encoded = bytearray()
     for chunk in chunks:
@@ -133,6 +137,43 @@ class TestMimicEndpointHTTP:
                 second_writer.close()
                 await second_writer.wait_closed()
             await endpoint.stop()
+
+    @pytest.mark.asyncio
+    async def test_admission_cleanup_discards_notification_when_close_wait_fails(
+        self,
+        monkeypatch,
+    ) -> None:
+        """Unexpected close failures cannot retain per-connection state."""
+        monkeypatch.setattr(mimic_module, "_MAX_CONCURRENT_CONNECTIONS", 0)
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=8080,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "ok",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=MagicMock(),
+            credential_values=set(),
+        )
+        reader = MagicMock()
+        writer = MagicMock()
+        writer.get_extra_info.return_value = ("192.0.2.10", 49152)
+        writer.wait_closed = AsyncMock(
+            side_effect=ValueError("unexpected close failure")
+        )
+        handler = AsyncMock()
+
+        with pytest.raises(ValueError, match="unexpected close failure"):
+            await endpoint._handle_connection(handler, reader, writer)
+
+        writer.close.assert_called_once_with()
+        handler.assert_not_awaited()
+        assert id(writer) not in endpoint._notified_connections
 
     @pytest.mark.asyncio
     async def test_slow_headers_have_absolute_deadline(
@@ -331,12 +372,15 @@ class TestMimicEndpointHTTP:
             writer.write(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
             await writer.drain()
             response = await asyncio.wait_for(reader.read(4096), timeout=5.0)
-            text = response.decode("utf-8")
-
-            assert "HTTP/1.1 200 OK" in text
-            assert "TestServer/1.0" in text
-            assert "<html>OK</html>" in text
-            assert "X-Custom: test" in text
+            assert response == (
+                b"HTTP/1.1 200 OK\r\n"
+                b"X-Custom: test\r\n"
+                b"Server: TestServer/1.0\r\n"
+                b"Content-Length: 15\r\n"
+                b"Connection: close\r\n"
+                b"\r\n"
+                b"<html>OK</html>"
+            )
 
             writer.close()
             await writer.wait_closed()
@@ -372,9 +416,12 @@ class TestMimicEndpointHTTP:
             writer.write(b"GET /nonexistent HTTP/1.1\r\nHost: localhost\r\n\r\n")
             await writer.drain()
             response = await asyncio.wait_for(reader.read(4096), timeout=5.0)
-            text = response.decode("utf-8")
-
-            assert "404" in text
+            assert response == (
+                b"HTTP/1.1 404 Not Found\r\n"
+                b"Content-Length: 0\r\n"
+                b"Connection: close\r\n"
+                b"\r\n"
+            )
 
             writer.close()
             await writer.wait_closed()
@@ -1235,6 +1282,39 @@ class TestMimicEndpointHTTP:
         assert len(events) == 1
         assert events[0].credential_used is None
 
+    @pytest.mark.asyncio
+    async def test_unexpected_http_cleanup_failure_still_closes_socket(self) -> None:
+        """An unexpected close error stays visible after HTTP state is released."""
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=8080,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "ok",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=MagicMock(),
+            credential_values=set(),
+        )
+        reader = MagicMock()
+        reader.readline = AsyncMock(return_value=b"")
+        writer = MagicMock()
+        writer.get_extra_info.return_value = ("192.0.2.10", 49152)
+        writer.wait_closed = AsyncMock(
+            side_effect=_UnexpectedCleanupError("unexpected close failure")
+        )
+
+        with pytest.raises(_UnexpectedCleanupError, match="unexpected close failure"):
+            await endpoint._handle_connection(endpoint._handle_http, reader, writer)
+
+        writer.close.assert_called_once_with()
+        assert endpoint._active_connections == 0
+        assert id(writer) not in endpoint._notified_connections
+
 
 class TestMimicEndpointBanner:
     """Verify banner-replay handler for non-HTTP ports."""
@@ -1267,6 +1347,34 @@ class TestMimicEndpointBanner:
         assert events[0].credential_used is None
 
     @pytest.mark.asyncio
+    async def test_unexpected_banner_cleanup_failure_still_closes_socket(self) -> None:
+        """An unexpected close error stays visible after banner state is released."""
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=2222,
+            routes=[],
+            server_header=None,
+            protocol_banner="SSH-2.0-Test",
+            connection_callback=MagicMock(),
+            credential_values=set(),
+        )
+        reader = MagicMock()
+        reader.read = AsyncMock(return_value=b"")
+        writer = MagicMock()
+        writer.get_extra_info.return_value = ("192.0.2.10", 49152)
+        writer.drain = AsyncMock()
+        writer.wait_closed = AsyncMock(
+            side_effect=_UnexpectedCleanupError("unexpected close failure")
+        )
+
+        with pytest.raises(_UnexpectedCleanupError, match="unexpected close failure"):
+            await endpoint._handle_connection(endpoint._handle_banner, reader, writer)
+
+        writer.close.assert_called_once_with()
+        assert endpoint._active_connections == 0
+        assert id(writer) not in endpoint._notified_connections
+
+    @pytest.mark.asyncio
     async def test_sends_protocol_banner(self) -> None:
         """Endpoint should send the configured banner greeting."""
         events = []
@@ -1288,9 +1396,7 @@ class TestMimicEndpointBanner:
         try:
             reader, writer = await asyncio.open_connection("127.0.0.1", port)
             data = await asyncio.wait_for(reader.read(512), timeout=5.0)
-            text = data.decode("utf-8")
-
-            assert "SSH-2.0-OpenSSH_8.9p1" in text
+            assert data == b"SSH-2.0-OpenSSH_8.9p1\r\n"
 
             # Send client data so the banner handler's read() completes
             writer.write(b"SSH-2.0-Client\r\n")
@@ -1309,6 +1415,40 @@ class TestMimicEndpointBanner:
 
 class TestMimicEndpointTLS:
     """Verify TLS endpoints have a fake-host identity and no HTTP downgrade."""
+
+    @pytest.mark.asyncio
+    async def test_unexpected_tls_cleanup_failure_still_closes_socket(self) -> None:
+        """An unexpected close error stays visible after TLS state is released."""
+        endpoint = _MimicEndpoint(
+            bind_ip="127.0.0.1",
+            port=443,
+            routes=[{
+                "path": "/",
+                "method": "GET",
+                "status": 200,
+                "headers": {},
+                "body": "secure",
+            }],
+            server_header=None,
+            protocol_banner=None,
+            connection_callback=MagicMock(),
+            credential_values=set(),
+            ssl_context=MagicMock(),
+        )
+        reader = MagicMock()
+        writer = MagicMock()
+        writer.get_extra_info.return_value = ("192.0.2.10", 49152)
+        writer.start_tls = AsyncMock(side_effect=ssl.SSLError("bad handshake"))
+        writer.wait_closed = AsyncMock(
+            side_effect=_UnexpectedCleanupError("unexpected close failure")
+        )
+
+        with pytest.raises(_UnexpectedCleanupError, match="unexpected close failure"):
+            await endpoint._handle_connection(endpoint._handle_tls, reader, writer)
+
+        writer.close.assert_called_once_with()
+        assert endpoint._active_connections == 0
+        assert id(writer) not in endpoint._notified_connections
 
     @pytest.mark.asyncio
     async def test_tls_serves_exact_fake_host_certificate(self) -> None:

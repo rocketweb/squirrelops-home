@@ -456,6 +456,21 @@ struct EndpointTests {
         #expect(json["encrypted_csr"] as? String == "base64-csr-data")
     }
 
+    @Test("Local enrollment confirmation uses mTLS pairing endpoint")
+    func localEnrollmentConfirmation() throws {
+        let requestID = "fa30c034-e031-4b12-947a-01489b5d5e66"
+        let endpoint = Endpoint.confirmLocalEnrollment(
+            body: LocalEnrollmentConfirmRequest(requestID: requestID)
+        )
+        let request = endpoint.urlRequest(baseURL: baseURL)
+        let json = try JSONSerialization.jsonObject(with: request.httpBody!)
+            as? [String: String]
+
+        #expect(endpoint.path == "/pairing/local/confirm")
+        #expect(endpoint.method == "POST")
+        #expect(json?["request_id"] == requestID)
+    }
+
     @Test("Unpair produces DELETE /pairing/{id}")
     func unpair() {
         let endpoint = Endpoint.unpair(id: 5)

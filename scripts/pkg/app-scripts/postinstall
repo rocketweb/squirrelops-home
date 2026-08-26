@@ -19,18 +19,37 @@ PLIST_DEST="/Library/LaunchDaemons/${HELPER_BUNDLE_ID}.plist"
 HELPER_STATE_DIR="/var/db/com.squirrelops.helper"
 HELPER_REQUIREMENT="identifier \"${HELPER_BUNDLE_ID}\" and anchor apple generic and certificate leaf[subject.OU] = \"${EXPECTED_TEAM_ID}\""
 LOCAL_TEST_MARKER="$APP_PATH/Contents/Resources/com.squirrelops.local-test-build"
-LOCAL_TEST_OPT_IN="/var/db/com.squirrelops.allow-local-test"
 LOCAL_TEST_BUILD=0
 HELPER_TEMP=""
 PLIST_TEMP=""
+HELPER_DEST_PENDING_VALIDATION=0
+PLIST_DEST_PENDING_VALIDATION=0
 
 cleanup_staged_files() {
+    local exit_status=$?
+    trap - EXIT
+    set +e
     if [ -n "$HELPER_TEMP" ]; then
-        rm -f -- "$HELPER_TEMP"
+        /bin/rm -f -- "$HELPER_TEMP"
     fi
     if [ -n "$PLIST_TEMP" ]; then
-        rm -f -- "$PLIST_TEMP"
+        /bin/rm -f -- "$PLIST_TEMP"
     fi
+    if [ "$HELPER_DEST_PENDING_VALIDATION" = "1" ]; then
+        if ! /bin/rm -f -- "$HELPER_DEST" \
+            || [ -e "$HELPER_DEST" ] || [ -L "$HELPER_DEST" ]
+        then
+            echo "[app-postinstall] Failed to remove an unverified installed helper." >&2
+        fi
+    fi
+    if [ "$PLIST_DEST_PENDING_VALIDATION" = "1" ]; then
+        if ! /bin/rm -f -- "$PLIST_DEST" \
+            || [ -e "$PLIST_DEST" ] || [ -L "$PLIST_DEST" ]
+        then
+            echo "[app-postinstall] Failed to remove an unverified installed launchd plist." >&2
+        fi
+    fi
+    exit "$exit_status"
 }
 trap cleanup_staged_files EXIT
 
@@ -58,29 +77,7 @@ if [ -e "$LOCAL_TEST_MARKER" ]; then
         echo "[app-postinstall] Local test build must use an ad-hoc app signature." >&2
         exit 1
     fi
-    if [ -L "$LOCAL_TEST_OPT_IN" ] || [ ! -f "$LOCAL_TEST_OPT_IN" ] \
-        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l' "$LOCAL_TEST_OPT_IN")" \
-            != "root:wheel:600:1" ] \
-        || ! path_has_no_extended_acl "$LOCAL_TEST_OPT_IN"
-    then
-        echo "[app-postinstall] Local test builds require a one-time root-owned operator opt-in." >&2
-        echo "[app-postinstall] Create it before retrying: sudo /usr/bin/install -o root -g wheel -m 600 /dev/null $LOCAL_TEST_OPT_IN" >&2
-        exit 1
-    fi
-    # Consume the opt-in the moment it authorizes this run, not after the
-    # install succeeds. Every later step can fail, and each of those exits
-    # would otherwise leave the opt-in armed for an install the operator never
-    # authorized. The token's job is to permit one attempt, not one success.
-    if ! /bin/rm -f -- "$LOCAL_TEST_OPT_IN"; then
-        echo "[app-postinstall] Could not consume the local test opt-in." >&2
-        exit 1
-    fi
-    if [ -e "$LOCAL_TEST_OPT_IN" ]; then
-        echo "[app-postinstall] Local test opt-in survived removal." >&2
-        exit 1
-    fi
     LOCAL_TEST_BUILD=1
-    echo "[app-postinstall] Consumed one-time local test operator opt-in." >&2
     echo "[app-postinstall] Installing explicit ad-hoc local test build." >&2
 fi
 
@@ -161,6 +158,7 @@ if ! /bin/mv -fh "$HELPER_TEMP" "$HELPER_DEST"; then
     echo "[app-postinstall] Cannot install the verified helper." >&2
     exit 1
 fi
+HELPER_DEST_PENDING_VALIDATION=1
 HELPER_TEMP=""
 if ! /bin/chmod -N "$HELPER_DEST" \
     || ! path_has_no_extended_acl "$HELPER_DEST" \
@@ -188,6 +186,7 @@ if [ ! -x "$HELPER_DEST" ]; then
     echo "[app-postinstall] Installed helper is not executable." >&2
     exit 1
 fi
+HELPER_DEST_PENDING_VALIDATION=0
 
 # Initialize a permanent root-owned marker for the ledger-aware helper. This
 # prevents sensor database rows from ever becoming cleanup authority again,
@@ -250,6 +249,11 @@ fi
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>MachServices</key>
+    <dict>
+        <key>com.squirrelops.helper.enrollment</key>
+        <true/>
+    </dict>
     <key>StandardOutPath</key>
     <string>/var/log/com.squirrelops.helper.log</string>
     <key>StandardErrorPath</key>
@@ -271,6 +275,7 @@ then
     echo "[app-postinstall] Cannot install the verified helper launchd plist." >&2
     exit 1
 fi
+PLIST_DEST_PENDING_VALIDATION=1
 PLIST_TEMP=""
 if ! /bin/chmod -N "$PLIST_DEST" \
     || ! path_has_no_extended_acl "$PLIST_DEST" \
@@ -281,6 +286,7 @@ then
     echo "[app-postinstall] Installed helper launchd plist is unsafe." >&2
     exit 1
 fi
+PLIST_DEST_PENDING_VALIDATION=0
 
 # ---------------------------------------------------------------------------
 # Step 3: Load the helper daemon

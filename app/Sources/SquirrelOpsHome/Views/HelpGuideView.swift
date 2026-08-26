@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 
 struct HelpGuideSection: Identifiable, Sendable {
@@ -30,20 +31,24 @@ enum HelpGuideContent {
             blocks: [
                 .init(
                     "Pair the app",
-                    "Keep the sensor and Mac on the same trusted network. Launch SquirrelOps Home, select the detected sensor, enter its one-time setup key, and complete pairing. The resulting credentials are stored in the macOS Keychain."
+                    "Choose Build Local Sensor for the sensor installed by the SquirrelOps Home package. The signed app enrolls automatically and stores its private key in macOS Keychain. Choose Connect to Another Sensor for a sensor elsewhere on your trusted network, then select it and enter its one-time setup key."
                 ),
                 .init(
-                    "Find the packaged Mac setup key",
-                    "Open Terminal and run:\n\nsudo -u _squirrelops /Library/SquirrelOps/sensor/python/bin/python3 -m squirrelops_home_sensor --config /Library/SquirrelOps/sensor/config.yaml --show-pairing-code\n\nmacOS asks for an administrator password. The 20-character key expires after 10 minutes or after it is used. If it expired, run sudo launchctl kickstart -k system/com.squirrelops.sensor, then retrieve it again."
+                    "Recover with the packaged Mac setup key",
+                    "Normal local setup does not need a setup key. If automatic enrollment cannot finish, choose Use Setup Key. Open Terminal and run:\n\nsudo -u _squirrelops /Library/SquirrelOps/sensor/python/bin/python3 -m squirrelops_home_sensor --config /Library/SquirrelOps/sensor/config.yaml --show-pairing-code\n\nmacOS asks for an administrator password. The 20-character key expires after 10 minutes or after it is used. If it expired, run sudo launchctl kickstart -k system/com.squirrelops.sensor, then retrieve it again."
                 ),
                 .init(
                     "Confirm monitoring",
-                    "A green Monitoring Active status means the app has a live authenticated connection. Initial learning may take time while SquirrelOps builds a baseline.",
+                    "A green Monitoring Active status means the app has a live authenticated connection. After an upgrade, Build Local Sensor keeps checking the local sensor for up to 20 minutes while persisted decoys are restored. It shows exact elapsed time and connects automatically when the sensor is ready. Initial learning may take time while SquirrelOps builds a baseline.",
                     bullets: [
                         "Open the menu bar squirrel at any time to see connection and unread-alert status.",
                         "If the sensor is disconnected, open the dashboard for the specific repair message.",
                         "Resource Profile controls how much scanning and analysis the sensor performs.",
                     ]
+                ),
+                .init(
+                    "Use the Help menu",
+                    "Choose SquirrelOps Home Help to open the guide. Every guide section also appears directly in the Help menu, so you can jump to a topic without navigating the sidebar first."
                 ),
             ]
         ),
@@ -277,12 +282,25 @@ enum HelpGuideContent {
     ]
 }
 
+@MainActor
+@Observable
+final class HelpGuideNavigation {
+    var selection = HelpGuideContent.sections.first?.id
+
+    func select(_ sectionID: String) {
+        guard HelpGuideContent.sections.contains(where: { $0.id == sectionID }) else {
+            return
+        }
+        selection = sectionID
+    }
+}
+
 struct HelpGuideView: View {
-    @State private var selection = HelpGuideContent.sections.first?.id
+    @Bindable var navigation: HelpGuideNavigation
 
     var body: some View {
         NavigationSplitView {
-            List(HelpGuideContent.sections, selection: $selection) { section in
+            List(HelpGuideContent.sections, selection: $navigation.selection) { section in
                 Label(section.title, systemImage: section.symbol)
                     .tag(section.id)
             }
@@ -322,13 +340,16 @@ struct HelpGuideView: View {
     }
 
     private var selectedSection: HelpGuideSection? {
-        HelpGuideContent.sections.first(where: { $0.id == selection })
+        HelpGuideContent.sections.first(where: { $0.id == navigation.selection })
             ?? HelpGuideContent.sections.first
     }
 }
 
 struct SquirrelOpsHelpCommands: Commands {
     @Environment(\.openWindow) private var openWindow
+    let navigation: HelpGuideNavigation
+
+    static let sectionIDs = HelpGuideContent.sections.map(\.id)
 
     var body: some Commands {
         CommandGroup(replacing: .help) {
@@ -338,6 +359,17 @@ struct SquirrelOpsHelpCommands: Commands {
                 }
             }
             .keyboardShortcut("?", modifiers: .command)
+
+            Divider()
+
+            ForEach(HelpGuideContent.sections) { section in
+                Button(section.title) {
+                    navigation.select(section.id)
+                    WindowActivationController.present(.help) {
+                        openWindow(id: AppWindow.help.rawValue)
+                    }
+                }
+            }
         }
     }
 }

@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Network
 import Security
+import SquirrelOpsLocalEnrollment
 
 // MARK: - ServiceResolver
 
@@ -149,7 +150,6 @@ extension SensorClient: PairingClientProtocol {
 
 public enum PairingError: Error, LocalizedError, Sendable {
     case noHostResolved
-    case manualCodeRequired
     case csrGenerationFailed(String)
     case decryptionFailed(String)
     case invalidCertificateData
@@ -160,12 +160,6 @@ public enum PairingError: Error, LocalizedError, Sendable {
         switch self {
         case .noHostResolved:
             return "Could not resolve host and port from discovered sensor"
-        case .manualCodeRequired:
-            return (
-                "For security, automatic setup-key delivery is disabled in "
-                + "packaged installs. Retrieve the key with the administrator "
-                + "command shown in the user guide, then enter it here."
-            )
         case .csrGenerationFailed(let detail):
             return "Failed to generate client certificate request: \(detail)"
         case .decryptionFailed(let detail):
@@ -265,13 +259,19 @@ public final class PairingManager: @unchecked Sendable {
     // MARK: - Private Properties
 
     private let client: any PairingClientProtocol
+    private let localEnrollmentProvider: any LocalEnrollmentProviding
     private var browser: NWBrowser?
     private var browserStateHandler: ((NWBrowser.State) -> Void)?
 
     // MARK: - Init
 
-    public init(client: any PairingClientProtocol) {
+    public init(
+        client: any PairingClientProtocol,
+        localEnrollmentProvider: any LocalEnrollmentProviding =
+            PrivilegedLocalEnrollmentProvider()
+    ) {
         self.client = client
+        self.localEnrollmentProvider = localEnrollmentProvider
     }
 
     // MARK: - Local Sensor Detection
@@ -321,70 +321,123 @@ public final class PairingManager: @unchecked Sendable {
         FileManager.default.fileExists(atPath: "/Library/LaunchDaemons/com.squirrelops.sensor.plist")
     }
 
-    /// Source-development socket. Packaged installs require manual key entry.
-    private static var localPairingSocketPaths: [String] {
-        [
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".squirrelops/sensor/run/pairing.sock").path,
-        ]
-    }
-
-    /// Source-development convenience for a deliberately unsigned local socket.
-    /// Packaged installs never expose their setup key this way and require
-    /// administrator-assisted manual entry.
+    /// Enroll through the signed-app-only helper and prove possession of the
+    /// Keychain private key over mTLS before the local pairing becomes active.
     public func autoLocalPair(sensor: DiscoveredSensor) async throws -> PairedSensor {
-        guard let socketPath = PairingManager.localPairingSocketPaths.first(where: {
-            FileManager.default.fileExists(atPath: $0)
-        }) else {
-            throw PairingError.manualCodeRequired
+        state = .pairing
+        do {
+            let result = try await executeLocalEnrollment(sensor: sensor)
+            state = .paired(result)
+            try? PairingManager.savePairedSensor(result)
+            return result
+        } catch {
+            state = .error(error.localizedDescription)
+            throw error
         }
-        let code = try await Task.detached(priority: .userInitiated) {
-            try PairingManager.fetchLocalPairingCode(socketPath: socketPath)
-        }.value
-        return try await pair(sensor: sensor, code: code)
     }
 
-    /// Connect to the local-pairing Unix socket and read the JSON
-    /// {"code": "..."} line. Blocking I/O bounded by a receive timeout.
-    private static func fetchLocalPairingCode(socketPath: String, timeout: Int = 5) throws -> String {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw PairingError.noHostResolved }
-        defer { close(fd) }
+    private func executeLocalEnrollment(
+        sensor: DiscoveredSensor
+    ) async throws -> PairedSensor {
+        let (host, port) = await resolveHostPort(sensor: sensor)
+        guard let host, let port,
+              let baseURL = URL(string: "https://\(host):\(port)") else {
+            throw PairingError.noHostResolved
+        }
 
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathSet = socketPath.withCString { (src: UnsafePointer<CChar>) -> Bool in
-            guard strlen(src) < 104 else { return false }
-            return withUnsafeMutablePointer(to: &addr.sun_path) { rawPtr -> Bool in
-                let dst = UnsafeMutableRawPointer(rawPtr).bindMemory(to: CChar.self, capacity: 104)
-                _ = strlcpy(dst, src, 104)
-                return true
+        let requestID = UUID().uuidString.lowercased()
+        let credentialIdentifier = "local-" + requestID.replacingOccurrences(
+            of: "-",
+            with: ""
+        )
+        let caLabel = "io.squirrelops.home.ca.\(credentialIdentifier)"
+        let clientLabel = "io.squirrelops.home.client.\(credentialIdentifier)"
+        let privateKeyAccount = "io.squirrelops.home.key.\(credentialIdentifier)"
+        let clientName = Host.current().localizedName ?? "SquirrelOps Mac"
+
+        do {
+            let privateKey = try KeychainStore.createClientPrivateKey(
+                privateKeyLabel: privateKeyAccount
+            )
+            let csrPEM = try PairingCrypto.generateCSR(
+                privateKey: privateKey,
+                commonName: clientName
+            )
+            let response = try await localEnrollmentProvider.enroll(
+                request: LocalEnrollmentRequest(
+                    requestID: requestID,
+                    clientName: clientName,
+                    csrPEM: csrPEM
+                )
+            )
+            guard response.requestID.lowercased() == requestID,
+                  response.pairingID > 0,
+                  !response.sensorID.isEmpty,
+                  !response.sensorName.isEmpty else {
+                throw LocalEnrollmentClientError.invalidResponse
             }
-        }
-        guard pathSet else { throw PairingError.noHostResolved }
 
-        var tv = timeval(tv_sec: timeout, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
-
-        let connectResult = withUnsafePointer(to: &addr) { p -> Int32 in
-            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sp in
-                connect(fd, sp, socklen_t(MemoryLayout<sockaddr_un>.size))
+            let caCertData = Data(response.caCertPEM.utf8)
+            let clientCertData = Data(response.clientCertPEM.utf8)
+            guard Self.certificateFingerprint(clientCertData)
+                    == response.certFingerprint else {
+                throw LocalEnrollmentClientError.invalidResponse
             }
-        }
-        guard connectResult == 0 else { throw PairingError.noHostResolved }
 
-        var buffer = [UInt8]()
-        var byte: UInt8 = 0
-        while buffer.count < 4096 {
-            let n = read(fd, &byte, 1)
-            if n <= 0 { break }
-            if byte == 0x0A { break }
-            buffer.append(byte)
-        }
+            try KeychainStore.storeCertificate(caCertData, label: caLabel)
+            try KeychainStore.storeCertificate(clientCertData, label: clientLabel)
+            let identity = try KeychainStore.storeClientIdentity(
+                certificateData: clientCertData,
+                certificateLabel: clientLabel,
+                privateKeyLabel: privateKeyAccount
+            )
 
-        struct LocalCodeResponse: Decodable { let code: String }
-        let decoded = try JSONDecoder().decode(LocalCodeResponse.self, from: Data(buffer))
-        return decoded.code
+            let confirmationClient = SensorClient(
+                baseURL: baseURL,
+                certFingerprint: response.certFingerprint,
+                caCertData: caCertData,
+                clientIdentity: identity
+            )
+            let confirmation = try await confirmLocalEnrollment(
+                using: confirmationClient,
+                requestID: requestID
+            )
+            guard confirmation.pairingID == response.pairingID,
+                  confirmation.status == "active" else {
+                throw LocalEnrollmentClientError.invalidResponse
+            }
+
+            return PairedSensor(
+                id: response.pairingID,
+                name: response.sensorName,
+                baseURL: baseURL,
+                certFingerprint: response.certFingerprint,
+                credentialIdentifier: credentialIdentifier
+            )
+        } catch {
+            try? KeychainStore.deleteClientIdentity(
+                certificateLabel: clientLabel,
+                privateKeyLabel: privateKeyAccount
+            )
+            try? KeychainStore.deleteCertificate(label: clientLabel)
+            try? KeychainStore.deleteCertificate(label: caLabel)
+            throw error
+        }
+    }
+
+    private func confirmLocalEnrollment(
+        using client: SensorClient,
+        requestID: String
+    ) async throws -> LocalEnrollmentConfirmResponse {
+        let endpoint = Endpoint.confirmLocalEnrollment(
+            body: LocalEnrollmentConfirmRequest(requestID: requestID)
+        )
+        do {
+            return try await client.request(endpoint)
+        } catch SensorClientError.connectionFailed {
+            try await Task.sleep(for: .milliseconds(200))
+            return try await client.request(endpoint)
+        }
     }
 
     // MARK: - Discovery
@@ -476,10 +529,20 @@ public final class PairingManager: @unchecked Sendable {
     /// 11. Store CA + client cert + private key in Keychain
     /// 12. Return PairedSensor
     public func pair(sensor: DiscoveredSensor, code: String) async throws -> PairedSensor {
+        try await pair(sensor: sensor) { code }
+    }
+
+    private func pair(
+        sensor: DiscoveredSensor,
+        codeProvider: @Sendable () async throws -> String
+    ) async throws -> PairedSensor {
         state = .pairing
 
         do {
-            let result = try await executePairing(sensor: sensor, code: code)
+            let result = try await executePairing(
+                sensor: sensor,
+                codeProvider: codeProvider
+            )
             state = .paired(result)
             try? PairingManager.savePairedSensor(result)
             return result
@@ -489,7 +552,10 @@ public final class PairingManager: @unchecked Sendable {
         }
     }
 
-    private func executePairing(sensor: DiscoveredSensor, code: String) async throws -> PairedSensor {
+    private func executePairing(
+        sensor: DiscoveredSensor,
+        codeProvider: @Sendable () async throws -> String
+    ) async throws -> PairedSensor {
         // Step 1: Resolve host and port
         let (host, port) = await resolveHostPort(sensor: sensor)
         guard let host, let port else {
@@ -505,6 +571,8 @@ public final class PairingManager: @unchecked Sendable {
         guard challengeResponse.protocolVersion == 2 else {
             throw PairingError.unsupportedProtocol(challengeResponse.protocolVersion)
         }
+
+        let code = try await codeProvider()
 
         // Step 3: Generate nonce and authenticate the v2 pairing transcript.
         let challengeData = try PairingCrypto.hexDecode(challengeResponse.challenge)
@@ -716,6 +784,16 @@ public final class PairingManager: @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    private static func certificateFingerprint(_ certificateData: Data) -> String? {
+        guard let derData = TLSPinningDelegate.certificateDERData(
+            from: certificateData
+        ) else {
+            return nil
+        }
+        let digest = SHA256.hash(data: derData)
+        return "sha256:" + digest.map { String(format: "%02x", $0) }.joined()
+    }
 
     private func resolveHostPort(sensor: DiscoveredSensor) async -> (String?, UInt16?) {
         // Prefer explicit host/port if available

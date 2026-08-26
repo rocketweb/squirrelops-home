@@ -13,6 +13,25 @@ let clientSocketTimeoutSeconds = 10
 let router = RPCRouter()
 registerMethods(router: router)
 
+// This narrowly scoped Mach service is the only desktop-app entry point. It
+// validates the immutable XPC audit token against the release app signature
+// and forwards only a bounded certificate request, never setup keys or network
+// privileges.
+let localEnrollmentAppRequirement: String
+do {
+    localEnrollmentAppRequirement = try LocalEnrollmentCodeRequirementResolver()
+        .resolve()
+} catch {
+    logger.fault(
+        "Cannot establish the local enrollment app requirement: \(String(describing: error))"
+    )
+    exit(1)
+}
+let localEnrollmentXPCService = LocalEnrollmentXPCService(
+    appCodeRequirement: localEnrollmentAppRequirement
+)
+localEnrollmentXPCService.resume()
+
 // Remove stale socket file
 unlink(socketPath)
 

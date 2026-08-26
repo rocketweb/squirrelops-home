@@ -351,14 +351,14 @@ def test_macos_package_rejects_missing_or_unusable_helper() -> None:
     assert '/usr/bin/nc -zU "$HELPER_SOCKET"' not in sensor_postinstall
 
 
-def test_sensor_postinstall_fails_when_daemon_does_not_become_healthy() -> None:
+def test_sensor_postinstall_fails_when_launchd_handoff_is_not_stable() -> None:
     sensor_postinstall = (REPO_ROOT / "scripts/pkg/postinstall").read_text()
 
     assert 'if ! launchctl bootstrap system "$PLIST_DEST"' in sensor_postinstall
     assert "Failed to bootstrap sensor service" in sensor_postinstall
-    assert "Sensor did not become healthy within ${HEALTH_TIMEOUT_SECONDS}s" in sensor_postinstall
-    timeout_guard = sensor_postinstall.index('if [ "$SENSOR_HEALTHY" -ne 1 ]; then')
-    assert "exit 1" in sensor_postinstall[timeout_guard:]
+    assert "Sensor did not remain stable during startup handoff" in sensor_postinstall
+    handoff_guard = sensor_postinstall.index("if wait_for_sensor_handoff; then")
+    assert "exit 1" in sensor_postinstall[handoff_guard:]
 
 
 def test_component_versions_are_independently_authoritative() -> None:

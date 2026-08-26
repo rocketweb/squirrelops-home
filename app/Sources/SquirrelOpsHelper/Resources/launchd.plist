@@ -10,6 +10,11 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>MachServices</key>
+    <dict>
+        <key>com.squirrelops.helper.enrollment</key>
+        <true/>
+    </dict>
     <key>StandardOutPath</key>
     <string>/var/log/com.squirrelops.helper.log</string>
     <key>StandardErrorPath</key>

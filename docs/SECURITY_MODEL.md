@@ -2,8 +2,9 @@
 
 SquirrelOps Home separates the desktop app, unprivileged sensor, and root
 network helper. The app and sensor communicate with mutual TLS after a
-one-time pairing flow. The helper accepts only root and the dedicated sensor
-UID over a permission-restricted Unix socket.
+one-time pairing flow. The helper's network-operation socket accepts only root
+and the dedicated sensor UID. A separate signed-app XPC service is limited to
+local certificate enrollment.
 
 ## macOS sandbox boundary
 
@@ -27,7 +28,54 @@ are ignored, and plaintext development authentication is restricted to a
 literal loopback peer. mDNS is discovery only and is not an authorization
 boundary.
 
-## Local pairing socket
+## Automatic local enrollment
+
+The signed macOS package installs the app, unprivileged sensor, and root helper
+together, but they remain separate processes. Bundling does not remove a trust
+boundary or place the sensor's LAN API in the root helper.
+
+The app generates a P-256 private key in macOS Keychain and sends only a
+certificate signing request to the helper. The helper's enrollment Mach
+service requires the `com.squirrelops.home` signing identifier, the release
+Team ID, an Apple generic code-signing anchor, and the current console UID. It
+does not expose the helper's network RPC methods to the app.
+
+The helper forwards a bounded JSON enrollment request to
+`/Library/SquirrelOps/sensor/run/enrollment.sock`. The socket is mode `0600`,
+and the sensor verifies that the connecting peer UID is root. There is no
+local enrollment HTTP endpoint and no enrollment listener on the LAN.
+
+The sensor issues a short-lived pending client certificate. The app must then
+connect to the protected API with that certificate and confirm the matching
+fingerprint before the pairing becomes active. Pending enrollments expire
+after five minutes, are capped, and use idempotent request identifiers so a
+response-loss retry cannot create another certificate or substitute another
+CSR. Authentication lookups ignore all pending rows.
+
+Developer ID releases keep one stable Keychain service and code requirement
+across upgrades. Explicit ad-hoc local-test packages instead carry a unique
+build UUID and store their credentials in an isolated Keychain service. A test
+build therefore never broadens an existing item's access list or reads private
+keys protected for a different ad-hoc CDHash. The UUID is isolation metadata,
+not an authorization secret. Production packages do not contain it.
+
+For an explicit local-test package, the helper copies the exact `cdhash`
+designated requirement from the root-owned app installed in `/Applications`
+and applies it to the enrollment Mach service. It refuses local enrollment if
+the app, marker, or containing bundle directories are not root-owned or are
+writable by another user. A generic ad-hoc bundle identifier is never enough.
+Developer ID releases do not use this exception and continue to require the
+fixed app identifier, Team ID, and Apple signing anchor.
+
+Package scripts run inside the single administrator-approved Installer
+transaction. The sensor script verifies helper compatibility, launchd job
+ownership, and a stable daemon handoff. Long persisted-decoy restoration stays
+inside the unprivileged sensor supervised by launchd. Installer does not gain
+or retain root authority on behalf of the app after the transaction finishes.
+If post-move validation rejects a newly installed helper or launchd plist, the
+app package removes that unverified privileged artifact before failing.
+
+## Development setup-key socket
 
 The cross-user Unix pairing socket is disabled in packaged production
 configuration. Source development can explicitly enable it with

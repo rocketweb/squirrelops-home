@@ -19,6 +19,7 @@ import ssl
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 import aiosqlite
 import httpx
@@ -523,12 +524,15 @@ class ScoutEngine:
                         issuer_names = cert.issuer.get_attributes_for_oid(
                             NameOID.COMMON_NAME
                         )
+                        # cryptography permits a bytes-valued NameAttribute
+                        # only for X500_UNIQUE_IDENTIFIER. These directory
+                        # string OIDs are therefore always decoded strings.
                         if common_names:
-                            profile.tls_cn = common_names[0].value
+                            profile.tls_cn = cast(str, common_names[0].value)
                         if organizations:
-                            profile.tls_issuer = organizations[0].value
+                            profile.tls_issuer = cast(str, organizations[0].value)
                         elif issuer_names:
-                            profile.tls_issuer = issuer_names[0].value
+                            profile.tls_issuer = cast(str, issuer_names[0].value)
                         profile.tls_not_after = (
                             cert.not_valid_after_utc.isoformat()
                         )

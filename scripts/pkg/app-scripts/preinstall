@@ -10,8 +10,11 @@
 #
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_ID="com.squirrelops.home.app"
 APP_PATH="/Applications/SquirrelOps Home.app"
+LOCAL_TEST_PACKAGE_MARKER="$SCRIPT_DIR/com.squirrelops.local-test-build"
+LOCAL_TEST_OPT_IN="/var/db/com.squirrelops.allow-local-test"
 SENSOR_LABEL="com.squirrelops.sensor"
 SENSOR_PLIST="/Library/LaunchDaemons/${SENSOR_LABEL}.plist"
 SENSOR_INSTALL_DIR="/Library/SquirrelOps/sensor"
@@ -29,6 +32,46 @@ ACCOUNT_PROVISIONING_MARKER="$ACCOUNT_PROVISIONING_DIR/account-provisioning"
 ACCOUNT_DEPROVISIONING_MARKER="$ACCOUNT_PROVISIONING_DIR/account-deprovisioning"
 SENSOR_UID=""
 SENSOR_GID=""
+
+path_has_no_extended_acl() {
+    local path="$1"
+    /bin/ls -lde "$path" 2>/dev/null \
+        | /usr/bin/awk '
+            NR > 1 { extra = 1 }
+            END { exit !(NR == 1 && extra == 0) }
+        '
+}
+
+if [ -e "$LOCAL_TEST_PACKAGE_MARKER" ] \
+    || [ -L "$LOCAL_TEST_PACKAGE_MARKER" ]
+then
+    if [ -L "$LOCAL_TEST_PACKAGE_MARKER" ] \
+        || [ ! -f "$LOCAL_TEST_PACKAGE_MARKER" ]
+    then
+        echo "[app-preinstall] Local test package marker is invalid." >&2
+        exit 1
+    fi
+    if [ -L "$LOCAL_TEST_OPT_IN" ] || [ ! -f "$LOCAL_TEST_OPT_IN" ] \
+        || [ "$(/usr/bin/stat -f '%Su:%Sg:%Lp:%l' "$LOCAL_TEST_OPT_IN")" \
+            != "root:wheel:600:1" ] \
+        || ! path_has_no_extended_acl "$LOCAL_TEST_OPT_IN"
+    then
+        echo "[app-preinstall] Local test builds require a one-time root-owned operator opt-in." >&2
+        echo "[app-preinstall] Create it before retrying: sudo /usr/bin/install -o root -g wheel -m 600 /dev/null $LOCAL_TEST_OPT_IN" >&2
+        exit 1
+    fi
+    # Consume authorization before stopping services or modifying the current
+    # installation. The token authorizes one attempt, not one success.
+    if ! /bin/rm -f -- "$LOCAL_TEST_OPT_IN"; then
+        echo "[app-preinstall] Could not consume the local test opt-in." >&2
+        exit 1
+    fi
+    if [ -e "$LOCAL_TEST_OPT_IN" ] || [ -L "$LOCAL_TEST_OPT_IN" ]; then
+        echo "[app-preinstall] Local test opt-in survived removal." >&2
+        exit 1
+    fi
+    echo "[app-preinstall] Consumed one-time local test operator opt-in." >&2
+fi
 
 service_is_loaded() {
     local label="$1"

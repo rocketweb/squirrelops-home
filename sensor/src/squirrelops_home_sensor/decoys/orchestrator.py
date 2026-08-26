@@ -22,7 +22,7 @@ import socket
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 from squirrelops_home_sensor.privileged.helper import PrivilegedOperations
@@ -105,7 +105,12 @@ class EventBusProtocol(Protocol):
 @runtime_checkable
 class DBProtocol(Protocol):
     """Minimal DB interface for the orchestrator."""
-    ...
+
+    async def execute(self, sql: str, parameters: Any = ...) -> Any: ...
+
+    async def executemany(self, sql: str, parameters: Any) -> Any: ...
+
+    async def commit(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------

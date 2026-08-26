@@ -29,6 +29,28 @@ public struct DecoyHostnameUpdateRequest: Encodable, Sendable {
     }
 }
 
+public struct LocalEnrollmentConfirmRequest: Encodable, Sendable {
+    public let requestID: String
+
+    public init(requestID: String) {
+        self.requestID = requestID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case requestID = "request_id"
+    }
+}
+
+public struct LocalEnrollmentConfirmResponse: Decodable, Sendable {
+    public let pairingID: Int
+    public let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case pairingID = "pairing_id"
+        case status
+    }
+}
+
 // MARK: - Endpoint
 
 public enum Endpoint: Sendable {
@@ -86,6 +108,7 @@ public enum Endpoint: Sendable {
     case pairingChallenge
     case pairingVerify(body: VerifyRequest)
     case pairingComplete(body: CompleteRequest)
+    case confirmLocalEnrollment(body: LocalEnrollmentConfirmRequest)
     case unpair(id: Int)
 
     // Scouts
@@ -176,6 +199,8 @@ public enum Endpoint: Sendable {
             return "/pairing/verify"
         case .pairingComplete:
             return "/pairing/complete"
+        case .confirmLocalEnrollment:
+            return "/pairing/local/confirm"
         case .unpair(let id):
             return "/pairing/\(id)"
         case .scoutStatus:
@@ -212,7 +237,7 @@ public enum Endpoint: Sendable {
         case .approveDevice, .rejectDevice, .ignoreDevice, .verifyDevice,
              .restartDecoy, .enableDecoy, .disableDecoy,
              .probePorts,
-             .pairingVerify, .pairingComplete,
+             .pairingVerify, .pairingComplete, .confirmLocalEnrollment,
              .runScout, .deployMimics, .restartMimic:
             return "POST"
         case .updateProfile, .updateDevice, .readAlert, .actionAlert,
@@ -247,6 +272,8 @@ public enum Endpoint: Sendable {
         case .pairingVerify(let body):
             return try? encoder.encode(body)
         case .pairingComplete(let body):
+            return try? encoder.encode(body)
+        case .confirmLocalEnrollment(let body):
             return try? encoder.encode(body)
         case .probePorts(let body):
             return try? encoder.encode(body)

@@ -86,7 +86,8 @@ async def _authenticate(
     tls_fingerprint = client_cert_fingerprint_from_scope(ws.scope)
     if tls_fingerprint:
         cursor = await db.execute(
-            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ?",
+            """SELECT client_name FROM pairing
+               WHERE client_cert_fingerprint = ? AND status = 'active'""",
             (tls_fingerprint,),
         )
         row = await cursor.fetchone()
@@ -119,7 +120,9 @@ async def _authenticate(
         # over the non-TLS dev path. Require is_local=1 to match deps.py and the
         # token path below (previously this path omitted the constraint).
         cursor = await db.execute(
-            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ? AND is_local = 1",
+            """SELECT client_name FROM pairing
+               WHERE client_cert_fingerprint = ?
+                 AND is_local = 1 AND status = 'active'""",
             (fingerprint,),
         )
         row = await cursor.fetchone()
@@ -128,7 +131,9 @@ async def _authenticate(
 
     if token:
         cursor = await db.execute(
-            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ? AND is_local = 1",
+            """SELECT client_name FROM pairing
+               WHERE client_cert_fingerprint = ?
+                 AND is_local = 1 AND status = 'active'""",
             (token,),
         )
         row = await cursor.fetchone()

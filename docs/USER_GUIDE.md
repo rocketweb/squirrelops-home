@@ -57,7 +57,18 @@ needed and follow [Release security](RELEASE_SECURITY.md) before upgrading.
 
 If you don't have a separate always-on device, install the signed and
 notarized `.pkg`. It includes the macOS app, a locked sensor runtime, and the
-privileged helper. It runs the sensor as a dedicated system account.
+privileged helper. It runs the sensor as a dedicated system account. macOS
+Installer asks for one administrator approval for the complete local package.
+The app does not ask for a second approval during setup.
+
+The package verifies that launchd owns a stable sensor process before Installer
+finishes. On an upgrade with persisted mimic decoys, conflict-safe network
+restoration can continue in that background process after the progress bar
+completes. This keeps Installer within macOS's package-script limit instead of
+showing "less than a minute" for several minutes and then failing. The app
+retries the local sensor every three seconds and connects automatically when
+restoration finishes. It shows exact elapsed time instead of inventing a
+remaining-time estimate for network conflict checks.
 
 Download the versioned `.pkg` and its checksum from a pinned release, then
 verify both the checksum and Apple signature before opening it:
@@ -83,6 +94,16 @@ The package will:
 4. Create the `_squirrelops` service account and private data directories
 5. Install and start the sensor and privileged helper services
 
+On first launch, choose **Build Local Sensor**. The app detects the packaged
+sensor and enrolls automatically. No setup key or command-line step is needed
+during normal setup.
+
+An explicit ad-hoc local-test package is different from a release. Its signing
+identity changes on each rebuild. Each test package therefore uses a new,
+isolated Keychain namespace and enrolls again instead of asking repeatedly for
+access to private keys created by an earlier build. This isolation does not
+weaken the stable Keychain access policy used by signed releases.
+
 ### Privileged Helper (required for macOS)
 
 On macOS, ARP network scanning, virtual IP aliases, and port forwarding require root privileges. Rather than running the entire sensor as root, these operations are handled by a lightweight privileged helper daemon (`com.squirrelops.helper`) that runs in the background.
@@ -101,12 +122,15 @@ access unless the helper is built and installed separately.
 | Socket | `/var/run/squirrelops-helper.sock` |
 | Logs | `/var/log/com.squirrelops.helper.log` |
 
-### Path C: macOS App (control plane)
+### Path C: macOS App for a Remote Sensor
 
-Download the macOS app from [GitHub Releases](https://github.com/rocketweb/squirrelops-home/releases). On first launch, the app will:
+The standalone macOS app remains available for a sensor already running on
+another device. It does not install local services or request administrator
+approval. On first launch:
 
-1. Prompt for your admin password to install the privileged helper
-2. Guide you through sensor pairing (see [Finding Your Setup Key](#finding-your-setup-key) below)
+1. Choose **Connect to Another Sensor**
+2. Select the discovered sensor
+3. Enter its one-time setup key
 
 ---
 
@@ -114,19 +138,36 @@ Download the macOS app from [GitHub Releases](https://github.com/rocketweb/squir
 
 ### Pairing Your Sensor
 
-Every sensor — whether on a remote device (Path A) or the same Mac (Path B) — must be paired with the macOS app before use. Pairing establishes a mutual TLS connection so all communication is encrypted and authenticated. You only need to do this once per sensor.
+Every sensor must be paired with the macOS app before use. Pairing establishes
+a mutual TLS connection so all communication is encrypted and authenticated.
+You only need to do this once per sensor.
 
-**The pairing flow:**
+**Local packaged sensor:**
 
-1. Open the macOS app — it automatically discovers the sensor via mDNS on your local network
-2. The app shows the setup screen and asks for a **one-time setup key**
-3. Enter the key (see [Finding Your Setup Key](#finding-your-setup-key) below). A signed app and local `.pkg` sensor can exchange it automatically over an authenticated Unix socket
+1. Open the app and choose **Build Local Sensor**
+2. The app detects the sensor on localhost
+3. The signed app creates its private key in macOS Keychain and requests a
+   client certificate through the packaged helper
+4. The app proves possession of that key over mutual TLS
+5. The sensor activates the pairing and the dashboard opens
+
+This flow does not expose or copy a setup key. The app, sensor, and root helper
+remain separate processes with narrow permissions.
+
+**Remote sensor:**
+
+1. Open the app and choose **Connect to Another Sensor**
+2. The app discovers sensors via mDNS
+3. Select a sensor and enter its one-time setup key
 4. The app and sensor exchange TLS certificates
-5. You're connected. The setup key is invalidated and is not needed again
+5. The setup key is invalidated and the authenticated connection opens
 
 ### Finding Your Setup Key
 
-When the sensor starts, it generates a 20-character, 100-bit setup key and displays it prominently. The key expires after **10 minutes** or after successful use. Five failed proofs close that pairing session without rotating the key, which prevents an unauthenticated device from forcing repeated key changes.
+Remote pairing and local recovery use a 20-character, 100-bit setup key. The
+key expires after **10 minutes** or after successful use. Five failed proofs
+close that pairing session without rotating the key, which prevents an
+unauthenticated device from forcing repeated key changes.
 
 **Docker sensor (Path A):**
 
@@ -144,8 +185,10 @@ docker compose -f /opt/squirrelops/docker-compose.yml logs --tail 50
 
 **Packaged macOS sensor (Path B):**
 
-Packaged installs require the administrator-only CLI. The key is stored mode
-`0600` inside the private sensor data directory, never in `/tmp`:
+You do not need a setup key for normal packaged setup. If automatic enrollment
+cannot finish, choose **Use Setup Key** in the app and retrieve the recovery
+key with the administrator-only CLI. The key is stored mode `0600` inside the
+private sensor data directory, never in `/tmp`:
 
 ```bash
 sudo -u _squirrelops \
@@ -161,12 +204,38 @@ use `docker compose restart`. For packaged macOS, use
 
 After successful pairing, the app stores the sensor's TLS certificate in your macOS Keychain. All subsequent connections are authenticated automatically.
 
+### Help Menu
+
+Choose **Help > SquirrelOps Home Help** to open the guide at its current topic.
+Every guide topic also appears directly in the Help menu, including Devices and
+Trust, Alerts and Notifications, Decoys, Squirrel Scouts, Settings,
+Troubleshooting, Privacy and Security, and Updates and Verification.
+
 ### Pairing and Local Trust Configuration
 
-Production does not start a local setup-key socket. Peer credentials identify
-the process that connected, but cannot prove which process later uses a passed
-file descriptor. A local socket is available only as an explicit source
-development escape hatch:
+Packaged production enables automatic enrollment with this setting:
+
+```yaml
+pairing:
+  local_enrollment_enabled: true
+```
+
+The app authenticates to the root helper through a macOS XPC Mach service that
+requires the SquirrelOps app identifier, release Team ID, and current console
+user. The helper forwards only a bounded certificate request to a sensor Unix
+socket that accepts root. The sensor creates a short-lived pending pairing,
+then activates it only after the app presents the matching certificate over
+mutual TLS. The app private key never leaves Keychain.
+
+An explicitly enabled local-test package is bound to the exact code hash of
+the root-owned app installed by that package. It does not accept another ad-hoc
+app with the same bundle identifier. Normal releases continue to require the
+SquirrelOps Developer ID signature.
+
+Production still does not start the older local setup-key socket. Peer
+credentials identify the process that connected, but cannot prove which
+process later uses a passed file descriptor. That socket remains only as an
+explicit source-development escape hatch:
 
 ```yaml
 pairing:
@@ -174,7 +243,10 @@ pairing:
   allow_unsigned_local: false
 ```
 
-Set `allow_unsigned_local: true` only for source development. It permits any process running as the logged-in user to retrieve the setup key. Remote pairing still uses the same one-time setup key, isolated challenge sessions, encrypted certificate exchange, and mutual TLS.
+Set `allow_unsigned_local: true` only for source development. It permits any
+process running as the logged-in user to retrieve the setup key. Remote
+pairing continues to use the one-time setup key, isolated challenge sessions,
+encrypted certificate exchange, and mutual TLS.
 
 `--no-tls` is also development-only. It always forces the API to bind to loopback, and non-TLS bearer or fingerprint authentication is rejected for non-loopback peers.
 
@@ -686,7 +758,11 @@ tail -f /Library/SquirrelOps/sensor/logs/squirrelops-sensor.log
 
 **Symptoms:** The app is asking for a setup key but you don't know where to find it.
 
-See [Finding Your Setup Key](#finding-your-setup-key) for detailed instructions. The quickest methods:
+Normal local package setup enrolls automatically and does not ask for a setup
+key. The key is needed for a remote sensor or when you choose **Use Setup Key**
+after automatic local enrollment cannot finish. See
+[Finding Your Setup Key](#finding-your-setup-key) for detailed instructions.
+The quickest methods are:
 
 - **Docker:** `docker compose -f /opt/squirrelops/docker-compose.yml logs | grep "Setup Key"`
 - **Packaged macOS:** use the packaged CLI command in
@@ -713,6 +789,8 @@ Then retrieve the new code using the methods above.
 - The sensor process has stopped
 - Network connectivity between the Mac and sensor device is broken
 - The sensor crashed and hasn't restarted
+- A decoy-heavy packaged upgrade is still restoring persisted virtual IPs and
+  listeners under launchd
 
 **For Docker sensor:** Check if the container is running:
 ```bash
@@ -726,13 +804,21 @@ docker compose -f /opt/squirrelops/docker-compose.yml up -d
 
 **For macOS sensor:** Check if the service is loaded:
 ```bash
-launchctl print gui/$(id -u)/com.squirrelops.sensor
+sudo launchctl print system/com.squirrelops.sensor
 ```
 
-If it's not running, reload it:
+If it is not running, restart it:
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.squirrelops.sensor.plist
+sudo launchctl kickstart -k system/com.squirrelops.sensor
 ```
+
+If the service is running immediately after an upgrade, allow restoration to
+finish. Standard and Full profiles can take several minutes because every
+persisted virtual IP is quarantined, checked for a physical-network conflict,
+and restored before its listener is exposed. Do not rerun Installer while that
+same stable sensor process is still initializing. Build Local Sensor keeps
+checking automatically for 20 minutes and shows how long it has waited. The
+Sensor Not Responding screen appears only after that recovery window expires.
 
 The app reconnects automatically on a 30-second interval. After 5 minutes of disconnection, it generates a Low-severity "Sensor Offline" alert.
 
@@ -763,7 +849,7 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 **Cause:** The privileged helper (`com.squirrelops.helper`) isn't running. On macOS, ARP scanning requires the helper daemon for raw socket access.
 
 **What to do:**
-1. Open the macOS app — it installs the helper automatically on first launch (prompts for admin password)
+1. Reinstall the signed SquirrelOps Home package if the helper is missing
 2. Verify the helper is running: `sudo launchctl print system/com.squirrelops.helper`
 3. Check helper logs: `tail -f /var/log/com.squirrelops.helper.log`
 4. Restart the sensor after the helper is running
@@ -773,7 +859,7 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 **Symptoms:** The Virtual Network section in Squirrel Scouts is empty, or Fill Capacity returns an error.
 
 **Possible causes:**
-- **Helper not running (macOS)** — Fill Capacity returns a "Privileged helper is not running" error. The helper is required for creating isolated virtual IPs. Open the macOS app to install it, or see the [helper documentation](#privileged-helper-required-for-macos) above.
+- **Helper not running (macOS):** Fill Capacity returns a "Privileged helper is not running" error. The helper is required for creating isolated virtual IPs. Reinstall the signed package, or see the [helper documentation](#privileged-helper-required-for-macos) above.
 - **Scouts haven't run yet** — Click **Run Scout** to refresh service profiles and fill available mimic capacity
 - **Profile is Lite** — Mimic decoys require Standard or Full profile. Switch profiles in Settings.
 - **No suitable candidates** — The scout engine needs eligible real devices with observed service ports. It creates one fake host per source, so a Full profile can legitimately have fewer than 10 fake hosts.
