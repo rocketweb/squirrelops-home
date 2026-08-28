@@ -3,6 +3,30 @@
     <title>SquirrelOps Home</title>
     <organization>com.squirrelops</organization>
 
+    <script><![CDATA[
+        function checkLocalTestOptIn() {
+            if (__LOCAL_TEST_BUILD__ !== 1) {
+                return true;
+            }
+            if (system.files.fileExistsAtPath(
+                    "/var/db/com.squirrelops.allow-local-test")) {
+                return true;
+            }
+
+            my.result.type = "Fatal";
+            my.result.message =
+                "Local test approval required.\n\n" +
+                "This unsigned local test package needs a one-time " +
+                "administrator opt-in before installation. Run this in " +
+                "Terminal, then open the package again:\n\n" +
+                "sudo /usr/bin/install -o root -g wheel -m 600 /dev/null " +
+                "/var/db/com.squirrelops.allow-local-test";
+            return false;
+        }
+    ]]></script>
+
+    <installation-check script="checkLocalTestOptIn()"/>
+
     <!-- Minimum macOS 14.0 (Sonoma) -->
     <allowed-os-versions>
         <os-version min="14.0"/>

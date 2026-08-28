@@ -128,9 +128,10 @@ class LearningModeConfig(StrictConfigModel):
 
 
 class PairingConfig(StrictConfigModel):
-    """Development-only local pairing transport settings.
+    """Local enrollment and development pairing transport settings.
 
-    Production never starts the local setup-key socket because file-descriptor
+    Production uses a separate root-helper enrollment socket. It never starts
+    the local setup-key socket because file-descriptor
     passing can separate the process using a connected stream from the process
     identity captured by peer-credential checks. ``allow_unsigned_local`` is an
     explicit source-development escape hatch only.
@@ -142,6 +143,7 @@ class PairingConfig(StrictConfigModel):
         'certificate leaf[subject.OU] = "PSQ5HK5U65"'
     )
     allow_unsigned_local: bool = False
+    local_enrollment_enabled: bool = False
 
 
 class ProfileLimits(StrictConfigModel):

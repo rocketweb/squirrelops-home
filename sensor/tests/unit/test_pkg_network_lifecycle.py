@@ -9,8 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from squirrelops_home_sensor.profiles import PROFILE_SETTINGS, ResourceProfile
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
@@ -1795,33 +1793,35 @@ def test_upgrade_snapshots_strip_and_verify_extended_acls() -> None:
     assert complete < strip < verify
 
 
-def test_sensor_postinstall_uses_bounded_full_profile_readiness_window() -> None:
+def test_sensor_postinstall_hands_long_recovery_back_to_launchd() -> None:
     script = (REPO_ROOT / "scripts/pkg/postinstall").read_text()
 
     bootstrap = script.index('launchctl bootstrap system "$PLIST_DEST"')
-    deadline = script.index("HEALTH_DEADLINE=")
-    health_wait = script.index("if wait_for_sensor_health; then")
+    deadline = script.index("STARTUP_HANDOFF_DEADLINE=")
+    readiness_wait = script.index("if wait_for_sensor_handoff; then")
 
-    assert bootstrap < deadline < health_wait
-    # Nine persisted mimics took more than four minutes to restore on a real
-    # upgrade. The Full profile supports up to 10, so the bounded package
-    # readiness window must cover that supported recovery path.
+    assert bootstrap < deadline < readiness_wait
+    # PackageKit terminates a component script at 600 seconds. Persisted mimic
+    # recovery can exceed that limit, so the package proves a stable launchd
+    # handoff and lets initialization continue under the service supervisor.
     timeout = int(
         next(
             line.partition("=")[2]
             for line in script.splitlines()
-            if line.startswith("HEALTH_TIMEOUT_SECONDS=")
+            if line.startswith("STARTUP_HANDOFF_TIMEOUT_SECONDS=")
         )
     )
-    assert timeout == 1200
-    assert (
-        timeout
-        >= PROFILE_SETTINGS[ResourceProfile.FULL].max_mimic_decoys * 40
-    )
+    assert timeout == 45
+    assert timeout < 600
+    assert "SENSOR_STABILITY_REQUIRED_SECONDS=10" in script
     assert "HEALTH_PROBE_TIMEOUT_SECONDS=3" in script
-    assert "HEALTH_INTERVAL_SECONDS=2" in script
+    assert "STARTUP_HANDOFF_INTERVAL_SECONDS=1" in script
     assert '/bin/date "+%s"' in script
-    assert 'while [ "$(/bin/date "+%s")" -lt "$HEALTH_DEADLINE" ]; do' in script
+    assert (
+        'while [ "$(/bin/date "+%s")" -lt "$STARTUP_HANDOFF_DEADLINE" ]; do'
+        in script
+    )
+    assert "Sensor initialization continues under launchd" in script
     assert "TIMEOUT=30" not in script
 
 
@@ -1848,7 +1848,7 @@ def test_sensor_postinstall_requires_exact_healthy_response() -> None:
     assert 'if sensor_health_is_ready; then' in script
     assert "HEALTH_REQUIRED_SUCCESSES=2" in script
     assert 'SENSOR_HEALTHY=1' in script
-    assert 'if [ "$SENSOR_HEALTHY" -ne 1 ]; then' in script
+    assert 'if [ "$SENSOR_HEALTHY" -eq 1 ]; then' in script
 
 
 def test_uninstaller_removes_runtime_but_preserves_user_state_by_default() -> None:

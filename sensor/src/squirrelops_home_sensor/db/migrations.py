@@ -1991,6 +1991,31 @@ async def _apply_v10(db: aiosqlite.Connection) -> None:
         raise
 
 
+async def _apply_v11(db: aiosqlite.Connection) -> None:
+    """V11: Add pending local enrollment lifecycle to paired clients."""
+    columns = (
+        ("status", "TEXT NOT NULL DEFAULT 'active'"),
+        ("enrollment_request_id", "TEXT"),
+        ("enrollment_csr_fingerprint", "TEXT"),
+        ("enrollment_client_cert_pem", "TEXT"),
+        ("enrollment_expires_at", "TEXT"),
+    )
+    for name, declaration in columns:
+        if not await _column_exists(db, "pairing", name):
+            await db.execute(f"ALTER TABLE pairing ADD COLUMN {name} {declaration}")
+    await db.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_pairing_enrollment_request
+           ON pairing(enrollment_request_id)
+           WHERE enrollment_request_id IS NOT NULL"""
+    )
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+        (11, now),
+    )
+    await db.commit()
+
+
 # Ordered list of migration functions. Index 0 = migration to version 1.
 _MIGRATIONS: list[tuple[int, callable]] = [
     (1, _apply_v1),
@@ -2003,6 +2028,7 @@ _MIGRATIONS: list[tuple[int, callable]] = [
     (8, _apply_v8),
     (9, _apply_v9),
     (10, _apply_v10),
+    (11, _apply_v11),
 ]
 
 

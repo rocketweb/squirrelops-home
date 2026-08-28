@@ -1,6 +1,6 @@
 [project]
 name = "squirrelops-home-sensor"
-version = "2.0.2"
+version = "2.0.3"
 description = "SquirrelOps Home network security sensor"
 requires-python = ">=3.11"
 dependencies = [

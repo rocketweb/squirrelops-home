@@ -109,7 +109,7 @@ open .build/$(uname -m)-apple-macosx/debug/SquirrelOpsHome.app
 
 ```bash
 cd sensor
-uv run pytest tests/ -q    # ~1258 tests
+uv run pytest tests/ -q    # More than 2,100 tests
 ```
 
 Run a specific test file or class:
@@ -123,7 +123,13 @@ uv run pytest tests/unit/test_scout_engine.py::TestGetMimicCandidates -q
 
 ## Architecture: Privileged Helper
 
-The helper (`SquirrelOpsHelper`) is a Swift binary that runs as root via launchd. It listens on a Unix domain socket and speaks JSON-RPC 2.0.
+The helper (`SquirrelOpsHelper`) is a Swift binary that runs as root via
+launchd. It exposes two independent local channels:
+
+| Caller | Channel | Authorization | Scope |
+|--------|---------|---------------|-------|
+| Python sensor | `/var/run/squirrelops-helper.sock` JSON-RPC | root or `_squirrelops` peer UID | Fixed privileged network operations |
+| Signed macOS app | `com.squirrelops.helper.enrollment` XPC Mach service | Release app identifier, Team ID, Apple anchor, and console UID; exact root-installed app CDHash for explicit local tests | Forward one bounded CSR to the local sensor |
 
 ```
 ┌──────────────────────┐         JSON-RPC / Unix socket
@@ -144,6 +150,20 @@ The helper (`SquirrelOpsHelper`) is a Swift binary that runs as root via launchd
 | `clearPortForwards` | Remove pfctl rules |
 
 **Why a helper?** macOS requires root for raw sockets (ARP), `ifconfig` alias manipulation, and `pfctl` rules. Rather than running the entire sensor as root, only the helper runs privileged. Its socket is `root:_squirrelops` mode `0660`, and peer credentials are checked again after connection.
+
+The app never receives access to the network-operation RPC channel. For local
+enrollment it generates a Keychain-backed private key, sends a CSR through the
+signed-app XPC service, and confirms the pending certificate over mutual TLS.
+The app pins the helper's Developer ID requirement before resuming that XPC
+connection; an explicit local-test package pins the exact root-installed helper
+CDHash instead.
+The sensor enrollment socket is not an HTTP or LAN listener and accepts only a
+root peer. A source-built app cannot satisfy the production code-signing
+requirement, so use the setup-key flow for ordinary source development. The
+explicit local-test package is a separate controlled path: the package pins
+its installed ad-hoc app requirement and assigns each build a fresh Keychain
+namespace so it cannot trigger access prompts for an earlier build's private
+keys.
 
 TCP service scanning on macOS uses bounded, unprivileged connections directly
 from the Python sensor. Passive DNS capture is not currently supported on
@@ -210,6 +230,32 @@ The helper isn't running or can't execute `ifconfig`. Reinstall and check logs.
 | App (debug) | `cd app && bash build-app.sh` |
 | App (release) | `cd app && BUILD_CONFIG=release bash build-app.sh` |
 | Installer (.pkg) | `bash scripts/build-pkg.sh` |
+
+An explicit local-test package requires `SQUIRRELOPS_LOCAL_TEST_BUILD=1` and
+the one-time root-owned opt-in printed by the builder. The build writes a UUID
+into the app's local-test marker. That UUID is used only to isolate test
+Keychain items. Release builds have no marker and continue to use the stable
+`io.squirrelops.home` Keychain service.
+
+The local-test marker also tells the helper to bind its enrollment Mach service
+to the exact designated requirement of the root-owned app in `/Applications`.
+The helper fails closed if that requirement is not a single ad-hoc `cdhash`, or
+if the installed bundle or marker can be changed by a non-root user. Release
+packages always use the fixed Developer ID requirement.
+
+The sensor package postinstall allows up to 45 seconds to observe either two
+valid health responses or one stable launchd-owned sensor PID. Persisted mimic
+recovery can exceed macOS's 600-second component-script limit, so it continues
+under launchd after that verified handoff. Do not increase the script wait to
+cover decoy count. Doing so can make an otherwise healthy upgrade fail when
+PackageKit terminates the script.
+
+The Build Local Sensor setup view treats that handoff as initialization, not a
+failure. It probes localhost every three seconds for up to 20 minutes, displays
+exact elapsed time, and pairs as soon as the authenticated API is available.
+Keep the timeout policy in `LocalSensorStartupPolicy` so setup tests can verify
+the boundary without sleeping. The view must retain the remote-sensor path
+while local recovery is in progress.
 
 The source Linux Compose file deliberately has no guessed LAN. Set the directly
 connected private CIDR explicitly before using it:

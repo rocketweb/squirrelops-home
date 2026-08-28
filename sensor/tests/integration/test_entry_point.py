@@ -177,6 +177,21 @@ def mock_subsystems() -> dict[str, Any]:
     mocks["local_pairing_cls"] = mock_local_pairing_cls
     mocks["local_pairing"] = mock_local_pairing
 
+    # Signed-app local enrollment socket
+    mock_local_enrollment_authority = MagicMock()
+    mock_local_enrollment_authority_cls = MagicMock(
+        return_value=mock_local_enrollment_authority
+    )
+    mocks["local_enrollment_authority_cls"] = mock_local_enrollment_authority_cls
+    mocks["local_enrollment_authority"] = mock_local_enrollment_authority
+
+    mock_local_enrollment = AsyncMock()
+    mock_local_enrollment.start = AsyncMock()
+    mock_local_enrollment.stop = AsyncMock()
+    mock_local_enrollment_cls = MagicMock(return_value=mock_local_enrollment)
+    mocks["local_enrollment_cls"] = mock_local_enrollment_cls
+    mocks["local_enrollment"] = mock_local_enrollment
+
     return mocks
 
 
@@ -256,6 +271,18 @@ def patched(mock_subsystems: dict[str, Any]):
             patch(
                 "squirrelops_home_sensor.api.local_pairing.LocalPairingServer",
                 mock_subsystems["local_pairing_cls"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "squirrelops_home_sensor.api.local_enrollment.LocalEnrollmentAuthority",
+                mock_subsystems["local_enrollment_authority_cls"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "squirrelops_home_sensor.api.local_enrollment.LocalEnrollmentServer",
+                mock_subsystems["local_enrollment_cls"],
             )
         )
         yield
@@ -491,13 +518,44 @@ class TestEntryPointStartup:
         mock_subsystems: dict[str, Any],
         patched: None,
     ) -> None:
-        """Production requires administrator-assisted manual key entry."""
+        """Production never exposes its setup key through the development socket."""
         from squirrelops_home_sensor.__main__ import run_sensor
 
         mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
         await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
 
         mock_subsystems["local_pairing_cls"].assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_packaged_local_enrollment_starts_private_socket(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """The packaged sensor exposes enrollment only when explicitly enabled."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["load_config"].return_value["pairing"] = {
+            "local_enrollment_enabled": True,
+        }
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+
+        await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        mock_subsystems["local_enrollment_authority_cls"].assert_called_once()
+        enrollment_call = mock_subsystems["local_enrollment_cls"].call_args
+        assert enrollment_call is not None
+        assert enrollment_call.args == (
+            "/tmp/run/enrollment.sock",
+            mock_subsystems["local_enrollment_authority"],
+        )
+        assert (
+            mock_subsystems["app"].state.local_enrollment_authority
+            is mock_subsystems["local_enrollment_authority"]
+        )
+        mock_subsystems["local_enrollment"].start.assert_awaited_once()
+        mock_subsystems["local_enrollment"].stop.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_disabled_tls_is_forced_to_loopback(

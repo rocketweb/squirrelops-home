@@ -1553,7 +1553,7 @@ class TestScanLoopPhase3:
 
             async def classify(
                 self,
-                _fingerprint,
+                fingerprint,
                 evidence=None,
             ) -> DeviceClassification:
                 self.evidence = evidence

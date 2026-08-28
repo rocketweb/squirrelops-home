@@ -11,6 +11,7 @@ struct SquirrelOpsHomeApp: App {
             pairingBaseURL: URL(string: "https://localhost")!
         )
     )
+    @State private var helpGuideNavigation = HelpGuideNavigation()
     @AppStorage("appearanceMode") private var appearanceMode: String = "system"
     private let notificationService = MacNotificationService.shared
 
@@ -20,7 +21,6 @@ struct SquirrelOpsHomeApp: App {
         // redaction on the sensor does not reach a file already written.
         ResponseCacheHygiene.purgeLegacyResponseCacheIfNeeded()
         FontRegistration.registerAllFonts()
-        HelperManager.installIfNeeded()
     }
 
     var body: some Scene {
@@ -86,13 +86,16 @@ struct SquirrelOpsHomeApp: App {
                 }
             }
         }
-        .defaultSize(width: 1080, height: 720)
+        .defaultSize(
+            width: MainWindowPresentation.setup.contentSize.width,
+            height: MainWindowPresentation.setup.contentSize.height
+        )
         .commands {
-            SquirrelOpsHelpCommands()
+            SquirrelOpsHelpCommands(navigation: helpGuideNavigation)
         }
 
         Window("SquirrelOps Home Help", id: AppWindow.help.rawValue) {
-            HelpGuideView()
+            HelpGuideView(navigation: helpGuideNavigation)
                 .onAppear {
                     NSApp.setActivationPolicy(.regular)
                     NSApp.activate(ignoringOtherApps: true)

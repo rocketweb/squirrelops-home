@@ -119,6 +119,7 @@ HELPER_PLIST="/Library/LaunchDaemons/com.squirrelops.helper.plist"
 HELPER_SOCKET="/var/run/squirrelops-helper.sock"
 PLIST_TEMP=""
 ACCOUNT_MARKER_TEMP=""
+CONFIG_MIGRATION_TEMP=""
 
 cleanup_staged_plist() {
     if [ -n "$PLIST_TEMP" ]; then
@@ -126,6 +127,9 @@ cleanup_staged_plist() {
     fi
     if [ -n "$ACCOUNT_MARKER_TEMP" ]; then
         rm -f -- "$ACCOUNT_MARKER_TEMP"
+    fi
+    if [ -n "$CONFIG_MIGRATION_TEMP" ]; then
+        rm -f -- "$CONFIG_MIGRATION_TEMP"
     fi
 }
 trap cleanup_staged_plist EXIT
@@ -895,7 +899,132 @@ alerts:
 
 pairing:
   socket_path: "$INSTALL_DIR/run/pairing.sock"
+  local_enrollment_enabled: true
 YAML
+fi
+
+# Existing package installs predate helper-mediated enrollment. Add the new
+# setting only when it is absent, preserving an operator's explicit false.
+local_enrollment_setting_present() {
+    isolated_python - "$CONFIG_FILE" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+config = yaml.safe_load(Path(sys.argv[1]).read_text())
+pairing = config.get("pairing") if isinstance(config, dict) else None
+if not isinstance(pairing, dict):
+    raise SystemExit(1)
+value = pairing.get("local_enrollment_enabled")
+raise SystemExit(0 if isinstance(value, bool) else 1)
+PY
+}
+
+if ! local_enrollment_setting_present
+then
+    if ! CONFIG_MIGRATION_TEMP=$(
+        /usr/bin/mktemp "$INSTALL_DIR/.config.yaml.XXXXXXXX"
+    ); then
+        echo "[postinstall] Cannot stage the local enrollment configuration." >&2
+        exit 1
+    fi
+    if ! /usr/bin/awk '
+        function leading_whitespace(line) {
+            match(line, /^[[:space:]]*/)
+            return substr(line, 1, RLENGTH)
+        }
+        function insert_setting() {
+            indent = pairing_child_indent
+            if (indent == "") {
+                indent = pairing_indent "  "
+            }
+            print indent "local_enrollment_enabled: true"
+            inserted = 1
+        }
+        BEGIN {
+            in_pairing = 0
+            saw_pairing = 0
+            inserted = 0
+            pairing_indent = ""
+            pairing_child_indent = ""
+        }
+        /^pairing:[[:space:]]*($|#)/ {
+            in_pairing = 1
+            saw_pairing = 1
+            pairing_indent = leading_whitespace($0)
+            pairing_child_indent = ""
+        }
+        /^pairing:[[:space:]]*\{.*\}[[:space:]]*(#.*)?$/ {
+            closing = match($0, /}[[:space:]]*(#.*)?$/)
+            prefix = substr($0, 1, closing - 1)
+            suffix = substr($0, closing + 1)
+            separator = prefix ~ /\{[[:space:]]*$/ ? "" : ","
+            $0 = prefix separator " local_enrollment_enabled: true}" suffix
+            saw_pairing = 1
+            inserted = 1
+        }
+        {
+            if (in_pairing && $0 !~ /^[[:space:]]*($|#)/ \
+                && $0 !~ /^pairing:[[:space:]]*($|#)/) {
+                current_indent = leading_whitespace($0)
+                if (length(current_indent) <= length(pairing_indent)) {
+                    if (!inserted) {
+                        insert_setting()
+                    }
+                    in_pairing = 0
+                } else if (pairing_child_indent == "") {
+                    pairing_child_indent = current_indent
+                }
+            }
+            print
+        }
+        END {
+            if (in_pairing && !inserted) {
+                insert_setting()
+            }
+            if (!saw_pairing) {
+                print ""
+                print "pairing:"
+                print "  local_enrollment_enabled: true"
+            }
+        }
+    ' "$CONFIG_FILE" > "$CONFIG_MIGRATION_TEMP" \
+        || ! /bin/chmod 600 "$CONFIG_MIGRATION_TEMP"
+    then
+        echo "[postinstall] Cannot add the local enrollment configuration." >&2
+        exit 1
+    fi
+    if ! isolated_python - "$CONFIG_FILE" "$CONFIG_MIGRATION_TEMP" <<'PY'
+import copy
+import sys
+from pathlib import Path
+
+import yaml
+
+original = yaml.safe_load(Path(sys.argv[1]).read_text())
+config = yaml.safe_load(Path(sys.argv[2]).read_text())
+if not isinstance(original, dict) or not isinstance(config, dict):
+    raise SystemExit("configuration is not a mapping")
+expected = copy.deepcopy(original)
+pairing = expected.setdefault("pairing", {})
+if not isinstance(pairing, dict):
+    raise SystemExit("pairing configuration is not a mapping")
+pairing["local_enrollment_enabled"] = True
+if config != expected:
+    raise SystemExit("migration changed existing configuration")
+if config["pairing"].get("local_enrollment_enabled") is not True:
+    raise SystemExit("local enrollment setting was not added")
+PY
+    then
+        echo "[postinstall] Migrated local enrollment configuration is invalid." >&2
+        exit 1
+    fi
+    if ! /bin/mv -fh "$CONFIG_MIGRATION_TEMP" "$CONFIG_FILE"; then
+        echo "[postinstall] Cannot install the local enrollment configuration." >&2
+        exit 1
+    fi
+    CONFIG_MIGRATION_TEMP=""
 fi
 
 # ---------------------------------------------------------------------------
@@ -1159,25 +1288,28 @@ if ! launchctl bootstrap system "$PLIST_DEST" 2>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: Health check (a package is not successful unless the sensor starts)
+# Step 6: Prove launchd accepted the sensor and owns its continued startup
 # ---------------------------------------------------------------------------
 echo "[postinstall] Waiting for sensor to start..."
 
 HEALTH_URL="https://localhost:8443/system/health"
-# A Full profile can restore up to 10 persisted fake hosts before uvicorn binds.
-# Real upgrade timing is dominated by the sequential, conflict-safe alias and
-# port-forward checks; allow the supported maximum to finish while retaining a
-# hard upper bound and the immediate launchd/process liveness failures below.
-HEALTH_TIMEOUT_SECONDS=1200
+# PackageKit terminates a component script after 600 seconds. A Full-profile
+# upgrade can safely restore persisted fake hosts for longer than that. Prove
+# that launchd owns a stable process, accept an early healthy API when one is
+# available, and leave long recovery under the service supervisor.
+STARTUP_HANDOFF_TIMEOUT_SECONDS=45
 HEALTH_PROBE_TIMEOUT_SECONDS=3
-HEALTH_INTERVAL_SECONDS=2
+STARTUP_HANDOFF_INTERVAL_SECONDS=1
 HEALTH_REQUIRED_SUCCESSES=2
 SENSOR_LIVENESS_GRACE_SECONDS=10
+SENSOR_STABILITY_REQUIRED_SECONDS=10
 HEALTH_STARTED_AT="$(/bin/date "+%s")"
-HEALTH_DEADLINE=$((HEALTH_STARTED_AT + HEALTH_TIMEOUT_SECONDS))
+STARTUP_HANDOFF_DEADLINE=$((HEALTH_STARTED_AT + STARTUP_HANDOFF_TIMEOUT_SECONDS))
 SENSOR_LIVENESS_GRACE_DEADLINE=$((HEALTH_STARTED_AT + SENSOR_LIVENESS_GRACE_SECONDS))
 SENSOR_SERVICE_SNAPSHOT=""
 SENSOR_HEALTHY=0
+SENSOR_STABLE_PID=""
+SENSOR_STABLE_STARTED_AT=0
 
 capture_sensor_service_snapshot() {
     SENSOR_SERVICE_SNAPSHOT=$(
@@ -1190,6 +1322,12 @@ sensor_service_is_running() {
         | /usr/bin/grep -Eq "state = running" \
         && printf '%s\n' "$SENSOR_SERVICE_SNAPSHOT" \
         | /usr/bin/grep -Eq "pid = [1-9][0-9]*"
+}
+
+sensor_service_pid() {
+    printf '%s\n' "$SENSOR_SERVICE_SNAPSHOT" \
+        | /usr/bin/sed -n 's/^[[:space:]]*pid = \([1-9][0-9]*\)$/\1/p' \
+        | /usr/bin/head -n 1
 }
 
 sensor_health_is_ready() {
@@ -1224,16 +1362,14 @@ raise SystemExit(0 if healthy else 1)
 '
 }
 
-wait_for_sensor_health() {
+wait_for_sensor_handoff() {
     local consecutive_successes=0
     local now
+    local sensor_pid
     local remaining
     local sleep_seconds
 
-    # Full-profile upgrades restore and isolate every persisted mimic before
-    # uvicorn binds the API. Keep the installer bounded, but allow that work to
-    # finish while continuously proving the launchd job still exists.
-    while [ "$(/bin/date "+%s")" -lt "$HEALTH_DEADLINE" ]; do
+    while [ "$(/bin/date "+%s")" -lt "$STARTUP_HANDOFF_DEADLINE" ]; do
         if ! capture_sensor_service_snapshot; then
             echo "[postinstall] Sensor launchd job disappeared during startup." >&2
             return 1
@@ -1241,9 +1377,20 @@ wait_for_sensor_health() {
 
         now="$(/bin/date "+%s")"
         if sensor_service_is_running; then
+            sensor_pid="$(sensor_service_pid)"
+            if [ -n "$sensor_pid" ] && [ "$sensor_pid" = "$SENSOR_STABLE_PID" ]; then
+                if [ $((now - SENSOR_STABLE_STARTED_AT)) -ge "$SENSOR_STABILITY_REQUIRED_SECONDS" ]; then
+                    return 0
+                fi
+            else
+                SENSOR_STABLE_PID="$sensor_pid"
+                SENSOR_STABLE_STARTED_AT="$now"
+            fi
+
             if sensor_health_is_ready; then
                 consecutive_successes=$((consecutive_successes + 1))
                 if [ "$consecutive_successes" -ge "$HEALTH_REQUIRED_SUCCESSES" ]; then
+                    SENSOR_HEALTHY=1
                     return 0
                 fi
             else
@@ -1254,14 +1401,16 @@ wait_for_sensor_health() {
             return 1
         else
             consecutive_successes=0
+            SENSOR_STABLE_PID=""
+            SENSOR_STABLE_STARTED_AT=0
         fi
 
         now="$(/bin/date "+%s")"
-        remaining=$((HEALTH_DEADLINE - now))
+        remaining=$((STARTUP_HANDOFF_DEADLINE - now))
         if [ "$remaining" -le 0 ]; then
             break
         fi
-        sleep_seconds="$HEALTH_INTERVAL_SECONDS"
+        sleep_seconds="$STARTUP_HANDOFF_INTERVAL_SECONDS"
         if [ "$remaining" -lt "$sleep_seconds" ]; then
             sleep_seconds="$remaining"
         fi
@@ -1271,13 +1420,14 @@ wait_for_sensor_health() {
     return 1
 }
 
-if wait_for_sensor_health; then
-    SENSOR_HEALTHY=1
-    echo "[postinstall] Sensor is healthy."
-fi
-
-if [ "$SENSOR_HEALTHY" -ne 1 ]; then
-    echo "[postinstall] Sensor did not become healthy within ${HEALTH_TIMEOUT_SECONDS}s." >&2
+if wait_for_sensor_handoff; then
+    if [ "$SENSOR_HEALTHY" -eq 1 ]; then
+        echo "[postinstall] Sensor is healthy."
+    else
+        echo "[postinstall] Sensor initialization continues under launchd."
+    fi
+else
+    echo "[postinstall] Sensor did not remain stable during startup handoff." >&2
     echo "[postinstall] Check logs at: $LOG_DIR/squirrelops-sensor.log" >&2
     exit 1
 fi

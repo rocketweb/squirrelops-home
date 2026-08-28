@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import plistlib
+import subprocess
 import tomllib
 from pathlib import Path
+
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -60,39 +63,61 @@ def test_app_installer_verifies_the_copied_helper_identity_before_install() -> N
     assert 'cp "$HELPER_SRC" "$HELPER_DEST"' not in script
 
 
+def test_app_installer_removes_privileged_artifacts_that_fail_post_move_validation() -> None:
+    script = (
+        REPO_ROOT / "scripts/pkg/app-scripts/postinstall"
+    ).read_text(encoding="utf-8")
+
+    cleanup = script[
+        script.index("cleanup_staged_files() {") :
+        script.index("path_has_no_extended_acl() {")
+    ]
+    assert 'if [ "$HELPER_DEST_PENDING_VALIDATION" = "1" ]; then' in cleanup
+    assert '/bin/rm -f -- "$HELPER_DEST"' in cleanup
+    assert 'if [ "$PLIST_DEST_PENDING_VALIDATION" = "1" ]; then' in cleanup
+    assert '/bin/rm -f -- "$PLIST_DEST"' in cleanup
+
+    helper_move = script.index('/bin/mv -fh "$HELPER_TEMP" "$HELPER_DEST"')
+    helper_armed = script.index('HELPER_DEST_PENDING_VALIDATION=1')
+    helper_verified = script.index(
+        'HELPER_DEST_PENDING_VALIDATION=0',
+        helper_armed,
+    )
+    assert helper_move < helper_armed < helper_verified
+
+    plist_move = script.index('/bin/mv -fh "$PLIST_TEMP" "$PLIST_DEST"')
+    plist_armed = script.index('PLIST_DEST_PENDING_VALIDATION=1')
+    plist_verified = script.index(
+        'PLIST_DEST_PENDING_VALIDATION=0',
+        plist_armed,
+    )
+    assert plist_move < plist_armed < plist_verified
+
+
 def test_local_test_package_is_explicit_and_cannot_weaken_release_signing() -> None:
     builder = (REPO_ROOT / "scripts/build-pkg.sh").read_text(encoding="utf-8")
     signer = (REPO_ROOT / "scripts/sign-app.sh").read_text(encoding="utf-8")
     postinstall = (
         REPO_ROOT / "scripts/pkg/app-scripts/postinstall"
     ).read_text(encoding="utf-8")
+    preinstall = (
+        REPO_ROOT / "scripts/pkg/app-scripts/preinstall"
+    ).read_text(encoding="utf-8")
 
     assert 'LOCAL_TEST_BUILD="${SQUIRRELOPS_LOCAL_TEST_BUILD:-0}"' in builder
     assert 'error "A release build cannot be a local test build."' in builder
     assert "com.squirrelops.local-test-build" in builder
+    assert 'LOCAL_TEST_CREDENTIAL_NAMESPACE="$(/usr/bin/uuidgen)"' in builder
     assert 'SIGNING_IDENTITY="-"' in builder
     assert "Ad-hoc signing is restricted to explicit local test builds" in signer
     assert '/usr/bin/codesign --verify --deep --strict' in postinstall
     assert "Local test build must use an ad-hoc app signature" in postinstall
     assert "verify_local_test_helper" in postinstall
-    assert 'LOCAL_TEST_OPT_IN="/var/db/com.squirrelops.allow-local-test"' in postinstall
-    assert "root:wheel:600:1" in postinstall
-    assert "one-time root-owned operator opt-in" in postinstall
-    assert '/bin/rm -f -- "$LOCAL_TEST_OPT_IN"' in postinstall
-    assert postinstall.index("one-time root-owned operator opt-in") < postinstall.index(
-        'verify_local_test_helper "$HELPER_TEMP"'
-    )
-    # The opt-in is consumed as soon as it authorizes the run, before any
-    # install step can fail. Consuming it only after RPC readiness left the
-    # token armed for every earlier exit, so a failed install silently
-    # authorized the next one.
-    assert postinstall.index('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') < postinstall.index(
-        'verify_local_test_helper "$HELPER_TEMP"'
-    )
-    assert postinstall.index('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') < postinstall.index(
-        'verify_helper_rpc; do'
-    )
-    assert postinstall.count('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') == 1
+    assert 'LOCAL_TEST_OPT_IN="/var/db/com.squirrelops.allow-local-test"' in preinstall
+    assert "root:wheel:600:1" in preinstall
+    assert "one-time root-owned operator opt-in" in preinstall
+    assert preinstall.count('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"') == 1
+    assert '/bin/rm -f -- "$LOCAL_TEST_OPT_IN"' not in postinstall
 
     assert (
         'error "A local test build cannot use a real signing identity: '
@@ -107,6 +132,33 @@ def test_local_test_package_is_explicit_and_cannot_weaken_release_signing() -> N
     ]
     assert 'if [ "$SIGNING_IDENTITY" != "-" ]; then' in native_signing
     assert "SIGN_NATIVE_ARGS+=(--options runtime --timestamp)" in native_signing
+
+
+def test_local_test_opt_in_is_checked_before_upgrade_side_effects() -> None:
+    builder = (REPO_ROOT / "scripts/build-pkg.sh").read_text(encoding="utf-8")
+    distribution = (
+        REPO_ROOT / "scripts/pkg/distribution.xml"
+    ).read_text(encoding="utf-8")
+    preinstall = (
+        REPO_ROOT / "scripts/pkg/app-scripts/preinstall"
+    ).read_text(encoding="utf-8")
+    postinstall = (
+        REPO_ROOT / "scripts/pkg/app-scripts/postinstall"
+    ).read_text(encoding="utf-8")
+
+    assert "__LOCAL_TEST_BUILD__" in distribution
+    assert "system.files.fileExistsAtPath" in distribution
+    assert "Local test approval required" in distribution
+    assert "s|__LOCAL_TEST_BUILD__|${LOCAL_TEST_BUILD}|g" in builder
+    assert "APP_PACKAGE_SCRIPTS" in builder
+    assert "com.squirrelops.local-test-build" in preinstall
+
+    consume_opt_in = preinstall.index('/bin/rm -f -- "$LOCAL_TEST_OPT_IN"')
+    stop_sensor = preinstall.index(
+        'stop_service_and_verify "$SENSOR_LABEL" "sensor daemon"'
+    )
+    assert consume_opt_in < stop_sensor
+    assert '/bin/rm -f -- "$LOCAL_TEST_OPT_IN"' not in postinstall
 
 
 def test_app_installer_initializes_the_root_owned_alias_state_marker() -> None:
@@ -214,6 +266,96 @@ def test_helper_authorized_client_requirement_pins_the_release_team() -> None:
     assert 'identifier "com.squirrelops.home"' in helper_info
     assert "anchor apple generic" in helper_info
     assert 'certificate leaf[subject.OU] = "PSQ5HK5U65"' in helper_info
+
+
+def test_helper_exposes_a_signed_app_only_enrollment_mach_service() -> None:
+    launchd_path = (
+        REPO_ROOT
+        / "app/Sources/SquirrelOpsHelper/Resources/launchd.plist"
+    )
+    launchd = plistlib.loads(launchd_path.read_bytes())
+    enrollment_source = (
+        REPO_ROOT
+        / "app/Sources/SquirrelOpsHelper/LocalEnrollmentXPCService.swift"
+    ).read_text(encoding="utf-8")
+    protocol_source = (
+        REPO_ROOT
+        / "app/Sources/SquirrelOpsLocalEnrollment/LocalEnrollmentProtocol.swift"
+    ).read_text(encoding="utf-8")
+    installer = (
+        REPO_ROOT / "scripts/pkg/app-scripts/postinstall"
+    ).read_text(encoding="utf-8")
+
+    assert launchd["MachServices"] == {
+        "com.squirrelops.helper.enrollment": True,
+    }
+    assert "setConnectionCodeSigningRequirement" in enrollment_source
+    assert 'identifier \\"com.squirrelops.home\\"' in protocol_source
+    assert "anchor apple generic" in protocol_source
+    assert 'certificate leaf[subject.OU] = \\"PSQ5HK5U65\\"' in protocol_source
+    assert "<key>MachServices</key>" in installer
+    assert "<key>com.squirrelops.helper.enrollment</key>" in installer
+
+
+def test_package_enables_local_enrollment_without_overriding_an_opt_out() -> None:
+    installer = (REPO_ROOT / "scripts/pkg/postinstall").read_text(encoding="utf-8")
+
+    assert "local_enrollment_enabled: true" in installer
+    assert "local_enrollment_setting_present()" in installer
+    assert 'pairing.get("local_enrollment_enabled")' in installer
+    assert "if ! local_enrollment_setting_present" in installer
+    assert "configuration is not a mapping" in installer
+    assert "Migrated local enrollment configuration is invalid" in installer
+
+
+def test_package_local_enrollment_migration_handles_existing_and_missing_sections() -> None:
+    installer = (REPO_ROOT / "scripts/pkg/postinstall").read_text(encoding="utf-8")
+    marker = "if ! /usr/bin/awk '\n"
+    program_start = installer.index(marker) + len(marker)
+    program_end = installer.index("\n    ' \"$CONFIG_FILE\"", program_start)
+    awk_program = installer[program_start:program_end]
+
+    configurations = (
+        (
+            "profile: standard\n"
+            "pairing:\n"
+            "  socket_path: /private/run/pairing.sock\n"
+            "alerts:\n"
+            "  retention_days: 90\n"
+        ),
+        "profile: standard\npairing:\n  socket_path: null\n",
+        (
+            "profile: standard\n"
+            "pairing:\n"
+            "  socket_path: /private/run/pairing.sock\n"
+            "scan_interval_seconds: 300\n"
+        ),
+        (
+            "profile: standard\n"
+            "pairing:\n"
+            "    socket_path: /private/run/pairing.sock\n"
+            "alerts:\n"
+            "    retention_days: 90\n"
+        ),
+        "profile: standard\nalerts:\n  retention_days: 90\n",
+        "profile: standard\npairing: {socket_path: /private/run/pairing.sock}\n",
+    )
+
+    for original in configurations:
+        migrated = subprocess.run(
+            ["/usr/bin/awk", awk_program],
+            input=original,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        parsed = yaml.safe_load(migrated)
+        expected = yaml.safe_load(original)
+        expected.setdefault("pairing", {})["local_enrollment_enabled"] = True
+
+        assert parsed["pairing"]["local_enrollment_enabled"] is True
+        assert parsed == expected
+        assert migrated.count("local_enrollment_enabled: true") == 1
 
 
 def test_live_qa_timeout_is_compatible_with_stock_macos() -> None:

@@ -183,6 +183,7 @@ APP_ROOT="$BUILD_DIR/app-root"
 SENSOR_ROOT="$BUILD_DIR/sensor-root"
 COMPONENTS_DIR="$BUILD_DIR/components"
 OUTPUT_DIR="$BUILD_DIR/output"
+APP_PACKAGE_SCRIPTS="$BUILD_DIR/app-scripts"
 
 PKG_NAME="SquirrelOpsHome-${DISTRIBUTION_VERSION}.pkg"
 
@@ -199,7 +200,17 @@ echo ""
 # ---------------------------------------------------------------------------
 info "Cleaning previous build artifacts..."
 rm -rf "$BUILD_DIR"
-mkdir -p "$APP_ROOT" "$SENSOR_ROOT" "$COMPONENTS_DIR" "$OUTPUT_DIR"
+mkdir -p \
+    "$APP_ROOT" \
+    "$SENSOR_ROOT" \
+    "$COMPONENTS_DIR" \
+    "$OUTPUT_DIR" \
+    "$APP_PACKAGE_SCRIPTS"
+cp -R "$SCRIPT_DIR/pkg/app-scripts/." "$APP_PACKAGE_SCRIPTS/"
+if [ "$LOCAL_TEST_BUILD" = "1" ]; then
+    /usr/bin/touch \
+        "$APP_PACKAGE_SCRIPTS/com.squirrelops.local-test-build"
+fi
 
 # ===========================================================================
 # Step 1: Build the app
@@ -234,8 +245,9 @@ info "App built: $APP_BUNDLE"
 
 if [ "$LOCAL_TEST_BUILD" = "1" ]; then
     info "Marking app bundle as an explicit local test build..."
-    /usr/bin/touch \
-        "$APP_BUNDLE/Contents/Resources/com.squirrelops.local-test-build"
+    LOCAL_TEST_CREDENTIAL_NAMESPACE="$(/usr/bin/uuidgen)"
+    /usr/bin/printf '%s\n' "$LOCAL_TEST_CREDENTIAL_NAMESPACE" \
+        > "$APP_BUNDLE/Contents/Resources/com.squirrelops.local-test-build"
 fi
 
 # ===========================================================================
@@ -441,7 +453,7 @@ pkgbuild \
     --install-location / \
     --identifier com.squirrelops.home.app \
     --version "$APP_VERSION" \
-    --scripts "$SCRIPT_DIR/pkg/app-scripts" \
+    --scripts "$APP_PACKAGE_SCRIPTS" \
     --component-plist "$APP_COMPONENT_PLIST" \
     "$COMPONENTS_DIR/app.pkg"
 
@@ -469,6 +481,7 @@ sed \
     -e "s|__APP_SIZE__|${APP_SIZE}|g" \
     -e "s|__SENSOR_SIZE__|${SENSOR_SIZE}|g" \
     -e "s|__HOST_ARCH__|${BUILD_ARCH}|g" \
+    -e "s|__LOCAL_TEST_BUILD__|${LOCAL_TEST_BUILD}|g" \
     "$SCRIPT_DIR/pkg/distribution.xml" > "$DIST_XML"
 
 info "Building product archive: $PKG_NAME"
