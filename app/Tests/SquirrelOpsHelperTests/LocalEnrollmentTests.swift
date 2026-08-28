@@ -4,8 +4,30 @@ import Testing
 
 @testable import SquirrelOpsHelper
 
+private final class RecordingEnrollmentRequirementSetter:
+    EnrollmentCodeSigningRequirementSetting
+{
+    private(set) var requirement: String?
+
+    func setConnectionCodeSigningRequirement(_ requirement: String) {
+        self.requirement = requirement
+    }
+}
+
 @Suite("Local enrollment boundary")
 struct LocalEnrollmentTests {
+    @Test("listener applies the exact app code requirement")
+    func listenerAppliesAppCodeRequirement() {
+        let recorder = RecordingEnrollmentRequirementSetter()
+
+        applyEnrollmentAppCodeRequirement(
+            LocalEnrollmentXPC.appCodeRequirement,
+            to: recorder
+        )
+
+        #expect(recorder.requirement == LocalEnrollmentXPC.appCodeRequirement)
+    }
+
     @Test("local test XPC binds to the exact root-installed app code hash")
     func localTestRequirementUsesExactCodeHash() throws {
         let designatedRequirement =
@@ -42,19 +64,22 @@ struct LocalEnrollmentTests {
         ) == LocalEnrollmentXPC.appCodeRequirement)
     }
 
-    @Test("authorizes only the signed app running as the console user", arguments: [
-        (uid: uid_t(501), consoleUID: uid_t(501), signed: true, expected: true),
-        (uid: uid_t(502), consoleUID: uid_t(501), signed: true, expected: false),
-        (uid: uid_t(501), consoleUID: uid_t(501), signed: false, expected: false),
+    @Test("authorizes only the active console user after XPC signature validation", arguments: [
+        (uid: uid_t(501), consoleUID: uid_t(501), expected: true),
+        (uid: uid_t(502), consoleUID: uid_t(501), expected: false),
     ])
     func enrollmentPeerAuthorization(
-        argument: (uid: uid_t, consoleUID: uid_t, signed: Bool, expected: Bool)
+        argument: (uid: uid_t, consoleUID: uid_t, expected: Bool)
     ) {
-        #expect(isAuthorizedEnrollmentPeer(
+        #expect(isAuthorizedEnrollmentConsolePeer(
             uid: argument.uid,
-            consoleUID: argument.consoleUID,
-            signatureIsValid: argument.signed
+            consoleUID: argument.consoleUID
         ) == argument.expected)
+
+        #expect(isAuthorizedEnrollmentConsolePeer(
+            uid: argument.uid,
+            consoleUID: nil
+        ) == false)
     }
 
     @Test("shared enrollment payload uses the sensor wire keys")

@@ -40,10 +40,19 @@ service requires the `com.squirrelops.home` signing identifier, the release
 Team ID, an Apple generic code-signing anchor, and the current console UID. It
 does not expose the helper's network RPC methods to the app.
 
+The app also pins the privileged helper before resuming its outbound XPC
+connection. Developer ID releases require the `com.squirrelops.helper`
+identifier, release Team ID, and Apple signing anchor. Explicit local-test
+packages instead require the exact designated `cdhash` of the root-owned,
+non-writable helper installed at the fixed privileged-helper path.
+
 The helper forwards a bounded JSON enrollment request to
 `/Library/SquirrelOps/sensor/run/enrollment.sock`. The socket is mode `0600`,
-and the sensor verifies that the connecting peer UID is root. There is no
-local enrollment HTTP endpoint and no enrollment listener on the LAN.
+is made private before it begins listening, and the sensor verifies that the
+connecting peer UID is root. A stale non-directory entry at that exact path is
+removed without following symlinks so an interrupted launch cannot block the
+sensor from restarting. There is no local enrollment HTTP endpoint and no
+enrollment listener on the LAN.
 
 The sensor issues a short-lived pending client certificate. The app must then
 connect to the protected API with that certificate and confirm the matching

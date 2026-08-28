@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
+import socket
+import stat
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import aiosqlite
 import pytest
@@ -15,10 +21,18 @@ from squirrelops_home_sensor.api.local_enrollment import (
     MAX_PENDING_ENROLLMENTS,
     LocalEnrollmentAuthority,
     LocalEnrollmentError,
+    LocalEnrollmentServer,
     authorize_enrollment_peer,
 )
 from squirrelops_home_sensor.api.routes_pairing import _generate_ca
 from squirrelops_home_sensor.db.schema import create_all_tables
+
+
+@pytest.fixture
+def short_socket_dir():
+    """Keep AF_UNIX test paths below macOS's 104-byte limit."""
+    with TemporaryDirectory(prefix="sq-enroll-", dir="/tmp") as directory:
+        yield Path(directory)
 
 
 def _csr(common_name: str = "Matt's Mac") -> tuple[object, str]:
@@ -237,3 +251,50 @@ def test_only_root_may_use_sensor_enrollment_socket() -> None:
     assert authorize_enrollment_peer(0)
     assert not authorize_enrollment_peer(501)
     assert not authorize_enrollment_peer(None)
+
+
+@pytest.mark.asyncio
+async def test_server_replaces_stale_regular_file(short_socket_dir) -> None:
+    socket_path = short_socket_dir / "enrollment.sock"
+    socket_path.write_text("stale")
+    server = LocalEnrollmentServer(str(socket_path), authority=object())
+
+    await server.start()
+    try:
+        assert stat.S_ISSOCK(socket_path.lstat().st_mode)
+        assert stat.S_IMODE(socket_path.lstat().st_mode) == 0o600
+    finally:
+        await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_socket_is_private_before_asyncio_accepts_connections(
+    short_socket_dir,
+    monkeypatch,
+) -> None:
+    socket_path = short_socket_dir / "enrollment.sock"
+    observed_modes: list[int] = []
+
+    class FakeAsyncServer:
+        def close(self) -> None:
+            pass
+
+        async def wait_closed(self) -> None:
+            pass
+
+    async def start_unix_server(_handler, **kwargs):
+        bound_socket = kwargs.get("sock")
+        assert isinstance(bound_socket, socket.socket)
+        observed_modes.append(
+            stat.S_IMODE(os.stat(bound_socket.getsockname()).st_mode)
+        )
+        return FakeAsyncServer()
+
+    monkeypatch.setattr(asyncio, "start_unix_server", start_unix_server)
+    server = LocalEnrollmentServer(str(socket_path), authority=object())
+
+    await server.start()
+    try:
+        assert observed_modes == [0o600]
+    finally:
+        await server.stop()

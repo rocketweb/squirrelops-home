@@ -930,17 +930,30 @@ then
         exit 1
     fi
     if ! /usr/bin/awk '
-        BEGIN { in_pairing = 0; saw_pairing = 0; inserted = 0 }
-        /^[^[:space:]#][^:]*:[[:space:]]*($|#)/ {
-            if (in_pairing && !inserted) {
-                print "  local_enrollment_enabled: true"
-                inserted = 1
+        function leading_whitespace(line) {
+            match(line, /^[[:space:]]*/)
+            return substr(line, 1, RLENGTH)
+        }
+        function insert_setting() {
+            indent = pairing_child_indent
+            if (indent == "") {
+                indent = pairing_indent "  "
             }
+            print indent "local_enrollment_enabled: true"
+            inserted = 1
+        }
+        BEGIN {
             in_pairing = 0
+            saw_pairing = 0
+            inserted = 0
+            pairing_indent = ""
+            pairing_child_indent = ""
         }
         /^pairing:[[:space:]]*($|#)/ {
             in_pairing = 1
             saw_pairing = 1
+            pairing_indent = leading_whitespace($0)
+            pairing_child_indent = ""
         }
         /^pairing:[[:space:]]*\{.*\}[[:space:]]*(#.*)?$/ {
             closing = match($0, /}[[:space:]]*(#.*)?$/)
@@ -951,11 +964,24 @@ then
             saw_pairing = 1
             inserted = 1
         }
-        { print }
+        {
+            if (in_pairing && $0 !~ /^[[:space:]]*($|#)/ \
+                && $0 !~ /^pairing:[[:space:]]*($|#)/) {
+                current_indent = leading_whitespace($0)
+                if (length(current_indent) <= length(pairing_indent)) {
+                    if (!inserted) {
+                        insert_setting()
+                    }
+                    in_pairing = 0
+                } else if (pairing_child_indent == "") {
+                    pairing_child_indent = current_indent
+                }
+            }
+            print
+        }
         END {
             if (in_pairing && !inserted) {
-                print "  local_enrollment_enabled: true"
-                inserted = 1
+                insert_setting()
             }
             if (!saw_pairing) {
                 print ""

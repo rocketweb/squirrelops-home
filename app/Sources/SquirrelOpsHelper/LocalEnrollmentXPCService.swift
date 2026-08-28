@@ -4,13 +4,25 @@ import SquirrelOpsLocalEnrollment
 
 private let enrollmentErrorDomain = "com.squirrelops.helper.local-enrollment"
 
-func isAuthorizedEnrollmentPeer(
+protocol EnrollmentCodeSigningRequirementSetting: AnyObject {
+    func setConnectionCodeSigningRequirement(_ requirement: String)
+}
+
+extension NSXPCListener: EnrollmentCodeSigningRequirementSetting {}
+
+func applyEnrollmentAppCodeRequirement(
+    _ requirement: String,
+    to listener: any EnrollmentCodeSigningRequirementSetting
+) {
+    listener.setConnectionCodeSigningRequirement(requirement)
+}
+
+func isAuthorizedEnrollmentConsolePeer(
     uid: uid_t,
-    consoleUID: uid_t?,
-    signatureIsValid: Bool
+    consoleUID: uid_t?
 ) -> Bool {
-    guard let consoleUID, uid == consoleUID else { return false }
-    return signatureIsValid
+    guard let consoleUID else { return false }
+    return uid == consoleUID
 }
 
 private func consoleUserUID() -> uid_t? {
@@ -51,9 +63,7 @@ final class LocalEnrollmentXPCService: NSObject, NSXPCListenerDelegate {
             machServiceName: LocalEnrollmentXPC.machServiceName
         )
         super.init()
-        listener.setConnectionCodeSigningRequirement(
-            appCodeRequirement
-        )
+        applyEnrollmentAppCodeRequirement(appCodeRequirement, to: listener)
         listener.delegate = self
     }
 
@@ -67,10 +77,12 @@ final class LocalEnrollmentXPCService: NSObject, NSXPCListenerDelegate {
     ) -> Bool {
         _ = listener
         let uid = uid_t(connection.effectiveUserIdentifier)
-        guard isAuthorizedEnrollmentPeer(
+        // NSXPCListener enforces the configured app code-signing requirement
+        // before invoking this delegate. Also bind enrollment to the active
+        // console user so another signed user's app cannot request a certificate.
+        guard isAuthorizedEnrollmentConsolePeer(
             uid: uid,
-            consoleUID: consoleUserUID(),
-            signatureIsValid: true
+            consoleUID: consoleUserUID()
         ) else {
             logger.warning("Rejected unauthorized local enrollment XPC peer uid=\(uid)")
             return false

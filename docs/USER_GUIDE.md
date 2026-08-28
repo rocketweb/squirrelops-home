@@ -222,15 +222,18 @@ pairing:
 
 The app authenticates to the root helper through a macOS XPC Mach service that
 requires the SquirrelOps app identifier, release Team ID, and current console
-user. The helper forwards only a bounded certificate request to a sensor Unix
-socket that accepts root. The sensor creates a short-lived pending pairing,
-then activates it only after the app presents the matching certificate over
-mutual TLS. The app private key never leaves Keychain.
+user. The app also verifies the helper's SquirrelOps identifier, release Team
+ID, and Apple signing identity before it sends the request. The helper forwards
+only a bounded certificate request to a sensor Unix socket that accepts root.
+The sensor creates a short-lived pending pairing, then activates it only after
+the app presents the matching certificate over mutual TLS. The app private key
+never leaves Keychain.
 
 An explicitly enabled local-test package is bound to the exact code hash of
-the root-owned app installed by that package. It does not accept another ad-hoc
-app with the same bundle identifier. Normal releases continue to require the
-SquirrelOps Developer ID signature.
+the root-owned app installed by that package, and the app binds to the exact
+code hash of the root-owned helper. It does not accept another ad-hoc app or
+helper with the same bundle identifier. Normal releases continue to require
+the SquirrelOps Developer ID signatures.
 
 Production still does not start the older local setup-key socket. Peer
 credentials identify the process that connected, but cannot prove which

@@ -324,6 +324,19 @@ def test_package_local_enrollment_migration_handles_existing_and_missing_section
             "  retention_days: 90\n"
         ),
         "profile: standard\npairing:\n  socket_path: null\n",
+        (
+            "profile: standard\n"
+            "pairing:\n"
+            "  socket_path: /private/run/pairing.sock\n"
+            "scan_interval_seconds: 300\n"
+        ),
+        (
+            "profile: standard\n"
+            "pairing:\n"
+            "    socket_path: /private/run/pairing.sock\n"
+            "alerts:\n"
+            "    retention_days: 90\n"
+        ),
         "profile: standard\nalerts:\n  retention_days: 90\n",
         "profile: standard\npairing: {socket_path: /private/run/pairing.sock}\n",
     )

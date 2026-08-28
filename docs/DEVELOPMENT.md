@@ -154,6 +154,9 @@ launchd. It exposes two independent local channels:
 The app never receives access to the network-operation RPC channel. For local
 enrollment it generates a Keychain-backed private key, sends a CSR through the
 signed-app XPC service, and confirms the pending certificate over mutual TLS.
+The app pins the helper's Developer ID requirement before resuming that XPC
+connection; an explicit local-test package pins the exact root-installed helper
+CDHash instead.
 The sensor enrollment socket is not an HTTP or LAN listener and accepts only a
 root peer. A source-built app cannot satisfy the production code-signing
 requirement, so use the setup-key flow for ordinary source development. The

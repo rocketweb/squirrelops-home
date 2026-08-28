@@ -5,6 +5,9 @@ public enum LocalEnrollmentXPC {
     public static let appCodeRequirement =
         "identifier \"com.squirrelops.home\" and anchor apple generic and "
         + "certificate leaf[subject.OU] = \"PSQ5HK5U65\""
+    public static let helperCodeRequirement =
+        "identifier \"com.squirrelops.helper\" and anchor apple generic and "
+        + "certificate leaf[subject.OU] = \"PSQ5HK5U65\""
 }
 
 @objc public protocol LocalEnrollmentXPCProtocol {

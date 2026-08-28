@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import socket
 import stat
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -308,21 +309,38 @@ class LocalEnrollmentServer:
             existing = self._socket_path.lstat()
         except FileNotFoundError:
             return
-        if not stat.S_ISSOCK(existing.st_mode):
+        if stat.S_ISDIR(existing.st_mode):
             raise RuntimeError(
-                f"Refusing to replace non-socket enrollment path: {self._socket_path}"
+                f"Refusing to replace enrollment directory: {self._socket_path}"
             )
+        # The run directory belongs to the sensor account. Unlink the exact
+        # stale pathname without following symlinks so an interrupted launch
+        # cannot permanently prevent enrollment from starting.
         self._socket_path.unlink()
 
     async def start(self) -> None:
         self._socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
         self._remove_stale_socket()
-        self._server = await asyncio.start_unix_server(
-            self._handle,
-            path=str(self._socket_path),
-            limit=MAX_REQUEST_BYTES,
-        )
-        os.chmod(self._socket_path, 0o600)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            listener.bind(str(self._socket_path))
+            # Set the pathname private before asyncio begins listening and can
+            # accept a peer. The peer-UID check remains the authorization gate.
+            os.chmod(self._socket_path, 0o600)
+            listener.setblocking(False)
+            self._server = await asyncio.start_unix_server(
+                self._handle,
+                sock=listener,
+                limit=MAX_REQUEST_BYTES,
+            )
+        except BaseException:
+            listener.close()
+            try:
+                if stat.S_ISSOCK(self._socket_path.lstat().st_mode):
+                    self._socket_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
         logger.info("Root-only local enrollment socket listening at %s", self._socket_path)
 
     async def stop(self) -> None:

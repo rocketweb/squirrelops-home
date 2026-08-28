@@ -61,6 +61,13 @@ public struct PrivilegedLocalEnrollmentProvider: LocalEnrollmentProviding {
         request: LocalEnrollmentRequest
     ) async throws -> LocalEnrollmentResponse {
         let requestData = try JSONEncoder().encode(request)
+        let helperCodeRequirement: String
+        do {
+            helperCodeRequirement = try LocalEnrollmentHelperCodeRequirementResolver()
+                .resolve()
+        } catch {
+            throw LocalEnrollmentClientError.rejected
+        }
         return try await withCheckedThrowingContinuation { continuation in
             let pending = LocalEnrollmentContinuation(continuation)
             let connection = NSXPCConnection(
@@ -76,6 +83,7 @@ public struct PrivilegedLocalEnrollmentProvider: LocalEnrollmentProviding {
             connection.invalidationHandler = {
                 pending.resume(with: .failure(LocalEnrollmentClientError.serviceUnavailable))
             }
+            connection.setCodeSigningRequirement(helperCodeRequirement)
             connection.resume()
 
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in
