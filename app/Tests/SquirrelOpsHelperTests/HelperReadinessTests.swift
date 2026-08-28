@@ -8,6 +8,29 @@ import Darwin
 
 @Suite("Helper readiness")
 struct HelperReadinessTests {
+    @Test("Shared socket I/O stays out of executable main source")
+    func sharedSocketIOIsNotDeclaredInMain() throws {
+        let appRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let mainSource = try String(
+            contentsOf: appRoot.appendingPathComponent(
+                "Sources/SquirrelOpsHelper/main.swift"
+            ),
+            encoding: .utf8
+        )
+
+        for declaration in [
+            "func configureClientSocketTimeouts(",
+            "func readLineFromSocket(",
+            "func configureNoSigPipe(",
+            "func sendAll(",
+        ] {
+            #expect(!mainSource.contains(declaration))
+        }
+    }
+
     @Test("Ping reports the protocol and required network capabilities")
     func pingCapabilities() throws {
         let router = RPCRouter()
