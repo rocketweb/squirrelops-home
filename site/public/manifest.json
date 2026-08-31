@@ -1,9 +1,8 @@
 {
   "schema_version": 3,
   "latest": {
-    "distribution": "1.1.14",
-    "sensor": "1.1.14",
-    "app": "1.1.14"
+    "distribution": "2.0.1",
+    "app": "2.0.1"
   },
   "min_supported": {
     "distribution": "1.0.0",
@@ -11,30 +10,25 @@
     "app": "1.0.0"
   },
   "downloads": {
-    "macos_pkg": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.14/SquirrelOpsHome-1.1.14.pkg",
-    "macos_pkg_sha256": "b9bfc26aa1d7fac87e413fad6d7d9271f65533f7d66dcb634d3b0a931103c54e",
-    "docker_image": "ghcr.io/rocketweb/squirrelops-sensor:1.1.14"
+    "macos_pkg": "https://github.com/rocketweb/squirrelops-home/releases/download/home-v2.0.1/SquirrelOpsHome-2.0.1.pkg",
+    "macos_pkg_sha256": "55e76a67191f63746a012b56ecf34a5b40ddeeed8beb563494266fab2208f4f6"
   },
   "signatures": {
     "version": "2026.02.24",
     "download_url": "https://get.squirrelops.io/signatures/latest.json",
     "checksum_sha256": ""
   },
-  "updated_at": "2026-07-24T15:40:24Z",
+  "updated_at": "2026-07-27T13:16:12Z",
   "distribution": {
-    "latest_version": "1.1.14",
-    "app_version": "1.1.14",
-    "sensor_version": "1.1.14",
-    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.14"
-  },
-  "sensor": {
-    "latest_version": "1.1.14",
-    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.14"
+    "latest_version": "2.0.1",
+    "app_version": "2.0.1",
+    "sensor_version": "2.0.1",
+    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.0.1"
   },
   "app": {
-    "latest_version": "1.1.14",
-    "download_url": "https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.14/SquirrelOpsHome-1.1.14.pkg",
-    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/v1.1.14",
-    "sha256": "b9bfc26aa1d7fac87e413fad6d7d9271f65533f7d66dcb634d3b0a931103c54e"
+    "latest_version": "2.0.1",
+    "download_url": "https://github.com/rocketweb/squirrelops-home/releases/download/home-v2.0.1/SquirrelOpsHome-2.0.1.pkg",
+    "release_notes_url": "https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.0.1",
+    "sha256": "55e76a67191f63746a012b56ecf34a5b40ddeeed8beb563494266fab2208f4f6"
   }
 }
