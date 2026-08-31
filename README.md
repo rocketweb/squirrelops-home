@@ -2,23 +2,23 @@
 
 **Local-first home network security with high-signal deception.**
 
-- **Honeypots that blend in** — auto-deploys realistic decoy services (file shares, dev servers, Home Assistant instances) based on what's actually on your network
-- **Squirrel Scouts** — service fingerprinting that builds coherent fake hosts from real devices, with one decoy service per observed port and a shared virtual IP and hostname for services copied from the same source
-- **High-confidence decoy alerts** — a connection to an isolated decoy is inherently suspicious and is kept separate from lower-confidence behavioral detections
-- **Device fingerprinting** — identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional AI device classification
-- **Believable decoy naming** — uses ordinary home and business names by default, with optional AI suggestions that follow observed hostname patterns
-- **Behavioral baselines** — learns normal connection patterns during a 48-hour training period, then alerts on anomalies
-- **Credential canaries** — plants realistic-looking credentials (AWS keys, SSH keys, .env files, database URIs, GitHub PATs, Home Assistant tokens) that trigger critical alerts when accessed through a decoy
-- **Local by default** — inventory, alerts, and configuration stay in local SQLite. Optional cloud classification and notification integrations are explicit opt-ins.
-- **Push notifications** — optional APNs alerts to your iPhone/Mac when a decoy is tripped
-- **Home Assistant integration** — enriches device data with names, areas, and types from your HA instance
+- **Honeypots that blend in:** auto-deploys realistic decoy services (file shares, dev servers, Home Assistant instances) based on what's actually on your network
+- **Squirrel Scouts:** service fingerprinting that builds coherent fake hosts from real devices, with one decoy service per observed port and a shared virtual IP and hostname for services copied from the same source
+- **High-confidence decoy alerts:** a connection to an isolated decoy is inherently suspicious and is kept separate from lower-confidence behavioral detections
+- **Device fingerprinting:** identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional AI device classification
+- **Believable decoy naming:** uses ordinary home and business names by default, with optional AI suggestions that follow observed hostname patterns
+- **Behavioral baselines:** learns normal connection patterns during a 48-hour training period, then alerts on anomalies
+- **Credential canaries:** plants realistic-looking credentials (AWS keys, SSH keys, .env files, database URIs, GitHub PATs, Home Assistant tokens) that trigger critical alerts when accessed through a decoy
+- **Local by default:** inventory, alerts, and configuration stay in local SQLite. Optional cloud classification and notification integrations are explicit opt-ins.
+- **Push notifications:** optional APNs alerts to your iPhone/Mac when a decoy is tripped
+- **Home Assistant integration:** enriches device data with names, areas, and types from your HA instance
 
 ## How It Works
 
 SquirrelOps Home runs a sensor on your network that does three things:
 
 1. **Discovers and fingerprints** every device on your LAN using ARP scanning, port probing, mDNS/SSDP discovery, and IEEE OUI lookups
-2. **Deploys decoy services** that mimic real things on your network — a fake NAS, a fake Home Assistant, a fake dev server — placed on unused ports and IPs
+2. **Deploys decoy services** that mimic real things on your network (a fake NAS, a fake Home Assistant, a fake dev server), placed on unused ports and IPs
 3. **Watches and alerts** when anything touches a decoy or deviates from learned behavioral baselines
 
 The macOS app is your control plane: pair it with the sensor, view your device inventory, manage decoys, configure alerts, and respond to incidents.
@@ -39,11 +39,11 @@ The macOS app is your control plane: pair it with the sensor, view your device i
 
 ## Architecture
 
-The sensor is made up of three internal engines:
+The sensor is a single Python codebase covering three areas:
 
-- **PingTing** — passive network monitoring, device discovery, behavioral baselines
-- **ClownPeanuts** — active deception engine, decoy lifecycle management, credential canary deployment
-- **Squirrel Scouts** — deep service reconnaissance, mimic decoy generation, virtual network expansion
+- **Monitoring:** passive network monitoring, device discovery, and behavioral baselines, implemented in `scanner/`, `devices/`, and `fingerprint/`. The schema extends the upstream PingTing tables but PingTing itself is not bundled here.
+- **Deception:** decoy lifecycle management and credential canary deployment, implemented in `decoys/`. HTTP service emulation is handled by a vendored ClownPeanuts helper.
+- **Squirrel Scouts:** deep service reconnaissance, mimic decoy generation, and virtual network expansion.
 
 Communication between the app and sensor uses mutual TLS with certificates exchanged during an on-device pairing flow (challenge-response with ECDSA P-256).
 
@@ -101,7 +101,7 @@ The ceiling counts fake hosts, not service rows. Squirrel Scouts deploys at most
 
 ## Installation
 
-### Sensor — Linux/NAS (Docker)
+### Sensor: Linux/NAS (Docker)
 
 Linux publication is currently on hold. The 2.0 tree separates the
 unprivileged sensor from a constrained `network-helper` companion. The sensor
@@ -121,29 +121,56 @@ dependencies, and privileged helper. Do not use the old standalone
 `install-macos.sh` release asset. That script could fall back to an unpinned
 package index when it was separated from the source tree.
 
+The published 2.0.1 package requires macOS 14 or later and an Apple Silicon
+(`arm64`) Mac. This package does not support Intel Macs.
+
 ```bash
-VERSION=v1.1.14
-base="https://github.com/rocketweb/squirrelops-home/releases/download/${VERSION}"
-curl -fsSLO "${base}/SquirrelOpsHome-1.1.14.pkg"
-curl -fsSLO "${base}/SquirrelOpsHome-1.1.14.pkg.sha256"
-shasum -a 256 -c SquirrelOpsHome-1.1.14.pkg.sha256
-pkgutil --check-signature SquirrelOpsHome-1.1.14.pkg
-spctl --assess --type install --verbose=2 SquirrelOpsHome-1.1.14.pkg
-open SquirrelOpsHome-1.1.14.pkg
+VERSION=2.0.1
+TAG="home-v${VERSION}"
+base="https://github.com/rocketweb/squirrelops-home/releases/download/${TAG}"
+curl -fsSLO "${base}/SquirrelOpsHome-${VERSION}.pkg"
+curl -fsSLO "${base}/SquirrelOpsHome-${VERSION}.pkg.sha256"
+shasum -a 256 -c "SquirrelOpsHome-${VERSION}.pkg.sha256"
+pkgutil --check-signature "SquirrelOpsHome-${VERSION}.pkg"
+spctl --assess --type install --verbose=2 "SquirrelOpsHome-${VERSION}.pkg"
+open "SquirrelOpsHome-${VERSION}.pkg"
 ```
 
-For v1.1.14, cross-check the expected SHA-256 on the separately hosted
+For 2.0.1, cross-check the expected SHA-256 on the separately hosted
 [macOS verification page](https://www.squirrelops.io/macos):
-`b9bfc26aa1d7fac87e413fad6d7d9271f65533f7d66dcb634d3b0a931103c54e`.
+`55e76a67191f63746a012b56ecf34a5b40ddeeed8beb563494266fab2208f4f6`.
 
-Future hardened releases will include a checksummed and attested
-`RELEASE-VERIFICATION.md` asset. Verify that file first and treat it as the
-canonical release notes and command source. GitHub's release description is
-editable and is only a convenience pointer.
+The release also includes a checksummed and attested
+[`RELEASE-VERIFICATION.md`](https://github.com/rocketweb/squirrelops-home/releases/download/home-v2.0.1/RELEASE-VERIFICATION.md)
+asset. Verify that file first and treat it as the canonical release notes and
+command source. GitHub's release description is editable and is only a
+convenience pointer.
 
 The source-checkout-only `scripts/install-macos.sh` remains available for
 development. It requires the local `sensor/uv.lock`, exact `uv` version, and
 fails closed if the locked source project is absent.
+
+#### First-run pairing
+
+After installation, open SquirrelOps Home. The app discovers the local sensor,
+but packaged installs require manual entry of a one-time setup key. Open
+Terminal and run:
+
+```bash
+sudo -u _squirrelops \
+  /Library/SquirrelOps/sensor/python/bin/python3 \
+  -m squirrelops_home_sensor \
+  --config /Library/SquirrelOps/sensor/config.yaml \
+  --show-pairing-code
+```
+
+Enter your Mac administrator password when prompted, then paste the displayed
+20-character key into the app. The key expires after 10 minutes or after it is
+used. If it expires, restart the sensor and retrieve a new key:
+
+```bash
+sudo launchctl kickstart -k system/com.squirrelops.sensor
+```
 
 ### macOS App
 
@@ -161,8 +188,8 @@ Requires Swift 6.0 and macOS 14+ (Sonoma).
 The app discovers the sensor via mDNS (`_squirrelops._tcp`) and pairs using a one-time 100-bit setup key. The pairing flow:
 
 1. App discovers sensor on the local network
-2. Sensor generates a setup key at startup. It is shown in the startup banner and stored as `pairing-key` inside the private sensor data directory (`--show-pairing-code` retrieves it)
-3. User retrieves the setup key with the administrator-only packaged command and enters it in the app
+2. Sensor generates a setup key at startup and stores it as `pairing-key` inside the private sensor data directory
+3. User retrieves the setup key with the [administrator-only packaged command](#first-run-pairing) and enters it in the app
 4. App and sensor perform a versioned HMAC-SHA256 transcript proof, then derive a session key with HKDF
 5. App generates a CSR, sensor issues a client certificate signed by its CA
 6. All subsequent communication uses mutual TLS. The one-time setup key is invalidated after use
@@ -183,7 +210,7 @@ cd app && swift build
 cd app && swift test
 
 # Sensor (Python 3.11+)
-cd sensor && uv run pytest     # 1,669 tests in v1.1.14
+cd sensor && uv run pytest
 
 # Docker
 docker compose -f sensor/docker-compose.yml build
@@ -204,15 +231,17 @@ docs/         User guide and documentation
 
 ```
 sensor/src/squirrelops_home_sensor/
-├── alerts/        Alert dispatch, decoy/device handlers, incident grouping, retention
+├── alerts/        Alert dispatch, decoy handler, incident grouping, retention
 ├── api/           FastAPI routers (8 routers), WebSocket, DI
 ├── config/        YAML config with env var overrides
-├── db/            SQLite schema (v9), migrations
+├── db/            SQLite schema (v10), migrations
 ├── decoys/        Decoy orchestrator + types (dev_server, home_assistant, file_share, mimic)
 ├── devices/       Device manager, classifier, signatures, OUI
 ├── events/        Pub/sub event bus with audit log
 ├── fingerprint/   Multi-signal compositor and matcher
+├── integrations/  Home Assistant integration
 ├── network/       Virtual IP allocation, port forwarding
+├── plugins/       BaseAgentModule ABC and plugin loader
 ├── privileged/    macOS helper RPC and constrained Linux sidecar RPC
 ├── scanner/       ARP/port/mDNS/SSDP scanning
 ├── scouts/        Scout engine, scheduler, mimic orchestrator, templates, mDNS
@@ -222,13 +251,15 @@ sensor/src/squirrelops_home_sensor/
 
 ## Design Principles
 
-- **Detection only** — never blocks, throttles, or modifies real network traffic
-- **No deep packet inspection** — analysis limited to connection metadata
-- **Local-first** — all data in local SQLite, only exceptions are optional APNs, Slack, cloud AI, and update integrations
-- **Decoys never collide** — decoy services avoid real ports and don't respond to broadcast discovery
-- **Virtual IPs avoid conflicts** — allocated from high end of subnet, excluded from scan loop, evacuated if a real device claims the IP
-- **48-hour learning** — behavioral anomaly alerts are suppressed during learning; decoy trip alerts fire immediately
+- **Detection only:** never blocks, throttles, or modifies real network traffic
+- **No deep packet inspection:** analysis limited to connection metadata
+- **Local-first:** all data in local SQLite, only exceptions are optional APNs, Slack, cloud AI, and update integrations
+- **Decoys never collide:** decoy services avoid real ports and don't respond to broadcast discovery
+- **Virtual IPs avoid conflicts:** allocated from high end of subnet, excluded from scan loop, evacuated if a real device claims the IP
+- **48-hour learning:** behavioral anomaly alerts are suppressed during learning; decoy trip alerts fire immediately
 
 ## License
 
-All rights reserved. Source available for review.
+PolyForm Noncommercial License 1.0.0. See [LICENSE](LICENSE).
+
+Allowed: personal use, research, education, and other noncommercial use. Commercial use, resale, paid hosting, or repackaging for commercial advantage requires a separate license.
