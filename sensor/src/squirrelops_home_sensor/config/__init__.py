@@ -57,6 +57,7 @@ class DecoyConfig(StrictConfigModel):
     health_check_interval: int = Field(default=1800, ge=1, le=86400)
     restart_max_attempts: int = Field(default=3, ge=0, le=20)
     restart_window_seconds: int = Field(default=300, ge=1, le=86400)
+    deep_enabled: bool = True
 
 
 class AlertMethodsConfig(StrictConfigModel):

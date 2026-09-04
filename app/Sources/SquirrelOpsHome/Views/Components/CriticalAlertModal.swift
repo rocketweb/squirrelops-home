@@ -57,6 +57,13 @@ struct CriticalAlertModal: View {
                             .foregroundStyle(Theme.textSecondary(colorScheme))
                     }
 
+                    if let activitySummary = alert.decoyActivitySummary {
+                        Text(activitySummary)
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.textSecondary(colorScheme))
+                            .multilineTextAlignment(.center)
+                    }
+
                     // Timestamp
                     Text(TimestampPresentation.local(alert.createdAt))
                         .font(Typography.mono)

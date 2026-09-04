@@ -498,6 +498,9 @@ class TestDecoyConnectionQueries:
         await insert_decoy_connection(
             db, decoy_id=did, source_ip="192.168.1.50",
             port=3000, timestamp=now,
+            intruder_intent="developer_agent",
+            narrative_stage=3,
+            interaction_type="mcp.tools.call.read_runbook",
         )
         await insert_decoy_connection(
             db, decoy_id=did, source_ip="192.168.1.51",
@@ -505,6 +508,10 @@ class TestDecoyConnectionQueries:
         )
         conns = await list_decoy_connections(db, decoy_id=did)
         assert len(conns) == 2
+        rich = next(conn for conn in conns if conn["source_ip"] == "192.168.1.50")
+        assert rich["intruder_intent"] == "developer_agent"
+        assert rich["narrative_stage"] == 3
+        assert rich["interaction_type"] == "mcp.tools.call.read_runbook"
 
 
 # ---------------------------------------------------------------------------

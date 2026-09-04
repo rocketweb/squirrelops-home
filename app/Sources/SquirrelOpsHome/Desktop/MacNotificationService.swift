@@ -130,6 +130,9 @@ final class MacNotificationService {
     }
 
     private func notificationBody(for alert: AlertSummary) -> String {
+        if let activitySummary = alert.decoyActivitySummary {
+            return "\(alert.title) • \(activitySummary)"
+        }
         guard let sourceIp = alert.sourceIp, !sourceIp.isEmpty else {
             return alert.title
         }

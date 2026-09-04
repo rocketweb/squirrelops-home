@@ -14,9 +14,13 @@ struct AlertRow: View {
         alert.alertCount != nil && (alert.alertCount ?? 0) > 1
     }
 
+    private var hasFoldedConnections: Bool {
+        (alert.connectionCount ?? 0) > 1
+    }
+
     private var friendlyType: String {
         switch alert.alertType {
-        case "decoy.trip": return "Port scan detected"
+        case "decoy.trip": return alert.decoyActivityTypeLabel
         case "decoy.credential_trip": return "Credential accessed"
         case "device.new": return "New device"
         case "device.verification_needed": return "Device verification"
@@ -65,6 +69,18 @@ struct AlertRow: View {
                             .lineLimit(1)
                     }
 
+
+                    if hasFoldedConnections, let count = alert.connectionCount {
+                        Text("\(count) connections")
+                            .font(Typography.mono)
+                            .tracking(Typography.monoTracking)
+                            .foregroundStyle(Theme.textSecondary(colorScheme))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Theme.backgroundTertiary(colorScheme))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+
                     Text(friendlyType)
                         .font(Typography.bodySmall)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
@@ -92,7 +108,7 @@ struct AlertRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Dismiss alert")
-            } else if isGrouped {
+            } else if isGrouped || hasFoldedConnections {
                 // Detail chevron for grouped alerts
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))

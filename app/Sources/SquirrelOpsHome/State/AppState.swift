@@ -170,7 +170,7 @@ public final class AppState {
             // isOperationalDeployment, not an inline status check. A degraded
             // mimic keeps its alias, so treating it as inactive would let a
             // fake host render as a real device in the user's inventory.
-            guard decoy.isVirtualMimic, decoy.isOperationalDeployment else {
+            guard decoy.isVirtualHostService, decoy.isOperationalDeployment else {
                 return nil
             }
             guard !["", "0.0.0.0", "127.0.0.1", "::"].contains(decoy.bindAddress) else {
@@ -260,6 +260,9 @@ public final class AppState {
                 readAt: AppState.iso8601.string(from: Date()),
                 actionedAt: old.actionedAt, createdAt: old.createdAt,
                 alertCount: old.alertCount,
+                connectionCount: old.connectionCount,
+                ports: old.ports,
+                serviceCounts: old.serviceCounts,
                 deviceCount: old.deviceCount, issueKey: old.issueKey
             )
         }

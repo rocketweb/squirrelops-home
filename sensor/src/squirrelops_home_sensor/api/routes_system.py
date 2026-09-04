@@ -109,7 +109,10 @@ async def status(
     if row:
         device_count = row[0]
 
-    decoy_query = "SELECT COUNT(*) FROM decoys WHERE status = 'active'"
+    decoy_query = (
+        "SELECT COUNT(*) FROM decoys WHERE status = 'active' "
+        "AND (host_id IS NULL OR is_primary = 1)"
+    )
     if mimic_orchestrator is not None:
         decoy_query += " AND decoy_type != 'mimic'"
     cursor = await db.execute(decoy_query)

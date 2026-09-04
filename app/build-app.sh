@@ -9,6 +9,7 @@
 #   BUILD_CONFIG  - "debug" (default) or "release"
 #   BUILD_ARCH    - "arm64", "x86_64", or "universal" (default: current arch)
 #   SQUIRRELOPS_APP_VERSION - optional assertion; must match ../APP_VERSION
+#   SQUIRRELOPS_GUEST_BUNDLE - architecture-specific Studio Mini guest bundle
 #
 set -euo pipefail
 
@@ -26,8 +27,10 @@ fi
 
 APP_NAME="SquirrelOpsHome"
 HELPER_NAME="SquirrelOpsHelper"
+DECEPTION_RUNTIME_NAME="SquirrelOpsDeceptionGuest"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+GUEST_BUNDLE="${SQUIRRELOPS_GUEST_BUNDLE:-$REPO_ROOT/guest/studio-mini/build/$BUILD_ARCH}"
 
 fail() {
     echo "[x] $*" >&2
@@ -118,13 +121,60 @@ HELPER_PATH="$APP_BUNDLE/Contents/Library/LaunchServices/$HELPER_BUNDLE_ID"
 cp "$BUILD_DIR/$HELPER_NAME" "$HELPER_PATH"
 chmod 755 "$HELPER_PATH"
 
+# The deep-decoy runtime is a separate unprivileged process. It owns the
+# Virtualization.framework VM and opaque TCP-to-Virtio relays, keeping SSH and
+# SMB parsers out of the sensor and privileged helper.
+DECEPTION_RUNTIME_BUNDLE_ID="com.squirrelops.deception-guest"
+if [ ! -x "$BUILD_DIR/$DECEPTION_RUNTIME_NAME" ]; then
+    echo "[x] Required deception runtime is missing or not executable: $BUILD_DIR/$DECEPTION_RUNTIME_NAME" >&2
+    exit 1
+fi
+echo "[+] Bundling deception runtime: $DECEPTION_RUNTIME_NAME -> $DECEPTION_RUNTIME_BUNDLE_ID"
+mkdir -p "$APP_BUNDLE/Contents/Library/Helpers"
+DECEPTION_RUNTIME_PATH="$APP_BUNDLE/Contents/Library/Helpers/$DECEPTION_RUNTIME_BUNDLE_ID"
+cp "$BUILD_DIR/$DECEPTION_RUNTIME_NAME" "$DECEPTION_RUNTIME_PATH"
+chmod 755 "$DECEPTION_RUNTIME_PATH"
+if [ "$BUILD_CONFIG" = "debug" ]; then
+    echo "[+] Applying local virtualization entitlement to deception runtime..."
+    codesign --force --sign - \
+        --identifier "$DECEPTION_RUNTIME_BUNDLE_ID" \
+        --entitlements "$REPO_ROOT/app/entitlements/deception-guest.entitlements" \
+        "$DECEPTION_RUNTIME_PATH"
+fi
+
+# Guest bytes are immutable app resources. The sensor validates them again at
+# runtime before invoking Virtualization.framework.
+if [ "$BUILD_ARCH" = "universal" ]; then
+    if [ "$BUILD_CONFIG" = "release" ]; then
+        fail "Universal release apps cannot contain one architecture-specific guest."
+    fi
+elif [ -d "$GUEST_BUNDLE" ]; then
+    python3 "$REPO_ROOT/scripts/verify-guest-bundle.py" \
+        "$GUEST_BUNDLE" --architecture "$BUILD_ARCH"
+    GUEST_DESTINATION="$APP_BUNDLE/Contents/Resources/DeceptionGuest"
+    mkdir -p "$GUEST_DESTINATION"
+    cp "$GUEST_BUNDLE/manifest.json" "$GUEST_DESTINATION/manifest.json"
+    cp "$GUEST_BUNDLE/vmlinuz" "$GUEST_DESTINATION/vmlinuz"
+    cp "$GUEST_BUNDLE/studio-mini.initramfs" \
+        "$GUEST_DESTINATION/studio-mini.initramfs"
+    chmod 0444 "$GUEST_DESTINATION"/*
+    python3 "$REPO_ROOT/scripts/verify-guest-bundle.py" \
+        "$GUEST_DESTINATION" --architecture "$BUILD_ARCH"
+elif [ "$BUILD_CONFIG" = "release" ]; then
+    fail "Required Studio Mini guest bundle is missing: $GUEST_BUNDLE"
+else
+    echo "[!] Studio Mini guest bundle is absent; the deep decoy will be unavailable." >&2
+fi
+
 if [ "$BUILD_CONFIG" = "release" ]; then
     echo "[+] Removing build-host metadata from release binaries..."
     strip_release_binary "$APP_EXECUTABLE"
     strip_release_binary "$HELPER_PATH"
+    strip_release_binary "$DECEPTION_RUNTIME_PATH"
 
     validate_no_build_host_paths "$APP_EXECUTABLE"
     validate_no_build_host_paths "$HELPER_PATH"
+    validate_no_build_host_paths "$DECEPTION_RUNTIME_PATH"
 fi
 
 # Copy app icon

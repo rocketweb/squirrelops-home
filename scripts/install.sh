@@ -23,7 +23,7 @@ set -euo pipefail
 # replaces the digest placeholder; a checkout copy fails closed for install and
 # upgrade operations.
 # -----------------------------------------------------------------------
-SQUIRRELOPS_SENSOR_VERSION="2.0.3"
+SQUIRRELOPS_SENSOR_VERSION="2.1.0"
 SQUIRRELOPS_IMAGE_DIGEST="__RELEASE_IMAGE_DIGEST__"
 
 INSTALL_DIR="/opt/squirrelops"

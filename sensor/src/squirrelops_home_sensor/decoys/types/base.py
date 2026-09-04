@@ -25,6 +25,9 @@ class DecoyConnectionEvent:
         timestamp: When the connection was observed (UTC).
         request_path: HTTP request path, if applicable.
         credential_used: Value of a planted credential detected in the request, if any.
+        intruder_intent: Current evidence-based deep-decoy intent label, if available.
+        narrative_stage: Monotonic deep-decoy campaign stage, if available.
+        interaction_type: Normalized protocol operation, if available.
     """
 
     source_ip: str
@@ -34,6 +37,9 @@ class DecoyConnectionEvent:
     timestamp: datetime
     request_path: str | None = None
     credential_used: str | None = None
+    intruder_intent: str | None = None
+    narrative_stage: int | None = None
+    interaction_type: str | None = None
 
 
 class BaseDecoy(ABC):

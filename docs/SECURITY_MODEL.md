@@ -102,6 +102,34 @@ SSDP description requests are pinned to the UDP responder address, redirects
 and environment proxies are disabled, and response sizes and deadlines are
 bounded. Probe results are untrusted observations, never authentication input.
 
+## Deep-decoy guest boundary
+
+The 2.1 Studio Build Mac runs real OpenSSH and Samba inside a disposable
+Virtualization.framework guest, not inside the sensor or privileged helper.
+The separately signed guest runtime is unprivileged. Its virtual machine has
+no network device, persistent disk, shared directory, clipboard, USB, camera,
+microphone, audio, graphics, or input device. A fixed Virtio socket device is
+its only application data path.
+
+The sensor generates one bounded persona archive in memory and writes it to
+the runtime's anonymous standard-input pipe. The runtime transfers it once to
+the guest. The guest cannot read the sensor's filesystem or initiate a LAN or
+internet connection. SSH and SMB listeners are opaque byte relays to two fixed
+guest socket ports, under the same connection ceiling as the VM. Neither the
+sensor nor runtime parses attacker-controlled SSH or SMB messages.
+
+The guest kernel, initramfs, containment declaration, resources, services, and
+SHA-256 digests are validated before packaging and again before launch. Release
+artifacts must be root-owned and non-writable by other accounts. A linked,
+writable, oversized, wrong-architecture, missing, or malformed artifact leaves
+the host degraded with packet-filter deny rules in place.
+
+Ollama, OpenAI-compatible, and MCP presentations run as bounded unprivileged
+sensor listeners on private backend ports. They accept limited request sizes
+and deadlines, return only synthetic data, and persist only source address,
+classified intent, narrative stage, and decoy evidence. They do not invoke a
+model, tool, repository, command, or external service.
+
 ## Secrets and executable integrity
 
 TLS keys and configuration credentials are stored in the encrypted secret

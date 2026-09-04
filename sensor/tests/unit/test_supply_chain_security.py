@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tarfile
 import tomllib
 from pathlib import Path
@@ -302,6 +303,10 @@ def test_release_app_strips_and_rejects_embedded_build_host_paths() -> None:
     assert '/usr/bin/strip -S "$binary"' in app_builder
     assert 'validate_no_build_host_paths "$APP_EXECUTABLE"' in app_builder
     assert 'validate_no_build_host_paths "$HELPER_PATH"' in app_builder
+    assert 'if [ "$BUILD_CONFIG" = "debug" ]; then' in app_builder
+    assert '--entitlements "$REPO_ROOT/app/entitlements/deception-guest.entitlements"' in (
+        app_builder
+    )
     assert "Bundle.module" not in font_registration
     assert "Bundle.main.executableURL" in font_registration
     assert 'grep -aFRl "$REPO_ROOT" "$APP_ROOT"' in package_builder
@@ -437,6 +442,13 @@ def test_app_signer_requires_identity_for_release_but_not_local_builds(
     helper.parent.mkdir(parents=True)
     helper.write_text("#!/bin/sh\n", encoding="utf-8")
     helper.chmod(0o755)
+    deception_runtime = (
+        app_bundle
+        / "Contents/Library/Helpers/com.squirrelops.deception-guest"
+    )
+    deception_runtime.parent.mkdir(parents=True)
+    deception_runtime.write_text("#!/bin/sh\n", encoding="utf-8")
+    deception_runtime.chmod(0o755)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -493,6 +505,131 @@ def test_release_package_builder_fails_closed_on_all_trust_gates() -> None:
     assert 'codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"' in (package_builder)
     assert 'codesign --verify --deep --strict --verbose=2 "$STAGED_APP_BUNDLE"' in (package_builder)
     assert 'codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"' in signer
+
+
+def test_guest_bundle_verifier_accepts_exact_contract_and_rejects_tampering(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "guest"
+    bundle.mkdir()
+    kernel = bytearray(64)
+    kernel[56:60] = b"ARMd"
+    (bundle / "vmlinuz").write_bytes(kernel)
+    (bundle / "studio-mini.initramfs").write_bytes(b"synthetic-initramfs")
+
+    def digest(name: str) -> str:
+        return hashlib.sha256((bundle / name).read_bytes()).hexdigest()
+
+    manifest = {
+        "schema_version": 1,
+        "persona_id": "studio-mini-v1",
+        "boot": {
+            "kernel": {"path": "vmlinuz", "sha256": digest("vmlinuz")},
+            "initial_ramdisk": {
+                "path": "studio-mini.initramfs",
+                "sha256": digest("studio-mini.initramfs"),
+            },
+            "command_line": "console=hvc0 rdinit=/sbin/init",
+        },
+        "resources": {
+            "cpu_count": 2,
+            "memory_bytes": 1_073_741_824,
+            "max_connections": 16,
+        },
+        "containment": {
+            "network_devices": 0,
+            "host_shares": [],
+            "clipboard": False,
+            "egress": "none",
+            "root_filesystem": "memory-only",
+        },
+        "services": [
+            {"name": "ssh", "advertised_port": 22, "guest_vsock_port": 10022},
+            {"name": "smb", "advertised_port": 445, "guest_vsock_port": 10445},
+        ],
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    verifier = REPO_ROOT / "scripts/verify-guest-bundle.py"
+
+    valid = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert valid.returncode == 0, valid.stderr
+
+    manifest["services"] = list(reversed(manifest["services"]))
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    reordered = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert reordered.returncode != 0
+    assert "service map changed" in reordered.stderr
+
+    manifest["services"] = list(reversed(manifest["services"]))
+    manifest["services"].append(dict(manifest["services"][0]))
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    duplicated = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert duplicated.returncode != 0
+    assert "service map changed" in duplicated.stderr
+
+    manifest["services"].pop()
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (bundle / "studio-mini.initramfs").write_bytes(b"tampered")
+    tampered = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert tampered.returncode != 0
+    assert "digest does not match" in tampered.stderr
+
+
+def test_guest_macos_home_is_traversable_before_services_start() -> None:
+    init = (REPO_ROOT / "guest/studio-mini/rootfs/sbin/init").read_text()
+
+    users_mode = init.index('chmod 0755 /Users || fail "macOS users directory"')
+    user_creation = init.index("adduser -D -u 501")
+    ssh_start = init.index("/usr/sbin/sshd -D -e")
+    samba_start = init.index("/usr/sbin/smbd --foreground")
+
+    assert users_mode < user_creation < ssh_start
+    assert users_mode < user_creation < samba_start
+
+
+def test_guest_build_fails_when_the_reviewed_package_inventory_drifts() -> None:
+    dockerfile = (REPO_ROOT / "guest/studio-mini/Dockerfile").read_text()
+    package_lock = (
+        REPO_ROOT / "guest/studio-mini/packages.lock"
+    ).read_text(encoding="utf-8").splitlines()
+
+    assert package_lock == sorted(package_lock)
+    assert len(package_lock) == len(set(package_lock))
+    assert len(package_lock) >= 80
+    for required in (
+        "linux-virt-",
+        "openssh-server-",
+        "samba-server-",
+        "socat-",
+    ):
+        assert any(line.startswith(required) for line in package_lock)
+
+    assert "COPY packages.lock /tmp/squirrelops-packages.lock" in dockerfile
+    assert "apk info -vv | sort > /etc/squirrelops-guest-packages.txt" in dockerfile
+    assert (
+        "diff -u /tmp/squirrelops-packages.lock "
+        "/etc/squirrelops-guest-packages.txt"
+    ) in dockerfile
 
 
 def test_release_workflow_requires_credentials_and_verifies_before_upload() -> None:

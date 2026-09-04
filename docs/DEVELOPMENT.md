@@ -231,6 +231,54 @@ The helper isn't running or can't execute `ifconfig`. Reinstall and check logs.
 | App (release) | `cd app && BUILD_CONFIG=release bash build-app.sh` |
 | Installer (.pkg) | `bash scripts/build-pkg.sh` |
 
+### Studio Mini guest
+
+The deep-decoy guest is an architecture-specific release input. Build it with
+Docker Buildx, then pass the exact directory to the app builder:
+
+```bash
+bash guest/studio-mini/build-guest.sh "$(uname -m)"
+python3 scripts/verify-guest-bundle.py \
+  "guest/studio-mini/build/$(uname -m)" \
+  --architecture "$(uname -m)"
+SQUIRRELOPS_GUEST_BUNDLE="guest/studio-mini/build/$(uname -m)" \
+  bash app/build-app.sh
+```
+
+Release builds additionally require `ALPINE_IMAGE` to use an exact image
+digest. `guest/studio-mini/packages.lock` pins the complete installed package
+inventory, and the build fails when either architecture resolves a different
+version set. Update that inventory only after reviewing the repository change
+and rebuilding both architectures from the same image digest. The Home release
+workflow builds both ARM64 and x86_64 guest bundles on Linux, downloads them
+into the macOS job, selects the package architecture, and validates the copied
+app resource before signing.
+
+For a local live acceptance, build the guest and the debug app as shown above,
+then run the opt-in test. The debug app builder ad-hoc signs the nested runtime
+with only `app/entitlements/deception-guest.entitlements`; release signing is a
+separate Developer ID step.
+
+```bash
+cd sensor
+SQUIRRELOPS_DECEPTION_RUNTIME=../app/.build/arm64-apple-macosx/debug/SquirrelOpsHome.app/Contents/Library/Helpers/com.squirrelops.deception-guest \
+SQUIRRELOPS_GUEST_BUNDLE=../guest/studio-mini/build/arm64 \
+uv run pytest tests/integration/test_deep_deception_live_guest.py -q -s
+```
+
+This opt-in test boots the real VM, authenticates an install-specific SSH
+login, runs the macOS persona commands, exercises SFTP read and write behavior,
+and uses a real SMB client to list shares and read, write, and delete a bounded
+file through Samba. It also verifies that a host-only canary is absent, the
+guest exposes no network interface beyond loopback, and both relayed protocols
+emit connection telemetry. The SMB client is a development-only dependency and
+does not enter the sensor distribution.
+
+Cross-device Finder and `smbutil` acceptance through the production virtual IP
+and packet-filter rules, Time Machine discovery, Bonjour discovery from another
+LAN device, and signed-package containment remain mandatory manual deception
+review checks before a release is approved.
+
 An explicit local-test package requires `SQUIRRELOPS_LOCAL_TEST_BUILD=1` and
 the one-time root-owned opt-in printed by the builder. The build writes a UUID
 into the app's local-test marker. That UUID is used only to isolate test

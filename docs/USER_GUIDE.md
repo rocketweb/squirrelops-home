@@ -388,15 +388,262 @@ one fake-host card with a shared virtual IP and hostname.
 | Home Assistant | House | Fake Home Assistant login page and API |
 | File Share | Folder | Fake SMB/AFP share with planted credentials |
 | Mimic | Device-specific | A grouped fake host built from the observed services of one real source device |
+| Studio Build Mac | Desktop Mac | A grouped macOS-shaped host with real SSH and SMB plus Ollama, OpenAI-compatible, and MCP services |
 
 Traditional honeypot decoys are automatically selected based on what real services exist on your network. The sensor deploys complementary decoys — it won't duplicate services already present. Mimic decoys are deployed by the Squirrel Scouts subsystem and appear in the grid alongside honeypots, giving you a single view of all deception deployed on your network.
+
+### Studio Build Mac
+
+On a packaged macOS 2.1 installation, SquirrelOps also publishes one coherent
+deep decoy named `studio-mini.local`. It looks like a forgotten Mac mini used
+to build the synthetic FieldKit iOS app:
+
+- OpenSSH provides the `buildbot` shell and SFTP access.
+- Samba provides writable `Builds`, `Engineering`, and `Time Machine Backups`
+  shares using Apple's SMB extensions.
+- Ollama, OpenAI-compatible, and MCP endpoints expose the same project,
+  runbooks, model setup, build history, and synthetic credentials.
+- Shell history, Git metadata, Fastlane logs, Cursor, Claude, and Codex files
+  all come from the same persona and remain stable across sensor restarts.
+
+SSH and SMB run inside a fresh memory-only guest. It has no network adapter,
+host folders, clipboard, disk image, Keychain access, camera, microphone, or
+graphics device. The guest disappears when the deep decoy stops. Any file a
+visitor writes is synthetic and lost with that guest.
+
+The five service cards are grouped under one host and share one lifecycle
+control. The hostname and persona are release-managed so the surfaces cannot
+drift apart. If the signed runtime, architecture-matched guest, packet-filter
+isolation, virtual address, or Bonjour records cannot be established, the host
+is shown as **Degraded** and its public ports remain closed.
+
+The agent-facing APIs keep a source-specific narrative. Basic discovery stays
+ordinary. Requests for credentials, model tools, build runbooks, or deployment
+details reveal progressively deeper parts of the same synthetic world. The
+sensor never sends a visitor to a real repository, service, customer, or
+deployment.
+
+### Safely test the Studio Build Mac
+
+Only run these tests against a SquirrelOps decoy you own or are authorized to
+test. Use the virtual IP shown on the Studio Build Mac card. Do not substitute
+the sensor Mac's normal address, another household device, or a public target.
+Run the network tests from a second device on the same LAN. Host-local traffic
+on the sensor Mac does not exercise the proxy ARP and packet-filter ingress
+path.
+
+The examples below use an environment variable so the target remains visible
+in every command:
+
+```bash
+DECOY_IP=192.168.1.203
+```
+
+Replace the example address with the address shown in the app.
+
+#### 1. Confirm the route and advertised ports from Linux
+
+```bash
+ip route get "$DECOY_IP"
+ip neigh show "$DECOY_IP"
+
+IFACE=$(ip route get "$DECOY_IP" | awk '/dev/ {for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}')
+printf 'LAN interface: %s\n' "$IFACE"
+sudo arping -I "$IFACE" -c 3 "$DECOY_IP"
+
+nc -w 3 -vz "$DECOY_IP" 22
+nc -w 3 -vz "$DECOY_IP" 445
+nmap -Pn -sT -sV -T3 --reason -p 22,445,1234,8765,11434 "$DECOY_IP"
+```
+
+`ip neigh` should show a MAC address instead of `INCOMPLETE` or `FAILED`.
+OpenSSH should answer on port 22 and Samba on port 445. The version scan may
+make several TCP connections, and every accepted connection should increase
+the corresponding counter in **Decoys > Studio Build Mac**.
+
+On another Mac, use these equivalents:
+
+```bash
+route -n get "$DECOY_IP"
+arp -n "$DECOY_IP"
+nc -G 3 -vz "$DECOY_IP" 22
+nc -G 3 -vz "$DECOY_IP" 445
+nmap -Pn -sT -sV -T3 --reason -p 22,445,1234,8765,11434 "$DECOY_IP"
+```
+
+#### 2. Exercise real SSH
+
+First verify negotiation without authenticating:
+
+```bash
+ssh -vvv -o ConnectTimeout=5 \
+  -o PreferredAuthentications=password \
+  -o PubkeyAuthentication=no \
+  "buildbot@$DECOY_IP"
+```
+
+Reaching a password prompt proves that TCP, OpenSSH negotiation, key exchange,
+and the guest relay are working. Press Control-C if you only want a connection
+test.
+
+For an authorized authenticated test, retrieve the install-specific synthetic
+password on the sensor Mac. This query reads only the SquirrelOps database and
+does not reveal a real account credential:
+
+```bash
+sudo -u _squirrelops /usr/bin/sqlite3 -readonly \
+  /Library/SquirrelOps/sensor/data/squirrelops.db \
+  "SELECT credential_value FROM planted_credentials WHERE planted_location='SSH buildbot login' ORDER BY id DESC LIMIT 1;"
+```
+
+Then connect from the second device and enter that synthetic password at the
+prompt:
+
+```bash
+TEST_KNOWN_HOSTS=$(mktemp)
+ssh -o UserKnownHostsFile="$TEST_KNOWN_HOSTS" \
+  -o StrictHostKeyChecking=accept-new \
+  -o PreferredAuthentications=password \
+  -o PubkeyAuthentication=no \
+  "buildbot@$DECOY_IP"
+```
+
+Inside the synthetic shell, inspect the coherent persona:
+
+```bash
+sw_vers
+id
+hostname
+ls -la /Users/buildbot
+find /Users/buildbot -maxdepth 3 -type f | sort | head -50
+cat /Users/buildbot/Projects/fieldkit-ios/README.md
+```
+
+The guest has no network device or access to the sensor Mac's files. Everything
+under `/Users/buildbot` is synthetic and disappears when the deep decoy stops.
+
+#### 3. Exercise SFTP read and write behavior
+
+Create a harmless local probe file on the second device:
+
+```bash
+printf 'SquirrelOps authorized acceptance test\n' > /tmp/squirrelops-acceptance.txt
+sftp -o UserKnownHostsFile="$TEST_KNOWN_HOSTS" \
+  -o StrictHostKeyChecking=accept-new \
+  -o PreferredAuthentications=password \
+  -o PubkeyAuthentication=no \
+  "buildbot@$DECOY_IP"
+```
+
+At the `sftp>` prompt:
+
+```text
+get /Users/buildbot/Projects/fieldkit-ios/README.md /tmp/fieldkit-readme.md
+put /tmp/squirrelops-acceptance.txt /Users/buildbot/Builds/squirrelops-acceptance.txt
+get /Users/buildbot/Builds/squirrelops-acceptance.txt /tmp/squirrelops-roundtrip.txt
+rm /Users/buildbot/Builds/squirrelops-acceptance.txt
+quit
+```
+
+#### 4. Exercise real SMB
+
+Anonymous share discovery confirms Samba negotiation but does not grant share
+access:
+
+```bash
+smbclient -L "//$DECOY_IP" -N -m SMB3
+```
+
+Authenticate to the synthetic Engineering share with user `buildbot`. Enter
+the same install-specific synthetic password when prompted:
+
+```bash
+smbclient "//$DECOY_IP/Engineering" -U buildbot -m SMB3
+```
+
+At the `smb: \\>` prompt:
+
+```text
+ls
+cd fieldkit-ios
+get README.md /tmp/fieldkit-smb-readme.md
+put /tmp/squirrelops-acceptance.txt squirrelops-acceptance.txt
+get squirrelops-acceptance.txt /tmp/squirrelops-smb-roundtrip.txt
+del squirrelops-acceptance.txt
+quit
+```
+
+These writes occur only in the memory-only synthetic guest.
+
+#### 5. Exercise the agent bait and a credential trip
+
+Basic discovery should return internally consistent synthetic model and build
+data:
+
+```bash
+curl --max-time 5 --fail-with-body \
+  "http://$DECOY_IP:1234/v1/models" | python3 -m json.tool
+
+curl --max-time 5 --fail-with-body \
+  "http://$DECOY_IP:11434/api/tags" | python3 -m json.tool
+
+curl --max-time 5 --fail-with-body \
+  -H 'Content-Type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_secrets","arguments":{"query":"OPENAI_API_KEY"}}}' \
+  "http://$DECOY_IP:8765/mcp" | python3 -m json.tool
+```
+
+The MCP response reveals a synthetic API key. To verify the Critical
+Credential Trip path without writing the key into shell history, read it into a
+temporary variable and submit it back to the decoy:
+
+```bash
+read -rsp 'Paste the synthetic API key: ' DECOY_API_KEY; printf '\n'
+curl --max-time 5 --fail-with-body \
+  -H "Authorization: Bearer $DECOY_API_KEY" \
+  "http://$DECOY_IP:1234/v1/models" | python3 -m json.tool
+unset DECOY_API_KEY
+```
+
+#### 6. Verify evidence in SquirrelOps
+
+Expected results:
+
+1. **Decoys > Studio Build Mac** shows increasing per-service connection
+   counters for SSH, SMB, Inference, Ollama, and MCP.
+2. The first connection from the test device creates one High Decoy Activity
+   alert.
+3. Further connections from the same source update that active alert. The
+   prompt and alert row show the total and a per-service breakdown such as
+   `10 connections · SSH 4 · SMB 6`.
+4. Opening the alert shows first and last seen times plus the 50 most recent
+   connection records. Every connection remains in the per-decoy forensic log,
+   even when the active alert is folded.
+5. Touching two or more decoy services promotes the alert to Port Scan
+   Detected.
+6. Submitting the synthetic API key produces a separate Critical Credential
+   Trip and increments the credential trip counter.
+7. **Clear** acknowledges the current active alert. The next connection then
+   creates a new alert. **History** shows previously acknowledged alerts.
+
+SSH and SMB are opaque encrypted relays. Successful SSH or SMB authentication
+creates connection evidence, but it cannot produce a Credential Trip because
+the sensor does not inspect encrypted protocol contents. Use the agent API test
+above to verify the explicit credential-detection path.
+
+If ARP resolution fails, confirm both devices are on the same non-isolated LAN.
+If ARP resolves but the advertised ports time out, inspect the sensor Mac's
+packet-filter forwarding. If the ports answer but counters do not change, the
+failure is in guest telemetry. If counters change but no alert appears, check
+the active alert, **History**, and notification settings before treating it as
+an alert pipeline failure.
 
 ### Decoy Status
 
 | Status | Meaning |
 |--------|---------|
 | **Active** | Running and listening for connections |
-| **Degraded** | Failed to restart after 3 crashes in 5 minutes — restart manually or wait for the 30-minute health check |
+| **Degraded** | The intended decoy is not fully operational. For Studio Build Mac this also covers a missing or rejected guest/runtime or incomplete Bonjour publication. |
 | **Stopped** | Disabled by user |
 
 For degraded decoys, a **Restart** button appears on the card. Restart, stop,
@@ -408,7 +655,7 @@ service row.
 Click a decoy card to open its detail sheet:
 
 - **Decoy Info** — Type, address, connection count, credential trip count, failure count, creation date
-- **Configuration** — View and edit decoy-specific configuration values (click **Edit Config** to modify)
+- **Configuration:** View and edit ordinary decoy-specific configuration values. The Studio Build Mac persona is release-managed and read-only.
 - **Connection Log** — Chronological list of all connections to this decoy, showing source IP, request path, timestamp, and whether a credential was used (highlighted with a "CREDENTIAL" label)
 
 ---
@@ -528,8 +775,10 @@ New High and Critical alerts open a prompt over the dashboard:
   panel and are not deleted from the database.
 
 Several decoy connections from the same source are coalesced into one active
-scan alert instead of creating one alert row per port. Every individual
-connection is still retained in the decoy's forensic connection log.
+alert instead of creating one alert row per socket. The prompt and alert row
+show the total connection count and per-service breakdown. Opening the alert
+shows first and last seen times plus a bounded recent-connection timeline.
+Every individual connection is still retained in the decoy's forensic log.
 
 **Alert types:**
 
@@ -576,9 +825,10 @@ All filters combine (AND logic). Active filters appear highlighted.
 
 Click any alert in the feed to open a detail sheet showing the full context of the alert:
 
-- **Header** — Severity indicator, title, alert type badge (e.g., "Port Scan Detected", "Credential Accessed"), severity label, and timestamp
+- **Header** — Severity indicator, title, alert type badge (e.g., "Decoy Activity", "Port Scan Detected", "Credential Accessed"), severity label, and timestamp
 - **Source** — IP address, MAC address (if the device was identified), hostname, vendor, and device ID
-- **Intrusion Details** — Destination port, protocol, request path (for HTTP-based detections), and detection method (HTTP Decoy or Mimic Decoy)
+- **Intrusion Details** — Folded connection count, per-service totals, latest destination port, protocol, first and last seen times, request path (for HTTP-based detections), and detection method
+- **Recent Connections** — Up to 50 timestamped service and port entries represented by a folded decoy alert
 - **Credential Access** (only for credential trip alerts) — Which planted credential was accessed and the request path used
 - **Decoy** — Which decoy was tripped, with name and ID
 
@@ -989,10 +1239,10 @@ After pairing, the macOS app pins the sensor's TLS certificate by SHA-256 finger
 
 ### Virtual IP Safety
 
-Virtual IPs used by mimic decoys are:
+Virtual IPs used by mimic and Studio Build Mac decoys are:
 - Allocated from helper-enforced offsets 200 through 250 from the observed network base on macOS to avoid DHCP conflicts
 - Excluded from the sensor's own scan loop to prevent false device discoveries
-- Automatically evacuated if a real device claims the same IP — the mimic is stopped, the alias is removed, and the IP is reallocated
+- Automatically evacuated if a real device claims the same IP. The affected fake host is stopped and the alias is removed before the address can answer again.
 
 On macOS, the virtual IPs are published through proxy ARP and therefore share
 the sensor Mac's physical MAC address. The sensor advertises distinct mDNS

@@ -54,6 +54,7 @@ public enum DecoyType: String, Codable, Sendable {
     case devServer = "dev_server"
     case homeAssistant = "home_assistant"
     case fileShare = "file_share"
+    case deep
 }
 
 public enum DecoyStatus: String, Codable, Sendable {
@@ -365,6 +366,9 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
     public let actionedAt: String?
     public let createdAt: String
     public let alertCount: Int?
+    public let connectionCount: Int?
+    public let ports: [Int]?
+    public let serviceCounts: [String: Int]?
     public let deviceCount: Int?
     public let issueKey: String?
 
@@ -379,6 +383,9 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
         actionedAt: String? = nil,
         createdAt: String,
         alertCount: Int? = nil,
+        connectionCount: Int? = nil,
+        ports: [Int]? = nil,
+        serviceCounts: [String: Int]? = nil,
         deviceCount: Int? = nil,
         issueKey: String? = nil
     ) {
@@ -392,6 +399,9 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
         self.actionedAt = actionedAt
         self.createdAt = createdAt
         self.alertCount = alertCount
+        self.connectionCount = connectionCount
+        self.ports = ports
+        self.serviceCounts = serviceCounts
         self.deviceCount = deviceCount
         self.issueKey = issueKey
     }
@@ -407,8 +417,44 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
         case actionedAt = "actioned_at"
         case createdAt = "created_at"
         case alertCount = "alert_count"
+        case connectionCount = "connection_count"
+        case ports
+        case serviceCounts = "service_counts"
         case deviceCount = "device_count"
         case issueKey = "issue_key"
+    }
+
+    public var decoyActivityTypeLabel: String {
+        guard alertType == "decoy.trip" else { return alertType }
+        return (ports?.count ?? 0) >= 2 ? "Port scan detected" : "Decoy activity"
+    }
+
+    public var decoyActivitySummary: String? {
+        guard alertType == "decoy.trip", let connectionCount else { return nil }
+        let noun = connectionCount == 1 ? "connection" : "connections"
+        var parts = ["\(connectionCount) \(noun)"]
+        if let serviceCounts {
+            let serviceParts: [(port: Int, label: String)] = serviceCounts.compactMap {
+                key, count in
+                guard let port = Int(key), count > 0 else { return nil }
+                return (port, "\(Self.decoyServiceName(port)) \(count)")
+            }
+            parts.append(
+                contentsOf: serviceParts.sorted { $0.port < $1.port }.map(\.label)
+            )
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    public static func decoyServiceName(_ port: Int) -> String {
+        switch port {
+        case 22: return "SSH"
+        case 445: return "SMB"
+        case 1234: return "Inference"
+        case 8765: return "MCP"
+        case 11434: return "Ollama"
+        default: return "Port \(port)"
+        }
     }
 }
 
@@ -848,8 +894,16 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
         decoyType == "mimic"
     }
 
+    public var isDeepDecoy: Bool {
+        decoyType == "deep"
+    }
+
+    public var isVirtualHostService: Bool {
+        isVirtualMimic || isDeepDecoy
+    }
+
     public var isHostListener: Bool {
-        !isVirtualMimic
+        !isVirtualHostService
     }
 
     public var endpointLabel: String {
@@ -860,7 +914,7 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
     }
 
     public var deploymentScopeLabel: String {
-        if isVirtualMimic {
+        if isVirtualHostService {
             return "Virtual IP"
         }
         return "Host listener"
@@ -953,20 +1007,20 @@ public struct DecoyDeploymentSummary: Sendable, Equatable {
 
     public static func active(in decoys: [DecoySummary]) -> DecoyDeploymentSummary {
         let active = decoys.filter(\.isActiveDeployment)
-        let mimicServices = active.filter(\.isVirtualMimic)
+        let virtualHostServices = active.filter(\.isVirtualHostService)
         return DecoyDeploymentSummary(
-            fakeHostCount: DecoyHostGroup.grouping(mimicServices).count,
-            serviceDecoyCount: mimicServices.count,
+            fakeHostCount: DecoyHostGroup.grouping(virtualHostServices).count,
+            serviceDecoyCount: virtualHostServices.count,
             hostListenerCount: active.filter(\.isHostListener).count
         )
     }
 
     public static func operational(in decoys: [DecoySummary]) -> DecoyDeploymentSummary {
         let operational = decoys.filter(\.isOperationalDeployment)
-        let mimicServices = operational.filter(\.isVirtualMimic)
+        let virtualHostServices = operational.filter(\.isVirtualHostService)
         return DecoyDeploymentSummary(
-            fakeHostCount: DecoyHostGroup.grouping(mimicServices).count,
-            serviceDecoyCount: mimicServices.count,
+            fakeHostCount: DecoyHostGroup.grouping(virtualHostServices).count,
+            serviceDecoyCount: virtualHostServices.count,
             hostListenerCount: operational.filter(\.isHostListener).count
         )
     }
@@ -1026,6 +1080,10 @@ public struct OperationalDecoyInventory: Sendable, Equatable {
 
     public init(_ decoys: [DecoySummary]) {
         self.decoys = decoys.filter(\.isOperationalDeployment)
+    }
+
+    public var virtualHostGroups: [DecoyHostGroup] {
+        DecoyHostGroup.grouping(decoys.filter(\.isVirtualHostService))
     }
 
     public var mimicGroups: [DecoyHostGroup] {

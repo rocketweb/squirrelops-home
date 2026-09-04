@@ -1,0 +1,129 @@
+#!/bin/sh
+command_name="${0##*/}"
+guest_arch="$(/bin/uname -m)"
+case "$guest_arch" in
+    aarch64|arm64) persona_arch=arm64 ;;
+    x86_64|amd64) persona_arch=x86_64 ;;
+    *) persona_arch=arm64 ;;
+esac
+
+case "$command_name" in
+    sw_vers)
+        cat <<'EOF'
+ProductName:		macOS
+ProductVersion:		15.7.9
+BuildVersion:		24G830
+EOF
+        ;;
+    system_profiler)
+        if [ "$persona_arch" = arm64 ]; then
+            cat <<'EOF'
+Hardware:
+
+    Hardware Overview:
+
+      Model Name: Mac mini
+      Model Identifier: Mac14,3
+      Model Number: MMFJ3LL/A
+      Chip: Apple M2
+      Total Number of Cores: 8 (4 performance and 4 efficiency)
+      Memory: 16 GB
+      System Firmware Version: 11881.140.96
+      OS Loader Version: 11881.140.96
+EOF
+        else
+            cat <<'EOF'
+Hardware:
+
+    Hardware Overview:
+
+      Model Name: Mac mini
+      Model Identifier: Macmini8,1
+      Processor Name: 6-Core Intel Core i7
+      Processor Speed: 3.2 GHz
+      Number of Processors: 1
+      Total Number of Cores: 6
+      Memory: 16 GB
+      System Firmware Version: 2020.80.5.0.0
+      OS Loader Version: 580~1678
+EOF
+        fi
+        ;;
+    scutil)
+        case "${1:-}" in
+            --get)
+                case "${2:-}" in
+                    ComputerName) echo "Studio Build Mac" ;;
+                    HostName) echo "studio-mini.local" ;;
+                    LocalHostName) echo "studio-mini" ;;
+                    *) exit 1 ;;
+                esac
+                ;;
+            *) echo "scutil: dynamic store unavailable" >&2; exit 1 ;;
+        esac
+        ;;
+    uname)
+        case "${1:-}" in
+            -m) echo "$persona_arch" ;;
+            -r) echo 24.6.0 ;;
+            -s) echo Darwin ;;
+            -n) echo studio-mini.local ;;
+            -a)
+                if [ "$persona_arch" = arm64 ]; then
+                    echo "Darwin studio-mini.local 24.6.0 Darwin Kernel Version 24.6.0: Mon Jul 21 21:55:03 PDT 2026; root:xnu-11417.140.82~1/RELEASE_ARM64_T8112 arm64"
+                else
+                    echo "Darwin studio-mini.local 24.6.0 Darwin Kernel Version 24.6.0: Mon Jul 21 21:55:03 PDT 2026; root:xnu-11417.140.82~1/RELEASE_X86_64 x86_64"
+                fi
+                ;;
+            *) echo Darwin ;;
+        esac
+        ;;
+    xcodebuild)
+        echo "Xcode 16.4"
+        echo "Build version 16F6"
+        ;;
+    brew)
+        case "${1:-}" in
+            --prefix)
+                if [ "$persona_arch" = arm64 ]; then
+                    echo /opt/homebrew
+                else
+                    echo /usr/local
+                fi
+                ;;
+            --version|'') echo "Homebrew 4.6.3" ;;
+            list) printf '%s\n' git jq openssl@3 swiftlint ;;
+            *) echo "Error: /opt/homebrew is managed by Hawthorn IT" >&2; exit 1 ;;
+        esac
+        ;;
+    launchctl)
+        case "${1:-}" in
+            list|'')
+                printf 'PID\tStatus\tLabel\n'
+                printf '412\t0\tcom.apple.sshd\n'
+                printf '533\t0\tcom.hawthorn.fieldkit.build-agent\n'
+                ;;
+            *) echo "Operation not permitted while System Integrity Protection is engaged." >&2; exit 1 ;;
+        esac
+        ;;
+    dscl)
+        if [ "${1:-}" = . ] && [ "${2:-}" = -read ] && [ "${3:-}" = /Users/buildbot ]; then
+            printf 'NFSHomeDirectory: /Users/buildbot\nPrimaryGroupID: 20\nRealName: Build Automation\nRecordName: buildbot\nUniqueID: 501\nUserShell: /bin/zsh\n'
+        else
+            echo "No such key: $*" >&2
+            exit 1
+        fi
+        ;;
+    defaults)
+        echo "Domain $2 does not exist" >&2
+        exit 1
+        ;;
+    security)
+        echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." >&2
+        exit 44
+        ;;
+    *)
+        echo "$command_name: unsupported operation" >&2
+        exit 1
+        ;;
+esac

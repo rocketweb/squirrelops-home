@@ -1,0 +1,19 @@
+Port 22
+ListenAddress 127.0.0.1
+AddressFamily inet
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+UsePAM no
+PrintMotd no
+PrintLastLog yes
+TCPKeepAlive yes
+ClientAliveInterval 0
+MaxAuthTries 6
+MaxSessions 10
+AcceptEnv LANG LC_*
+Subsystem sftp internal-sftp
+AllowUsers buildbot

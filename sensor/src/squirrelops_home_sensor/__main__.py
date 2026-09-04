@@ -880,6 +880,8 @@ class _RuntimeResources:
         self.scout_scheduler_start_attempted = False
         self.mimic_orchestrator: Any | None = None
         self.mimic_start_attempted = False
+        self.deep_orchestrator: Any | None = None
+        self.deep_start_attempted = False
         self.ip_manager: Any | None = None
         self.mimic_network_attempted = False
         self.mimic_network_state_known = False
@@ -945,6 +947,12 @@ async def _cleanup_runtime(runtime: _RuntimeResources) -> list[BaseException]:
         await stop_step(
             "Stopping scout scheduler",
             runtime.scout_scheduler.stop,
+        )
+
+    if runtime.deep_orchestrator is not None and runtime.deep_start_attempted:
+        await stop_step(
+            "Stopping Studio Mini deep decoy",
+            runtime.deep_orchestrator.stop_all,
         )
 
     if runtime.mimic_orchestrator is not None and (
@@ -1159,12 +1167,54 @@ async def run_sensor(
         runtime.ip_manager = ip_manager
         runtime.mimic_mdns = mimic_mdns
         runtime.port_fwd = port_fwd
+        deep_orchestrator = None
+        if (
+            scouts is not None
+            and sys.platform == "darwin"
+            and bool(config.get("decoys", {}).get("deep_enabled", True))
+        ):
+            from squirrelops_home_sensor.decoys.deep.orchestrator import (
+                DeepDecoyOrchestrator,
+                load_or_create_deployment_secret,
+            )
+
+            deployment_secret = await load_or_create_deployment_secret(secret_store)
+            deep_orchestrator = DeepDecoyOrchestrator(
+                db=db,
+                event_bus=event_bus,
+                ip_manager=ip_manager,
+                port_forward_manager=port_fwd,
+                mdns_advertiser=mimic_mdns,
+                backend_bind_address_for=priv_ops.listener_bind_address,
+                deployment_secret=deployment_secret,
+                state_dir=Path(config["sensor"]["data_dir"]).parent
+                / "run/deception-guest",
+            )
+        runtime.deep_orchestrator = deep_orchestrator
         if mimic_orchestrator is not None:
             scan_loop.set_hostname_advisor_target(mimic_orchestrator)
             # Reuse every regular scan's fresh ARP snapshot to evacuate
             # conflicts before virtual IPs are filtered from device inventory.
+            async def _reconcile_deception_ip_conflicts(
+                arp_results: list[tuple[str, str]] | None = None,
+            ) -> int:
+                if deep_orchestrator is None:
+                    return await mimic_orchestrator.reconcile_ip_conflicts(arp_results)
+                conflicts = await ip_manager.find_conflicts(arp_results)
+                evacuated = 0
+                for conflict_ip in conflicts:
+                    if conflict_ip == deep_orchestrator.active_virtual_ip:
+                        removed = await deep_orchestrator.handle_ip_conflict(conflict_ip)
+                    else:
+                        removed = await mimic_orchestrator.handle_ip_conflict(conflict_ip)
+                    if removed:
+                        evacuated += 1
+                if evacuated:
+                    await mimic_orchestrator.evaluate_and_deploy(arp_results)
+                return evacuated
+
             conflict_hook_result = scan_loop.set_ip_conflict_handler(
-                mimic_orchestrator.reconcile_ip_conflicts
+                _reconcile_deception_ip_conflicts
             )
             if inspect.isawaitable(conflict_hook_result):
                 await conflict_hook_result
@@ -1236,11 +1286,20 @@ async def run_sensor(
         from squirrelops_home_sensor.api.routes_decoys import (
             get_decoy_orchestrator as _get_decoy_orch_dep,
         )
+        from squirrelops_home_sensor.api.routes_decoys import (
+            get_deep_decoy_orchestrator as _get_deep_decoy_orch_dep,
+        )
 
         async def _prod_get_decoy_orchestrator():
             return orchestrator.inner
 
+        async def _prod_get_deep_decoy_orchestrator():
+            return deep_orchestrator
+
         app.dependency_overrides[_get_decoy_orch_dep] = _prod_get_decoy_orchestrator
+        app.dependency_overrides[
+            _get_deep_decoy_orch_dep
+        ] = _prod_get_deep_decoy_orchestrator
 
         # 7c. Wire up live WebSocket broadcast from event bus
         from squirrelops_home_sensor.api.ws import broadcast_event
@@ -1324,6 +1383,14 @@ async def run_sensor(
                 )
             runtime.mimic_network_state_known = True
 
+            if deep_orchestrator is not None:
+                runtime.deep_start_attempted = True
+                deep_started = await deep_orchestrator.start()
+                if not deep_started:
+                    logger.warning(
+                        "Studio Mini deep decoy is unavailable; no real-protocol "
+                        "ports were published"
+                    )
             runtime.mimic_start_attempted = True
             resumed = await mimic_orchestrator.resume_active()
             if resumed:

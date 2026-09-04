@@ -46,6 +46,19 @@ path fails closed.
 
 Keep these settings in place for every release:
 
+The Home 2.1 package also has an indivisible guest-artifact boundary. Release
+automation builds ARM64 and x86_64 Studio Mini guests from the reviewed Alpine
+image digest. The complete installed Alpine package inventory is also pinned in
+`guest/studio-mini/packages.lock`, and either architecture build fails if the
+repository produces a different version set. The macOS job downloads that
+private artifact, selects the exact package architecture, and rejects any
+unexpected file, symlink, writable file, digest mismatch, architecture
+mismatch, changed resource ceiling, changed containment declaration, or changed
+socket/service map. The guest runtime is signed separately with only the
+virtualization entitlement before the outer app signature is applied. Do not
+substitute a locally cached guest, floating container tag, or pre-existing
+release asset.
+
 1. Enable **release immutability**. The workflow checks the repository setting
    before building and again immediately before publication. A published
    immutable release locks its tag and assets and receives a GitHub release
@@ -205,6 +218,9 @@ tag is component identity only. Release the signed macOS distribution with
 - every build checks out the verified commit SHA;
 - signing and notarization credentials are available only after environment
   approval;
+- both architecture-specific deep-decoy guests are rebuilt from the pinned
+  image digest and complete package inventory, and the package contains the
+  validated matching guest;
 - the multi-platform container is built into a private OCI archive with no
   public staging tag;
 - the Linux installer is rendered with the attested multi-platform container

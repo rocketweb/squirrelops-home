@@ -256,7 +256,7 @@ enum PreviewData {
 
     // MARK: - Decoys
 
-    /// Three decoys: dev_server (active), home_assistant (active), file_share (degraded).
+    /// Standalone listeners plus the five services on the Studio Build Mac.
     static let decoys: [DecoySummary] = [
         DecoySummary(
             id: 1,
@@ -294,12 +294,92 @@ enum PreviewData {
             createdAt: "2026-01-17T12:10:00Z",
             updatedAt: "2026-02-22T15:30:00Z"
         ),
+        DecoySummary(
+            id: 4,
+            name: "Studio Build Mac",
+            decoyType: "deep",
+            bindAddress: "192.168.1.240",
+            port: 445,
+            status: "active",
+            connectionCount: 7,
+            credentialTripCount: 1,
+            createdAt: "2026-08-31T14:00:00Z",
+            updatedAt: "2026-08-31T14:28:00Z",
+            hostId: 40,
+            hostname: "studio-mini.local",
+            serviceProtocol: "smb",
+            serviceName: "Time Machine and Office Shares"
+        ),
+        DecoySummary(
+            id: 5,
+            name: "Studio Build Mac",
+            decoyType: "deep",
+            bindAddress: "192.168.1.240",
+            port: 22,
+            status: "active",
+            connectionCount: 4,
+            credentialTripCount: 1,
+            createdAt: "2026-08-31T14:00:00Z",
+            updatedAt: "2026-08-31T14:26:00Z",
+            hostId: 40,
+            hostname: "studio-mini.local",
+            serviceProtocol: "ssh",
+            serviceName: "Remote Login"
+        ),
+        DecoySummary(
+            id: 6,
+            name: "Studio Build Mac",
+            decoyType: "deep",
+            bindAddress: "192.168.1.240",
+            port: 11434,
+            status: "active",
+            connectionCount: 9,
+            credentialTripCount: 0,
+            createdAt: "2026-08-31T14:00:00Z",
+            updatedAt: "2026-08-31T14:24:00Z",
+            hostId: 40,
+            hostname: "studio-mini.local",
+            serviceProtocol: "http",
+            serviceName: "Ollama"
+        ),
+        DecoySummary(
+            id: 7,
+            name: "Studio Build Mac",
+            decoyType: "deep",
+            bindAddress: "192.168.1.240",
+            port: 1234,
+            status: "active",
+            connectionCount: 6,
+            credentialTripCount: 1,
+            createdAt: "2026-08-31T14:00:00Z",
+            updatedAt: "2026-08-31T14:22:00Z",
+            hostId: 40,
+            hostname: "studio-mini.local",
+            serviceProtocol: "http",
+            serviceName: "Local Inference API"
+        ),
+        DecoySummary(
+            id: 8,
+            name: "Studio Build Mac",
+            decoyType: "deep",
+            bindAddress: "192.168.1.240",
+            port: 8765,
+            status: "active",
+            connectionCount: 3,
+            credentialTripCount: 1,
+            createdAt: "2026-08-31T14:00:00Z",
+            updatedAt: "2026-08-31T14:20:00Z",
+            hostId: 40,
+            hostname: "studio-mini.local",
+            serviceProtocol: "http",
+            serviceName: "Studio Build Tools MCP"
+        ),
     ]
 
     // MARK: - System
 
     static let health = HealthResponse(
-        version: "2.0.3",
+        version: "2.1.0",
         sensorId: "sensor-001",
         uptimeSeconds: 86400
     )

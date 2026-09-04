@@ -4,6 +4,7 @@
 
 - **Honeypots that blend in** — auto-deploys realistic decoy services (file shares, dev servers, Home Assistant instances) based on what's actually on your network
 - **Squirrel Scouts** — service fingerprinting that builds coherent fake hosts from real devices, with one decoy service per observed port and a shared virtual IP and hostname for services copied from the same source
+- **Studio Build Mac:** a coherent macOS-shaped target with real OpenSSH and Samba in an isolated, no-network guest plus Ollama, OpenAI-compatible, and MCP surfaces
 - **High-confidence decoy alerts** — a connection to an isolated decoy is inherently suspicious and is kept separate from lower-confidence behavioral detections
 - **Device fingerprinting** — identifies every device on your network using MAC OUI, mDNS, SSDP, DHCP, and port signatures, with optional AI device classification
 - **Believable decoy naming** — uses ordinary home and business names by default, with optional AI suggestions that follow observed hostname patterns
@@ -58,6 +59,7 @@ The documented trust boundaries and intentional exceptions are in the
 | Dev Server | Express/Next.js dev server with debug endpoints | `.env` file with API keys, DB URLs, tokens |
 | Home Assistant | HA login page and API with realistic error responses | Long-lived access token |
 | **Mimic** | **A fake host assembled from a real device's observed ports, sanitized HTTP behavior, service banners, TLS metadata, and mDNS services** | Synthetic credentials exposed by supported HTTP routes |
+| **Studio Build Mac** | **One forgotten Mac mini with real SSH, SMB/Time Machine shares, build artifacts, and agent APIs backed by a disposable guest** | Install-specific fake login, API, and source tokens |
 
 ### Credential Types
 
@@ -207,8 +209,8 @@ sensor/src/squirrelops_home_sensor/
 ├── alerts/        Alert dispatch, decoy/device handlers, incident grouping, retention
 ├── api/           FastAPI routers (8 routers), WebSocket, DI
 ├── config/        YAML config with env var overrides
-├── db/            SQLite schema (v9), migrations
-├── decoys/        Decoy orchestrator + types (dev_server, home_assistant, file_share, mimic)
+├── db/            SQLite schema (v12), migrations
+├── decoys/        Classic, mimic, and isolated deep-decoy orchestration
 ├── devices/       Device manager, classifier, signatures, OUI
 ├── events/        Pub/sub event bus with audit log
 ├── fingerprint/   Multi-signal compositor and matcher

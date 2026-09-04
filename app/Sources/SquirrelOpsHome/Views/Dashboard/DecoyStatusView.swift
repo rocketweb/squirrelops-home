@@ -69,7 +69,7 @@ struct DecoyStatusView: View {
                 if !operationalInventory.hostListeners.isEmpty {
                     Label(
                         "Host listeners use this sensor Mac's LAN address and the shown port. "
-                        + "Only virtual-IP mimics have their own network address.",
+                        + "Fake hosts use a separate virtual network address.",
                         systemImage: "info.circle"
                     )
                     .font(Typography.bodySmall)
@@ -84,11 +84,11 @@ struct DecoyStatusView: View {
                     .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusMd))
                 }
 
-                if !operationalInventory.mimicGroups.isEmpty {
+                if !operationalInventory.virtualHostGroups.isEmpty {
                     mimicSection(
                         title: "Fake hosts",
                         description: "Services sharing a virtual IP belong to one fake host. Each port keeps its own behavior and evidence; lifecycle actions apply to the entire host.",
-                        groups: operationalInventory.mimicGroups
+                        groups: operationalInventory.virtualHostGroups
                     )
                 }
 
@@ -160,7 +160,9 @@ struct DecoyStatusView: View {
     }
 
     private func mimicHostGroupCard(_ group: DecoyHostGroup) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
+        let isEditableMimic = group.services.allSatisfy(\.isVirtualMimic)
+        let isDeepHost = group.services.contains(where: \.isDeepDecoy)
+        return VStack(alignment: .leading, spacing: Spacing.md) {
             HStack(alignment: .top, spacing: Spacing.sm) {
                 Image(systemName: "network")
                     .font(.system(size: 20))
@@ -213,15 +215,17 @@ struct DecoyStatusView: View {
                                 .tracking(Typography.h4Tracking)
                                 .foregroundStyle(Theme.textPrimary(colorScheme))
 
-                            Button {
-                                beginEditingHostname(group)
-                            } label: {
-                                Image(systemName: "pencil")
-                                    .font(.system(size: 11))
+                            if isEditableMimic {
+                                Button {
+                                    beginEditingHostname(group)
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .font(.system(size: 11))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Theme.accentDefault(colorScheme))
+                                .help("Edit hostname for every service on this fake host")
                             }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Theme.accentDefault(colorScheme))
-                            .help("Edit hostname for every service on this fake host")
                         }
                     }
 
@@ -251,22 +255,28 @@ struct DecoyStatusView: View {
                         .tracking(Typography.captionTracking)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
 
-                    HStack {
-                        Text("Restart or remove this fake host in Scouts.")
-                            .font(Typography.bodySmall)
-                            .foregroundStyle(Theme.textSecondary(colorScheme))
-                        Spacer()
-                        Button("Open Scouts") {
-                            selectedDecoy = nil
-                            appState.selectedDashboardSection = .scouts
+                    if isDeepHost {
+                        DecoyToggle(decoy: representative, appState: appState) { message in
+                            actionError = message
                         }
-                        .buttonStyle(.plain)
-                        .font(Typography.bodySmall)
-                        .foregroundStyle(Theme.accentDefault(colorScheme))
-                        .help(
-                            "Open Scouts to manage every service on "
-                            + representative.bindAddress
-                        )
+                    } else {
+                        HStack {
+                            Text("Restart or remove this fake host in Scouts.")
+                                .font(Typography.bodySmall)
+                                .foregroundStyle(Theme.textSecondary(colorScheme))
+                            Spacer()
+                            Button("Open Scouts") {
+                                selectedDecoy = nil
+                                appState.selectedDashboardSection = .scouts
+                            }
+                            .buttonStyle(.plain)
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.accentDefault(colorScheme))
+                            .help(
+                                "Open Scouts to manage every service on "
+                                + representative.bindAddress
+                            )
+                        }
                     }
                 }
             }
@@ -320,7 +330,7 @@ struct DecoyStatusView: View {
             }
 
             // Shared-IP mimics have one lifecycle control on their host card.
-            if !decoy.isVirtualMimic {
+            if !decoy.isVirtualHostService {
                 DecoyToggle(decoy: decoy, appState: appState) { message in
                     actionError = message
                 }
@@ -355,7 +365,7 @@ struct DecoyStatusView: View {
             }
 
             // Restart button for degraded
-            if decoy.status == "degraded" && !decoy.isVirtualMimic {
+            if decoy.status == "degraded" && !decoy.isVirtualHostService {
                 Button {
                     Task {
                         do {
@@ -395,6 +405,7 @@ struct DecoyStatusView: View {
         case "dev_server": return "chevron.left.forwardslash.chevron.right"
         case "home_assistant": return "house"
         case "file_share": return "folder"
+        case "deep": return "desktopcomputer"
         default: return "ant"
         }
     }
@@ -607,7 +618,7 @@ struct DecoyDetailSheet: View {
                     .tint(Theme.accentDefault(colorScheme))
                     .disabled(isSaving)
                 } else {
-                    if detail != nil && !decoy.isVirtualMimic {
+                    if detail != nil && !decoy.isVirtualHostService {
                         Button("Edit Config") {
                             startEditing()
                         }
@@ -968,6 +979,7 @@ struct DecoyDetailSheet: View {
         case "dev_server": return "chevron.left.forwardslash.chevron.right"
         case "home_assistant": return "house"
         case "file_share": return "folder"
+        case "deep": return "desktopcomputer"
         default: return "ant"
         }
     }

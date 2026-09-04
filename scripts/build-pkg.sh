@@ -238,8 +238,13 @@ fi
 
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/SquirrelOpsHome"
 HELPER_PATH="$APP_BUNDLE/Contents/Library/LaunchServices/com.squirrelops.helper"
+DECEPTION_RUNTIME_PATH="$APP_BUNDLE/Contents/Library/Helpers/com.squirrelops.deception-guest"
+DECEPTION_GUEST_BUNDLE="$APP_BUNDLE/Contents/Resources/DeceptionGuest"
 validate_macho_arch "$APP_EXECUTABLE" "$BUILD_ARCH"
 validate_macho_arch "$HELPER_PATH" "$BUILD_ARCH"
+validate_macho_arch "$DECEPTION_RUNTIME_PATH" "$BUILD_ARCH"
+python3 "$REPO_ROOT/scripts/verify-guest-bundle.py" \
+    "$DECEPTION_GUEST_BUNDLE" --architecture "$BUILD_ARCH"
 
 info "App built: $APP_BUNDLE"
 
