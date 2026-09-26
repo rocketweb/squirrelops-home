@@ -54,27 +54,16 @@ class ARPIdentityConflict:
         }
 
 
-def _local_interface_macs() -> set[str]:
+async def _local_interface_macs(ops: PrivilegedOperations) -> set[str]:
     """Return normalized MAC addresses assigned to this sensor host."""
-    try:
-        import psutil
-
-        local_macs: set[str] = set()
-        for addresses in psutil.net_if_addrs().values():
-            for address in addresses:
-                if address.family == psutil.AF_LINK and address.address:
-                    try:
-                        local_macs.add(normalize_mac(address.address))
-                    except ValueError:
-                        continue
-        return local_macs
-    except Exception:
-        logger.warning("Unable to enumerate local interface MAC addresses", exc_info=True)
-        return set()
+    return await ops.local_interface_macs()
 
 
-def _inventory_arp_results(
+async def _inventory_arp_results(
     arp_results: list[tuple[str, str]],
+    ops: PrivilegedOperations,
+    *,
+    local_macs: set[str] | None = None,
 ) -> tuple[list[tuple[str, str]], list[ARPIdentityConflict]]:
     """Normalize a raw ARP snapshot into unambiguous physical devices.
 
@@ -85,12 +74,15 @@ def _inventory_arp_results(
     would let a forged lower address redirect an existing device row and erase
     its last verified ports.
     """
-    local_macs: set[str] = set()
-    for mac in _local_interface_macs():
-        try:
-            local_macs.add(normalize_mac(mac))
-        except ValueError:
-            continue
+    if local_macs is None:
+        local_macs = set()
+        for mac in await _local_interface_macs(ops):
+            try:
+                local_macs.add(normalize_mac(mac))
+            except ValueError:
+                continue
+        if not local_macs:
+            raise RuntimeError("Local MAC inventory unavailable")
 
     macs_by_ip: dict[str, set[str]] = {}
     for ip, mac in arp_results:
@@ -398,10 +390,31 @@ class ScanLoop:
 
         # Normalize after conflict handling so the ownership logic still sees
         # every raw claimant, including this host's proxy-ARP responses.
-        inventory_results, arp_identity_conflicts = _inventory_arp_results(
-            arp_results
-        )
-        if self._security_analyzer is not None:
+        inventory_degraded = False
+        try:
+            inventory_results, arp_identity_conflicts = await _inventory_arp_results(
+                arp_results, self._ops
+            )
+        except (OSError, RuntimeError, ValueError):
+            inventory_degraded = True
+            logger.warning(
+                "Local MAC inventory unavailable; scanning unchanged known identities only. "
+                "New device discovery and offline reconciliation are paused.",
+                exc_info=True,
+            )
+            # Keep ambiguity checks, but never learn or relocate a device without
+            # the host-MAC exclusion. Only unchanged, previously known IP/MAC
+            # pairs can proceed; system-decoy IP filtering still runs below.
+            inventory_results, arp_identity_conflicts = await _inventory_arp_results(
+                arp_results, self._ops, local_macs=set()
+            )
+            known_pairs = {
+                (device.ip_address, normalize_mac(device.mac_address))
+                for device in self._manager.get_known_devices()
+                if device.mac_address is not None
+            }
+            inventory_results = [pair for pair in inventory_results if pair in known_pairs]
+        if self._security_analyzer is not None and not inventory_degraded:
             try:
                 await self._security_analyzer.record_arp_conflicts(
                     [
@@ -428,6 +441,7 @@ class ScanLoop:
                     "scan_duration_ms": _elapsed_ms(scan_start),
                     "hosts_discovered": 0,
                     "arp_identity_conflicts": len(arp_identity_conflicts),
+                    "inventory_degraded": inventory_degraded,
                 },
             )
             return
@@ -436,7 +450,7 @@ class ScanLoop:
         observed_device_by_ip: dict[str, int] = {}
         # An ambiguous ARP snapshot is not authoritative for online/offline
         # reconciliation. Preserve the last trusted device addresses and ports.
-        processing_succeeded = not arp_identity_conflicts
+        processing_succeeded = not arp_identity_conflicts and not inventory_degraded
         for ip, mac in real_arp_results:
             scan_result = ScanResult(ip_address=ip, mac_address=mac)
             try:
@@ -504,7 +518,7 @@ class ScanLoop:
                 port_scan_succeeded = False
 
         # ---- Decoy auto-deploy (after Phase 2, if no decoys exist) ----
-        if self._orchestrator is not None:
+        if self._orchestrator is not None and not inventory_degraded:
             try:
                 discovered = [
                     {"ip": ip, "port": r.port, "protocol": "tcp"}
@@ -588,6 +602,7 @@ class ScanLoop:
                 "scan_duration_ms": _elapsed_ms(scan_start),
                 "hosts_discovered": len(real_arp_results),
                 "arp_identity_conflicts": len(arp_identity_conflicts),
+                "inventory_degraded": inventory_degraded,
             },
         )
 

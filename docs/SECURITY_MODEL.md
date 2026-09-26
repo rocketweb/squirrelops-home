@@ -104,6 +104,32 @@ bounded. Probe results are untrusted observations, never authentication input.
 
 ## Deep-decoy guest boundary
 
+### macOS virtual-IP forwarding
+
+The helper renders redirects without an unconditional `rdr pass`. Each redirect
+sets a private PF tag. A separate TCP filter rule requires that tag, the exact
+destination, the selected ingress interface, and the kernel-observed socket
+owner UID. The helper resolves `_squirrelops` itself; an RPC caller cannot
+choose the allowed UID. Missing, root, or unknown UIDs cannot authorize TCP
+publication. Untagged backend-port probes and other traffic still reach the
+virtual IP's default-deny rule. ICMP echo behavior is unchanged.
+
+The pre-load and post-load exact listener checks remain. The kernel rule adds
+a UID boundary, not process-ID pinning. If a post-load check fails, the helper
+attempts block-only quarantine and connection-state cleanup independently.
+Failure on one endpoint does not skip cleanup of later endpoints. Incomplete
+recovery returns an error, retains cleanup work for retry, and cannot authorize
+a new alias publication from the cached state.
+
+Existing PF states can bypass new filter evaluation. Endpoint and allowed-UID
+changes therefore require state cleanup; a guarded rule is not proof that all
+old states are gone. Rule-generation tests, injected recovery failures, and the
+macOS syntax parser cover the source change. Live listener replacement, state
+reuse, upgrade from older rules, and second-machine LAN acceptance remain
+release gates. See the [PF safety development record](testing/2026-09-26-pf-safety-development.md).
+
+### Disposable guest
+
 The 2.1 Studio Build Mac runs real OpenSSH and Samba inside a disposable
 Virtualization.framework guest, not inside the sensor or privileged helper.
 The separately signed guest runtime is unprivileged. Its virtual machine has

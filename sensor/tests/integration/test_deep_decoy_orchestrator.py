@@ -214,6 +214,64 @@ async def test_provision_publishes_one_grouped_host_fail_closed(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_repeated_start_does_not_leak_a_second_guest(tmp_path):
+    calls = []
+    async with aiosqlite.connect(tmp_path / "idempotent.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, _ = await _orchestrator(db, calls)
+        assert await orchestrator.start()
+        assert await orchestrator.start()
+        assert calls.count("guest:start") == 1
+        await orchestrator.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_unallocated_studio_is_explained_and_retried_after_cooldown(tmp_path):
+    from unittest.mock import AsyncMock
+    calls = []
+    async with aiosqlite.connect(tmp_path / "retry.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, _ = await _orchestrator(db, calls)
+        allocate = AsyncMock(side_effect=[[], ["192.0.2.240"]])
+        orchestrator._ip_manager.allocate_verified = allocate
+        assert await orchestrator.start() is False
+        assert orchestrator.diagnostics["status"] == "degraded"
+        assert "verified virtual IP" in orchestrator.diagnostics["reason"]
+        assert await orchestrator.reconcile() is False
+        assert allocate.await_count == 1
+        orchestrator._next_retry_at = 0
+        assert await orchestrator.reconcile() is True
+        assert orchestrator.diagnostics["status"] == "active"
+        assert orchestrator.diagnostics["reason"] is None
+        service_id = (await (await db.execute("SELECT id FROM decoys WHERE port=22")).fetchone())[0]
+        assert await orchestrator.disable(service_id)
+        orchestrator._next_retry_at = 0
+        assert await orchestrator.reconcile() is False
+        assert calls.count("guest:start") == 1
+        assert orchestrator.diagnostics["status"] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_degraded_host_can_be_stopped_without_retry_resurrecting_it(tmp_path):
+    calls = []
+    class RejectedGuest(_Guest):
+        async def start(self):
+            raise RuntimeError("invalid artifact")
+    async with aiosqlite.connect(tmp_path / "stop-degraded.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, _ = await _orchestrator(db, calls, guest_factory=lambda **kw: RejectedGuest(calls, **kw))
+        assert await orchestrator.start() is False
+        service_id = (await (await db.execute("SELECT id FROM decoys WHERE port=22")).fetchone())[0]
+        assert await orchestrator.disable(service_id) is True
+        orchestrator._next_retry_at = 0
+        assert await orchestrator.reconcile() is False
+        assert orchestrator.diagnostics["status"] == "stopped"
+
+
+@pytest.mark.asyncio
 async def test_restart_withdraws_and_reverifies_address_before_republish(tmp_path) -> None:
     calls: list[str] = []
     async with aiosqlite.connect(tmp_path / "deep.db") as db:

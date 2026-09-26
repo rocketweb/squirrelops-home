@@ -229,6 +229,18 @@ class TestSSHKey:
         cred = generator.generate_ssh_key()
         assert isinstance(cred, GeneratedCredential)
 
+    def test_key_is_parseable_and_signs_without_authorizing_a_real_host(self, generator):
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+        value = generator.generate_ssh_key().credential_value.encode()
+        key = serialization.load_pem_private_key(value, password=None)
+        assert isinstance(key, rsa.RSAPrivateKey)
+        assert key.key_size == 2048
+        message = b"synthetic bait parser acceptance"
+        signature = key.sign(message, padding.PKCS1v15(), hashes.SHA256())
+        key.public_key().verify(signature, message, padding.PKCS1v15(), hashes.SHA256())
+
     def test_type_is_ssh_key(self, generator):
         cred = generator.generate_ssh_key()
         assert cred.credential_type == "ssh_key"

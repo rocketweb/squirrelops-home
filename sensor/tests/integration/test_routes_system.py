@@ -40,6 +40,25 @@ class TestStatusEndpoint:
         response = client.get("/system/status")
         assert response.status_code == 200
 
+    def test_status_explains_missing_studio_without_counting_it_active(self, client, app, db):
+        from squirrelops_home_sensor.api.routes_decoys import get_deep_decoy_orchestrator
+        from tests.integration.conftest import seed_decoys
+        asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        asyncio.get_event_loop().run_until_complete(db.execute("UPDATE decoys SET decoy_type='deep'"))
+        asyncio.get_event_loop().run_until_complete(db.commit())
+        async def deep_dependency():
+            return SimpleNamespace(active_count=0, diagnostics={
+                "status": "degraded", "reason": "No verified virtual IP is available.",
+            })
+        app.dependency_overrides[get_deep_decoy_orchestrator] = deep_dependency
+        try:
+            result = client.get("/system/status").json()
+        finally:
+            app.dependency_overrides.pop(get_deep_decoy_orchestrator)
+        assert result["deep_decoy"] == {"status": "degraded", "reason": "No verified virtual IP is available."}
+        assert result["decoy_count"] == 0
+        assert "deep_decoy" not in client.get("/system/health").json()
+
     def test_status_contains_required_fields(self, client, db):
         response = client.get("/system/status")
         data = response.json()

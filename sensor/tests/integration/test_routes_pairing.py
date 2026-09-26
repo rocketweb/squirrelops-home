@@ -4,6 +4,8 @@ import hashlib
 import hmac
 import os
 
+import pytest
+
 from tests.integration.conftest import seed_pairing
 
 
@@ -141,6 +143,23 @@ class TestPairingVerify:
             },
         )
         assert response.status_code == 403
+
+    @pytest.mark.parametrize("proof", ["é" * 64, "😀" * 64, "０" * 64, "g" * 64, "", "0" * 65])
+    def test_malformed_proof_is_a_counted_client_failure(self, client, app, proof):
+        challenge = client.get("/pairing/code/challenge").json()
+        response = client.post(
+            "/pairing/verify",
+            json={
+                "challenge_id": challenge["challenge_id"],
+                "response": proof,
+                "client_nonce": os.urandom(32).hex(),
+                "client_name": "Malformed proof test",
+            },
+        )
+        assert response.status_code == 403
+        session = app.state.pairing_state["sessions"][challenge["challenge_id"]]
+        assert session["failed_attempts"] == 1
+        assert not session["verified"]
 
     def test_verify_increments_failure_count(self, client, app):
         challenge = client.get("/pairing/code/challenge").json()

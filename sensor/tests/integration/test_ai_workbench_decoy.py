@@ -1,5 +1,6 @@
 """Live HTTP acceptance for the 2.1 OpenAI, Ollama, and MCP decoy."""
 
+import json
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -207,3 +208,30 @@ async def test_split_surface_reports_advertised_port_and_does_not_cross_protocol
     assert models.headers["server"] == "uvicorn"
     assert ollama.status_code == 404
     assert [event.dest_port for event in events] == [1234, 1234]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path,content_type", [
+    ("/v1/chat/completions", "text/event-stream"),
+    ("/api/chat", "application/x-ndjson"),
+])
+async def test_live_stream_framing_and_one_credential_event(decoy, base_url, path, content_type):
+    events = []
+    decoy.on_connection = events.append
+    async with httpx.AsyncClient() as client:
+        async with client.stream("POST", base_url + path, json={
+            "model": decoy.persona.model_names[0],
+            "messages": [{"role": "user", "content": "hello"}], "stream": True,
+        }, headers={"Authorization": f"Bearer {decoy.persona.openai_api_key}"}) as response:
+            assert response.headers["content-type"].split(";")[0] == content_type
+            assert response.headers["transfer-encoding"] == "chunked"
+            lines = [line async for line in response.aiter_lines() if line]
+    if path.startswith("/v1"):
+        assert lines[-1] == "data: [DONE]"
+        assert all(json.loads(line[6:])["object"] == "chat.completion.chunk" for line in lines[:-1])
+    else:
+        assert json.loads(lines[-1])["done"] is True
+        assert json.loads(lines[0])["done"] is False
+    assert len(events) == 1
+    assert events[0].credential_used == decoy.persona.openai_api_key
+    assert await decoy.health_check() is True

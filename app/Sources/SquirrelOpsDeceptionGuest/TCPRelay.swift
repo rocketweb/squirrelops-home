@@ -158,23 +158,21 @@ final class TCPListener: @unchecked Sendable {
 }
 
 final class SocketRelay: @unchecked Sendable {
-    private let clientDescriptor: Int32
+    private let client: RelayConnection
     private let guestConnection: VZVirtioSocketConnection
-    private let completion: @Sendable () -> Void
     private let lock = NSLock()
     private var closed = false
 
     init(
-        clientDescriptor: Int32,
-        guestConnection: VZVirtioSocketConnection,
-        completion: @escaping @Sendable () -> Void
+        client: RelayConnection,
+        guestConnection: VZVirtioSocketConnection
     ) {
-        self.clientDescriptor = clientDescriptor
+        self.client = client
         self.guestConnection = guestConnection
-        self.completion = completion
     }
 
     func start() {
+        let clientDescriptor = client.descriptor
         let guestDescriptor = guestConnection.fileDescriptor
         DispatchQueue.global(qos: .utility).async { [self] in
             pump(from: clientDescriptor, to: guestDescriptor)
@@ -220,10 +218,8 @@ final class SocketRelay: @unchecked Sendable {
             return
         }
         closed = true
-        shutdown(clientDescriptor, SHUT_RDWR)
-        close(clientDescriptor)
+        client.close()
         guestConnection.close()
         lock.unlock()
-        completion()
     }
 }

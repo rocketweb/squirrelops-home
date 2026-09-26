@@ -22,6 +22,29 @@ from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnection
 # Helpers: fake decoy for testing
 # ---------------------------------------------------------------------------
 
+
+@pytest.mark.asyncio
+async def test_legacy_invalid_ssh_bait_is_replaced_once_without_losing_history(db):
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    now = datetime.now(UTC).isoformat()
+    await db.execute("INSERT INTO decoys (id,name,decoy_type,bind_address,port,status,created_at,updated_at) VALUES (991,'QA','file_share','127.0.0.1',0,'active',?,?)", (now, now))
+    legacy = "-----BEGIN RSA PRIVATE KEY-----\nYWJj\n-----END RSA PRIVATE KEY-----"
+    await db.execute("INSERT INTO planted_credentials (credential_type,credential_value,planted_location,decoy_id,tripped,first_tripped_at,created_at) VALUES ('ssh_key',?,'id_rsa',991,1,?,?)", (legacy, now, now))
+    await db.commit()
+    instance = DecoyOrchestrator(event_bus=AsyncMock(), db=db, max_decoys=8)
+    first = await instance._load_credentials(991)
+    assert len(first) == 1
+    load_pem_private_key(first[0].credential_value.encode(), password=None)
+    second = await instance._load_credentials(991)
+    assert first == second
+    rows = await (await db.execute("SELECT * FROM planted_credentials WHERE decoy_id=991 ORDER BY id")).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["credential_value"] == legacy
+    assert rows[0]["tripped"] == 1
+    assert rows[0]["first_tripped_at"] == now
+    assert rows[1]["credential_value"] == first[0].credential_value
+
 class FakeDecoy(BaseDecoy):
     """Controllable fake decoy for orchestrator tests."""
 
@@ -333,7 +356,7 @@ class TestAutoDeployment:
         )
         monkeypatch.setattr(
             "squirrelops_home_sensor.decoys.orchestrator._interface_ipv4_addresses",
-            lambda _: [],
+            lambda _: [route_address["value"]] if route_address["value"] else [],
         )
         monkeypatch.setattr(
             "squirrelops_home_sensor.decoys.orchestrator._create_decoy_instance",

@@ -32,6 +32,7 @@ public final class WebSocketManager: @unchecked Sendable {
     private let taskFactory: @Sendable () -> any WebSocketTaskProtocol
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private var ownedSession: URLSession?
 
     // MARK: - Init
 
@@ -44,12 +45,15 @@ public final class WebSocketManager: @unchecked Sendable {
         self.decoder = JSONDecoder()
     }
 
-    /// Convenience initializer for production use that creates a WebSocketTask from a URL and session.
+    /// Owns a supplied private session; the process-wide shared session remains borrowed.
     public convenience init(url: URL, session: URLSession = .shared) {
         self.init(taskFactory: { [url, session] in
             session.webSocketTask(with: url)
         })
+        if session !== URLSession.shared { ownedSession = session }
     }
+
+    deinit { ownedSession?.invalidateAndCancel() }
 
     // MARK: - Connection Lifecycle
 

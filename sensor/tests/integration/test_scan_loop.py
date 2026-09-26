@@ -94,6 +94,7 @@ def device_manager(
 def mock_ops() -> AsyncMock:
     """Mocked privileged operations."""
     ops = AsyncMock(spec=PrivilegedOperations)
+    ops.local_interface_macs.return_value = {"1C:1D:D3:E0:7D:03"}
     ops.arp_scan.return_value = [
         ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
         ("192.168.1.2", "AA:BB:CC:DD:EE:02"),
@@ -158,6 +159,61 @@ def scan_loop(
 
 class TestScanLoopExecution:
     """Test that the scan loop calls scanners and feeds the device manager."""
+
+    @pytest.mark.parametrize("inventory_failure", [RuntimeError("helper method unavailable"), None])
+    async def test_unavailable_mac_inventory_scans_only_unchanged_known_identities(
+        self, scan_loop, mock_ops, mock_port_scanner, device_manager, event_bus,
+        inventory_failure,
+    ):
+        await scan_loop.run_single_scan()
+        events = []
+
+        async def capture(event):
+            events.append(event["payload"])
+
+        event_bus.subscribe([EventType.SYSTEM_SCAN_COMPLETE], capture)
+        mock_port_scanner.reset_mock()
+        mock_ops.local_interface_macs.side_effect = inventory_failure
+        mock_ops.local_interface_macs.return_value = set()
+        mock_ops.arp_scan.return_value = [
+            ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
+            ("192.168.1.99", "AA:BB:CC:DD:EE:02"),  # remapped known MAC
+            ("192.168.1.200", "1C:1D:D3:E0:7D:03"),  # local proxy-ARP
+            ("192.168.1.50", "AA:BB:CC:DD:EE:50"),  # unknown identity
+        ]
+
+        await scan_loop.run_single_scan()
+
+        assert mock_port_scanner.scan_with_banners.call_args.kwargs["targets"] == ["192.168.1.1"]
+        devices = device_manager.get_known_devices()
+        assert {d.ip_address for d in devices} == {"192.168.1.1", "192.168.1.2"}
+        assert all(d.is_online for d in devices)  # incomplete inventory cannot mark offline
+        await asyncio.sleep(0)  # EventBus delivers persisted events asynchronously
+        assert events[-1]["inventory_degraded"] is True
+
+        mock_ops.local_interface_macs.side_effect = None
+        mock_ops.local_interface_macs.return_value = {"1C:1D:D3:E0:7D:03"}
+        await scan_loop.run_single_scan()
+        await asyncio.sleep(0)
+        assert events[-1]["inventory_degraded"] is False
+        assert "192.168.1.50" in {d.ip_address for d in device_manager.get_known_devices()}
+
+    async def test_mac_inventory_failure_without_known_devices_completes_degraded_scan(
+        self, scan_loop, mock_ops, mock_port_scanner, device_manager, event_bus,
+    ):
+        events = []
+
+        async def capture(event):
+            events.append(event["payload"])
+
+        event_bus.subscribe([EventType.SYSTEM_SCAN_COMPLETE], capture)
+        mock_ops.local_interface_macs.side_effect = RuntimeError("inventory unavailable")
+        await scan_loop.run_single_scan()
+        assert device_manager.get_known_devices() == []
+        mock_port_scanner.scan_with_banners.assert_not_awaited()
+        await asyncio.sleep(0)
+        assert events[-1]["inventory_degraded"] is True
+        assert events[-1]["hosts_discovered"] == 0
 
     @pytest.mark.asyncio
     async def test_single_scan_creates_devices_from_arp(
@@ -387,7 +443,7 @@ class TestScanLoopExecution:
         external_mac = "38:42:0b:48:51:07"
         monkeypatch.setattr(
             "squirrelops_home_sensor.scanner.loop._local_interface_macs",
-            lambda: {local_mac},
+            AsyncMock(return_value={local_mac}),
             raising=False,
         )
         mock_ops.arp_scan.return_value = [
@@ -415,7 +471,7 @@ class TestScanLoopExecution:
     ) -> None:
         monkeypatch.setattr(
             "squirrelops_home_sensor.scanner.loop._local_interface_macs",
-            lambda: set(),
+            AsyncMock(return_value={"1C:1D:D3:E0:7D:03"}),
             raising=False,
         )
         mock_ops.arp_scan.return_value = [
@@ -443,7 +499,7 @@ class TestScanLoopExecution:
         """Ambiguous MAC claims quarantine both targets and preserve inventory."""
         monkeypatch.setattr(
             "squirrelops_home_sensor.scanner.loop._local_interface_macs",
-            lambda: set(),
+            AsyncMock(return_value={"1C:1D:D3:E0:7D:03"}),
             raising=False,
         )
         victim_mac = "AA:BB:CC:00:00:50"
@@ -1575,6 +1631,7 @@ class TestScanLoopPhase3:
             ),
         )
         ops = AsyncMock(spec=PrivilegedOperations)
+        ops.local_interface_macs.return_value = {"1C:1D:D3:E0:7D:03"}
         ops.arp_scan.return_value = [
             ("192.168.1.77", "02:00:00:00:00:77"),
         ]

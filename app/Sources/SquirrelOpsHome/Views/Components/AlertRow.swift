@@ -4,7 +4,6 @@ struct AlertRow: View {
     @Environment(\.colorScheme) private var colorScheme
     let alert: AlertSummary
     var onDismiss: (() -> Void)?
-    @State private var isHovering = false
 
     private var isUnread: Bool {
         alert.readAt == nil
@@ -48,7 +47,8 @@ struct AlertRow: View {
                             ? Theme.textPrimary(colorScheme)
                             : Theme.textSecondary(colorScheme)
                     )
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .help(alert.title)
 
                 HStack(spacing: Spacing.sm) {
                     if isGrouped, let count = alert.deviceCount, count > 0 {
@@ -86,19 +86,15 @@ struct AlertRow: View {
                         .foregroundStyle(Theme.textTertiary(colorScheme))
                         .lineLimit(1)
                 }
+                Text(TimestampPresentation.local(alert.createdAt))
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.textTertiary(colorScheme))
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
 
-            // Timestamp
-            Text(TimestampPresentation.local(alert.createdAt))
-                .font(Typography.mono)
-                .tracking(Typography.monoTracking)
-                .foregroundStyle(Theme.textTertiary(colorScheme))
-                .lineLimit(1)
-
-            // Dismiss button (visible on hover for unread alerts)
-            if let onDismiss = onDismiss, isHovering {
+            // Keep dismissal keyboard-accessible and reserve a stable trailing column.
+            if let onDismiss = onDismiss {
                 Button {
                     onDismiss()
                 } label: {
@@ -108,6 +104,7 @@ struct AlertRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Dismiss alert")
+                .accessibilityLabel("Dismiss alert")
             } else if isGrouped || hasFoldedConnections {
                 // Detail chevron for grouped alerts
                 Image(systemName: "chevron.right")
@@ -134,8 +131,5 @@ struct AlertRow: View {
                 : Color.clear
         )
         .contentShape(Rectangle())
-        .onHover { hovering in
-            isHovering = hovering
-        }
     }
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,7 @@ class AgentResponse:
     body: bytes
     content_type: str = "application/json"
     credential_exposed: str | None = None
+    chunks: tuple[bytes, ...] = ()
 
     @property
     def json_body(self) -> Any:
@@ -227,6 +229,41 @@ def _chat_content(persona: StudioMiniPersona, campaign: CampaignState) -> str:
     )
 
 
+def _stream_chat(value: dict[str, Any], *, openai: bool, include_usage: bool = False) -> AgentResponse:
+    """Frame the same bounded synthetic answer as the imitated API's stream."""
+    records: list[bytes] = []
+
+    def emit(record: dict[str, Any]) -> None:
+        encoded = _json_response(record).body
+        records.append(b"data: " + encoded + b"\n\n" if openai else encoded + b"\n")
+
+    if openai:
+        common = {key: value[key] for key in ("id", "created", "model")}
+        common["object"] = "chat.completion.chunk"
+
+        def choice(delta: dict[str, str], finish: str | None = None) -> None:
+            emit({**common, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+
+        choice({"role": "assistant", "content": ""})
+        for part in re.findall(r"\S+\s*", value["choices"][0]["message"]["content"]):
+            choice({"content": part})
+        choice({}, "stop")
+        if include_usage:
+            emit({**common, "choices": [], "usage": value["usage"]})
+        records.append(b"data: [DONE]\n\n")
+    else:
+        common = {key: value[key] for key in ("model", "created_at")}
+        for part in re.findall(r"\S+\s*", value["message"]["content"]):
+            emit({**common, "message": {"role": "assistant", "content": part}, "done": False})
+        emit({**value, "message": {"role": "assistant", "content": ""}})
+    return AgentResponse(
+        status=200,
+        body=b"".join(records),
+        content_type="text/event-stream" if openai else "application/x-ndjson",
+        chunks=tuple(records),
+    )
+
+
 def build_agent_response(
     persona: StudioMiniPersona,
     campaign: CampaignState,
@@ -239,7 +276,7 @@ def build_agent_response(
         return _json_response(_model_list(persona))
     if method == "POST" and path == "/v1/chat/completions":
         content = _chat_content(persona, campaign)
-        return _json_response(
+        response = _json_response(
             {
                 "id": f"chatcmpl-build-{persona.build_number}",
                 "object": "chat.completion",
@@ -255,6 +292,14 @@ def build_agent_response(
                 "usage": {"prompt_tokens": 47, "completion_tokens": 31, "total_tokens": 78},
             }
         )
+        payload = request.json_body if isinstance(request.json_body, dict) else {}
+        if payload.get("stream") is True:
+            options = payload.get("stream_options")
+            return _stream_chat(
+                response.json_body, openai=True,
+                include_usage=isinstance(options, dict) and options.get("include_usage") is True,
+            )
+        return response
     if method == "GET" and path == "/api/tags":
         return _json_response(_ollama_tags(persona))
     if method == "POST" and path == "/api/show":
@@ -271,7 +316,7 @@ def build_agent_response(
             }
         )
     if method == "POST" and path == "/api/chat":
-        return _json_response(
+        response = _json_response(
             {
                 "model": persona.model_names[0],
                 "created_at": persona.created_at.isoformat().replace("+00:00", "Z"),
@@ -286,6 +331,10 @@ def build_agent_response(
                 "eval_duration": 1_149_788_210,
             }
         )
+        payload = request.json_body if isinstance(request.json_body, dict) else {}
+        if payload.get("stream", True) is not False:
+            return _stream_chat(response.json_body, openai=False)
+        return response
     if method == "POST" and path == "/mcp":
         value, exposed = _mcp_response(persona, request.json_body)
         return _json_response(value, credential_exposed=exposed)

@@ -2466,9 +2466,9 @@ async def test_unpadded_local_proxy_mac_does_not_evict_active_mimic(
     )
     live_ip_manager._active.add("192.168.1.200")
     live_ip_manager._verified_published.add("192.168.1.200")
-    live_ip_manager._local_interface_macs = lambda: {
+    live_ip_manager._local_interface_macs = AsyncMock(return_value={
         "1c:1d:d3:e0:7d:03",
-    }
+    })
     mimic_setup.orchestrator._ip_manager = live_ip_manager
     mimic_setup.port_forward.remove_forwards.reset_mock()
 

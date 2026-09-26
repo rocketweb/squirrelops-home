@@ -21,7 +21,10 @@ from squirrelops_home_sensor.decoys.deep.guest_bundle import (
 from squirrelops_home_sensor.decoys.deep.persona import StudioMiniPersona
 from squirrelops_home_sensor.decoys.deep.persona_archive import build_persona_archive
 
-_READY_TIMEOUT_SECONDS = 20.0
+# Persona transfer, SSH, and SMB each permit 240 x 250ms retry backoff in the
+# Swift runtime. Include 30 seconds for VM start/scheduling, while retaining an
+# outer deadline for stalled Virtualization callbacks or persona writes.
+_READY_TIMEOUT_SECONDS = 210.0
 _STOP_TIMEOUT_SECONDS = 8.0
 _MAX_READY_LINE_BYTES = 16 * 1024
 _MAX_EVENT_LINE_BYTES = 16 * 1024

@@ -218,6 +218,10 @@ def patched(mock_subsystems: dict[str, Any]):
     import contextlib
 
     with contextlib.ExitStack() as stack:
+        mocks_network = stack.enter_context(
+            patch("squirrelops_home_sensor.__main__.resolve_runtime_network", new_callable=AsyncMock)
+        )
+        mock_subsystems["resolve_runtime_network"] = mocks_network
         stack.enter_context(
             patch(
                 "squirrelops_home_sensor.__main__.load_config",
@@ -446,6 +450,20 @@ class TestEntryPointStartup:
 
         mock_subsystems["open_db"].assert_called_once()
         mock_subsystems["run_migrations"].assert_called_once_with(mock_subsystems["db"])
+        mock_subsystems["resolve_runtime_network"].assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lan_resolution_failure_precedes_database_and_network_start(
+        self, config_file: Path, mock_subsystems: dict[str, Any], patched: None,
+    ) -> None:
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["resolve_runtime_network"].side_effect = RuntimeError("LAN unavailable")
+        with pytest.raises(RuntimeError, match="LAN unavailable"):
+            await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+        mock_subsystems["open_db"].assert_not_called()
+        mock_subsystems["create_scan_loop"].assert_not_called()
+        mock_subsystems["create_scouts_subsystem"].assert_not_called()
 
     @pytest.mark.asyncio
     async def test_initializes_event_bus(
@@ -641,6 +659,7 @@ class TestEntryPointStartup:
             "scan_loop"
         ].set_ip_conflict_handler.call_args.args[0]
         assert await conflict_handler(raw_arp) == 2
+        mock_subsystems["deep_orchestrator"].reconcile.assert_awaited_once()
         mock_subsystems["ip_manager"].find_conflicts.assert_awaited_once_with(raw_arp)
         mock_subsystems["deep_orchestrator"].handle_ip_conflict.assert_awaited_once_with(
             deep_ip

@@ -920,6 +920,15 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
         return "Host listener"
     }
 
+    /// Spoken name for the lifecycle switch; its checked state conveys enabled/disabled.
+    public var enableControlLabel: String {
+        if isVirtualHostService {
+            let host = hostname?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return "Enable fake host \(host.isEmpty ? name : host) at \(bindAddress)"
+        }
+        return "Enable listener \(name) at \(endpointLabel)"
+    }
+
     public var serviceLabel: String {
         if let serviceName, !serviceName.isEmpty {
             return serviceName
@@ -1304,6 +1313,30 @@ public struct HealthResponse: Codable, Sendable {
     }
 }
 
+public struct DeepDecoyStatus: Codable, Sendable, Equatable {
+    public let status: String
+    public let reason: String?
+
+    public var operationalNote: String? {
+        guard !["active", "stopped", "disabled"].contains(status) else { return nil }
+        let detail = reason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary: String
+        switch status {
+        case "starting": summary = "Preparing Studio Build Mac…"
+        case "degraded": summary = "Studio Build Mac needs attention."
+        case "unavailable": summary = "Studio Build Mac is unavailable."
+        default:
+            guard let detail, !detail.isEmpty else { return nil }
+            return "Studio Build Mac: \(detail)"
+        }
+        return detail.map { $0.isEmpty ? summary : "\(summary) \($0)" } ?? summary
+    }
+
+    public var needsAttention: Bool {
+        status == "degraded" || status == "unavailable"
+    }
+}
+
 public struct StatusResponse: Codable, Sendable {
     public let version: String?
     public let apiProtocolVersion: Int?
@@ -1313,6 +1346,7 @@ public struct StatusResponse: Codable, Sendable {
     public let decoyCount: Int
     public let alertCount: Int
     public let eventSeq: Int?
+    public let deepDecoy: DeepDecoyStatus?
 
     public init(
         profile: String,
@@ -1322,7 +1356,8 @@ public struct StatusResponse: Codable, Sendable {
         alertCount: Int,
         version: String? = nil,
         apiProtocolVersion: Int? = nil,
-        eventSeq: Int? = nil
+        eventSeq: Int? = nil,
+        deepDecoy: DeepDecoyStatus? = nil
     ) {
         self.version = version
         self.apiProtocolVersion = apiProtocolVersion
@@ -1332,6 +1367,7 @@ public struct StatusResponse: Codable, Sendable {
         self.decoyCount = decoyCount
         self.alertCount = alertCount
         self.eventSeq = eventSeq
+        self.deepDecoy = deepDecoy
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1343,6 +1379,7 @@ public struct StatusResponse: Codable, Sendable {
         case decoyCount = "decoy_count"
         case alertCount = "alert_count"
         case eventSeq = "event_seq"
+        case deepDecoy = "deep_decoy"
     }
 }
 

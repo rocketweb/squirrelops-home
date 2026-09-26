@@ -127,7 +127,7 @@ class AIWorkbenchDecoy(BaseDecoy):
                 return credential
         return None
 
-    async def _handle(self, request: web.Request) -> web.Response:
+    async def _handle(self, request: web.Request) -> web.StreamResponse:
         body = await self._read_body(request)
         body_text = body.decode("utf-8", errors="replace")[:8192]
         payload: Any = None
@@ -202,6 +202,16 @@ class AIWorkbenchDecoy(BaseDecoy):
                 json_body=payload,
             ),
         )
+        if response.chunks:
+            stream = web.StreamResponse(
+                status=response.status,
+                headers={"Server": self._server_header, "Content-Type": response.content_type},
+            )
+            await stream.prepare(request)
+            for chunk in response.chunks:
+                await stream.write(chunk)
+            await stream.write_eof()
+            return stream
         return web.Response(
             body=response.body,
             status=response.status,

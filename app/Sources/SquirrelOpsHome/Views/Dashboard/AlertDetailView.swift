@@ -23,7 +23,15 @@ struct AlertDetailView: View {
                         .font(Typography.body)
                         .foregroundStyle(Theme.textSecondary(colorScheme))
                 }
+                .padding(Spacing.lg)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                HStack {
+                    Button("Try Again") { Task { await fetchAlert() } }
+                    Spacer()
+                    Button("Close") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                .padding(Spacing.md)
             } else if let alert = alertDetail {
                 alertContent(alert)
             }
@@ -416,7 +424,10 @@ struct AlertDetailView: View {
         isLoading = true
         errorMessage = nil
         do {
-            let detail: AlertDetail = try await appState.sensorClient!.request(.alert(id: alertId))
+            guard let client = appState.sensorClient else {
+                throw SensorClientError.connectionFailed("Sensor is not connected")
+            }
+            let detail: AlertDetail = try await client.request(.alert(id: alertId))
             await MainActor.run {
                 alertDetail = detail
                 isLoading = false

@@ -153,6 +153,42 @@ def load_config(config_path: str | None) -> dict[str, Any]:
     return config
 
 
+async def resolve_runtime_network(config: dict[str, Any]) -> None:
+    """Use the helper's independently verified physical LAN, not a VPN default.
+
+    This is runtime-only discovery. No persisted operator settings are changed.
+    A mismatched explicit configuration fails before any network publication.
+    """
+    if sys.platform != "darwin":
+        return
+    from squirrelops_home_sensor.privileged.helper import create_privileged_ops
+
+    context = await create_privileged_ops().lan_context()
+    network = config.setdefault("network", {})
+    if (
+        network.get("interface", "auto") not in ("auto", context["interface"])
+        or network.get("subnet", "auto") not in ("auto", context["subnet"])
+    ):
+        raise RuntimeError("The configured network does not match the helper-verified LAN")
+    config["_lan_context"] = context
+    logger.info(
+        "Verified physical LAN: interface=%s address=%s subnet=%s gateway=%s",
+        context["interface"], context["sensor_ip"], context["subnet"], context["gateway_ip"],
+    )
+
+
+def _sensor_ip_for_config(config: dict[str, Any], fallback: str) -> str:
+    context = config.get("_lan_context")
+    return context["sensor_ip"] if context else _detect_sensor_ip(fallback)
+
+
+def _runtime_network_config(config: dict[str, Any]) -> dict[str, Any]:
+    network = dict(config.get("network", {}))
+    if context := config.get("_lan_context"):
+        network.update(interface=context["interface"], subnet=context["subnet"])
+    return network
+
+
 def _detect_sensor_ip(fallback: str) -> str:
     """Return the IPv4 address selected by the active default route."""
     import socket as _socket
@@ -274,7 +310,7 @@ def create_scan_loop(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
     # Build port scanner
     port_scanner = PortScanner(timeout_per_port=2.0, max_concurrent=100)
 
-    network_cfg = config.get("network", {})
+    network_cfg = _runtime_network_config(config)
     subnet = network_cfg.get("subnet", "192.168.1.0/24")
     scan_interval = network_cfg.get("scan_interval", 300)
 
@@ -567,7 +603,7 @@ def create_mdns_advertiser(config: dict[str, Any], port: int) -> Any:
     from squirrelops_home_sensor.mdns import ServiceAdvertiser
 
     sensor_name = config.get("sensor", {}).get("name", "SquirrelOps")
-    route_selected_ip = _detect_sensor_ip("")
+    route_selected_ip = _sensor_ip_for_config(config, "")
     return ServiceAdvertiser(
         name=sensor_name,
         port=port,
@@ -584,8 +620,8 @@ def create_orchestrator(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
 
     decoy_cfg = config.get("decoys", {})
     max_decoys = decoy_cfg.get("max_decoys", 8)
-    network_cfg = config.get("network", {})
-    sensor_ip = _detect_sensor_ip("127.0.0.1")
+    network_cfg = _runtime_network_config(config)
+    sensor_ip = _sensor_ip_for_config(config, "127.0.0.1")
     interface = _resolve_network_interface(
         network_cfg.get("interface", "auto"),
         sensor_ip,
@@ -635,7 +671,7 @@ def create_scouts_subsystem(
     from squirrelops_home_sensor.scouts.templates import MimicTemplateGenerator
 
     # Resolve subnet and sensor IP for IP allocation
-    network_cfg = config.get("network", {})
+    network_cfg = _runtime_network_config(config)
     from squirrelops_home_sensor.scanner.loop import _resolve_subnet
 
     subnet = _resolve_subnet(network_cfg.get("subnet", "192.168.1.0/24"))
@@ -645,8 +681,8 @@ def create_scouts_subsystem(
     network = ipaddress.IPv4Network(subnet, strict=False)
     # Gateway is typically .1.
     first_host = str(next(network.hosts()))
-    gateway_ip = first_host
-    sensor_ip = _detect_sensor_ip(first_host)
+    gateway_ip = config.get("_lan_context", {}).get("gateway_ip", first_host)
+    sensor_ip = _sensor_ip_for_config(config, first_host)
     interface = _resolve_network_interface(
         network_cfg.get("interface", "auto"),
         sensor_ip,
@@ -1086,6 +1122,10 @@ async def run_sensor(
                 "Migrated plaintext configuration credentials into encrypted storage"
             )
 
+        # Resolve the physical LAN before opening state or starting background
+        # tasks. The helper remains the authority at every later mutation.
+        await resolve_runtime_network(config)
+
         # 2. Open database
         data_dir = config.get("sensor", {}).get("data_dir", "./data")
         db = await open_db(Path(data_dir) / "squirrelops.db")
@@ -1211,6 +1251,7 @@ async def run_sensor(
                         evacuated += 1
                 if evacuated:
                     await mimic_orchestrator.evaluate_and_deploy(arp_results)
+                await deep_orchestrator.reconcile()
                 return evacuated
 
             conflict_hook_result = scan_loop.set_ip_conflict_handler(

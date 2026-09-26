@@ -46,10 +46,11 @@ The supported release installation is the signed macOS package.
 
 ### Path A: Docker on Linux/NAS
 
-Linux release installation is paused. The current architecture gives the
-sensor container host networking and network-administration capabilities.
-Publication remains blocked until those operations move to a constrained
-companion service, or the product is explicitly reviewed as macOS-only.
+Linux release installation is paused. The source architecture now isolates
+host networking and network-administration capabilities in a constrained
+network-helper companion; the sensor itself is unprivileged. Publication
+remains blocked pending independent review and real-LAN acceptance of that
+boundary. Its presence in source does not mean a Linux release is approved.
 Existing experimental operators should stop the container when it is not
 needed and follow [Release security](RELEASE_SECURITY.md) before upgrading.
 
@@ -374,6 +375,26 @@ The **Decoys** tab shows all deployed deception. Traditional honeypots appear as
 individual cards. Service decoys copied from the same source are grouped into
 one fake-host card with a shared virtual IP and hostname.
 
+Pull down at the top of the list until **Release to refresh** appears, then
+release to reload decoys and their startup status. Short pulls and ordinary
+scrolling within the list do not refresh it.
+You can also press **Command-R** while Decoys is open, or right-click the list
+and choose **Refresh Decoys**. These actions also work when the list is empty.
+After both the list and status load successfully, **Updated just now** appears
+above the list for three seconds, then fades away without moving the cards.
+This confirms the refresh even when nothing has changed. VoiceOver receives a
+“Decoys updated” announcement; Reduce Motion disables the fade. Failed refreshes
+show an error instead, and background updates do not show the confirmation.
+The message area appears only for startup progress or useful diagnostic notes;
+routine active, stopped, and disabled states do not need a permanent banner.
+
+With macOS **Keyboard navigation** enabled, use Tab and Shift-Tab to move
+between controls. Space on **View Details** opens the decoy sheet; Escape
+closes it and returns focus to the link. If an already-open window still skips
+buttons after changing the macOS setting, reopen the app. VoiceOver names
+detail links by service and address, and enable switches by the fake host or
+listener they control.
+
 - Decoy name and type icon
 - Bind address and advertised service ports
 - Status badge (Active, Degraded, Stopped)
@@ -424,6 +445,24 @@ sensor never sends a visitor to a real repository, service, customer, or
 deployment.
 
 ### Safely test the Studio Build Mac
+
+If Studio has no service cards, a **Studio Build Mac** notice at the top of
+Decoys shows startup progress or an actionable diagnostic reason. Normal stopped
+and disabled states stay quiet. Pull down on the list or press **Command-R** to
+reload that evidence; refreshing does not bypass startup checks or restart the guest. An enabled
+host whose startup failed is retried on a later network scan, no more often
+than once per minute. An intentionally stopped host stays stopped.
+
+OpenAI-compatible chat supports `stream: true` with SSE. Ollama chat streams
+NDJSON by default; use `stream: false` for one JSON response. Streaming and
+non-streaming replies describe the same synthetic workspace, and one request
+still produces one connection event.
+
+Ordinary HTTP File Share decoys provide parseable, unencrypted RSA key bait.
+Those keys are not authorized on the sensor Mac or any real service. On restart
+or upgrade, a file share replaces invalid legacy key bait for serving while
+retaining the original credential rows and trip history. Downloading a key is
+recorded as a connection, not proof that the key was successfully used elsewhere.
 
 Only run these tests against a SquirrelOps decoy you own or are authorized to
 test. Use the virtual IP shown on the Studio Build Mac card. Do not substitute
@@ -683,6 +722,15 @@ resemble real systems already present on the network. Supported HTTP credential
 routes trigger alerts when accessed.
 
 On macOS, proxy-ARP virtual IPs share the Mac's physical-interface MAC address.
+The macOS helper selects a physical Ethernet or Wi-Fi LAN. If a VPN owns the
+global default route, it checks physical interfaces in macOS network service
+order and verifies a private, directly connected gateway. The sensor uses that
+same interface, subnet, address, and gateway for scanning and decoy publication;
+it does not use the VPN tunnel's address. Automatic network settings stay
+automatic when saved. An explicit interface or subnet that conflicts with the
+helper-selected LAN is rejected before publication. This selection does not
+disable a VPN, change system routes, or override a VPN's local-network blocking.
+
 A reverse-DNS scan can also report the Mac's real hostname for those addresses.
 These are known Layer 2 limitations of this architecture. The fake services are
 designed to withstand ordinary service discovery, but this release does not
@@ -759,7 +807,7 @@ to implement a full authentication server.
 
 ### Alert Feed
 
-The **Alerts** tab shows a chronological feed of alerts within the 90-day retention window. By default, only **active (undismissed) alerts** are shown. Click the **History** toggle in the toolbar to include previously dismissed alerts.
+The **Alerts** tab shows a chronological feed of alerts within the 90-day retention window. By default, only **active (undismissed) alerts** are shown. Choose **Actions → Show History** in the toolbar to include previously dismissed alerts.
 
 All timestamps in the app use local system time in
 `YYYY-MM-DD HH:MM:SS` format.
@@ -813,13 +861,13 @@ Click any grouped alert to open its **Alert Detail View**, which shows the full 
 
 The toolbar provides multiple filtering dimensions:
 
-- **Severity chips** — All, Critical, High, Medium, Low
-- **Type chips** — All Types, Decoy Trip, Credential Trip, New Device, MAC Changed, Security, System
-- **Date Range** — Click the calendar button to filter by date range (From/To)
-- **Search** — Free-text search across alert titles, source IPs, and alert types
-- **History toggle** — Show or hide previously dismissed alerts
+- **Severity menu**: All, Critical, High, Medium, Low
+- **Type menu**: All Types, Decoy Trip (including credential trips), New Device, MAC Changed, Security, System
+- **Dates**: Click the calendar button to filter by date range (From/To)
+- **Search**: Free-text search across alert titles, source IPs, and alert types
+- **Actions → Show History**: Show or hide previously dismissed alerts
 
-All filters combine (AND logic). Active filters appear highlighted.
+All filters combine (AND logic). The menus display the selected filters; a note appears when history is included.
 
 ### Alert Detail View
 
@@ -848,7 +896,7 @@ Use **Dismiss All** to acknowledge all alerts in an incident at once.
 
 ### Exporting Alerts
 
-Click **Export** in the alert feed toolbar to save alerts as JSON:
+Choose **Actions → Export…** in the alert feed toolbar to save alerts as JSON:
 
 1. Choose a date range or click **Export All** for the entire retention window
 2. Select a save location in the standard macOS save dialog
@@ -860,12 +908,12 @@ This is useful for preserving alert history beyond the 90-day retention window.
 
 There are several ways to dismiss alerts:
 
-- **Hover dismiss** — Hover over any alert in the feed to reveal a dismiss button (×) on the right side
+- **Dismiss button**: Each active alert has a dismiss button (×) on its right side, available without hovering
 - **Context menu** — Right-click any alert and select **Dismiss**
 - **Detail view** — Open a grouped alert's detail view and click the **Dismiss** button
-- **Bulk dismiss** — Click **Dismiss All** in the toolbar to dismiss all visible alerts at once
+- **Bulk dismiss**: Choose **Actions → Dismiss All** to acknowledge all active alerts, including ones hidden by the current filters
 
-Dismissed alerts are hidden from the default feed view but remain accessible via the **History** toggle. The unread count badge on the Alerts sidebar item updates automatically.
+Dismissed alerts are hidden from the default feed view but remain accessible via **Actions → Show History**. The unread count badge on the Alerts sidebar item updates automatically.
 
 Dismissing a grouped security alert is like saying "I've seen this, I know about it." If the situation changes — for example, a new device appears with the same risky port — the alert automatically becomes active again so you don't miss the change.
 
@@ -1117,6 +1165,17 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 - **Profile is Lite** — Mimic decoys require Standard or Full profile. Switch profiles in Settings.
 - **No suitable candidates** — The scout engine needs eligible real devices with observed service ports. It creates one fake host per source, so a Full profile can legitimately have fewer than 10 fake hosts.
 - **Virtual IPs exhausted** — On macOS, the privileged helper always enforces offsets 200 through 250 from the observed network base. Every address is checked on the physical LAN before use; real devices are skipped, so fewer slots may be available.
+
+**macOS 27 recovery testing:** If a mimic briefly appears and then disappears,
+logs reporting the Mac's own Ethernet MAC as an IP conflict can indicate the
+Python interface-identity redaction issue. The recovery build reads identities
+through the authenticated helper. A `decoy_hosts.bind_address` uniqueness error
+is separate: stopped Studio hosts still reserve their addresses, and new mimics
+must skip those reservations. Do not delete the database or history to work
+around either issue. Classic listeners also need to bind to the selected LAN,
+not a VPN's default-route address. See the
+[September 25 recovery report](testing/2026-09-25-macos27-decoy-recovery.md)
+for the candidate's exact verification status and remaining acceptance steps.
 
 ### Settings Won't Save
 

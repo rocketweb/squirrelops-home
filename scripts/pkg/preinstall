@@ -354,6 +354,8 @@ create_upgrade_snapshot() {
     local backup_dir
     local database_check
     local backup_database_check
+    local backup_journal_mode
+    local readonly_source
 
     if [ ! -d "$DATA_DIR" ] && [ ! -f "$CONFIG_FILE" ]; then
         return 0
@@ -398,9 +400,17 @@ create_upgrade_snapshot() {
             echo "[preinstall] sqlite3 is unavailable; aborting upgrade." >&2
             return 1
         fi
+        readonly_source="$SENSOR_DB"
+        # The caller has stopped the sensor and quarantined its data directory.
+        # With no WAL to replay, immutable mode can read a cleanly closed WAL
+        # database without creating sidecars. Never use it if a WAL exists:
+        # immutable mode would ignore committed data still in that file.
+        if [ ! -e "${SENSOR_DB}-wal" ] && [ ! -L "${SENSOR_DB}-wal" ]; then
+            readonly_source="file:$SENSOR_DB?immutable=1"
+        fi
         if ! database_check=$(
             /usr/bin/sqlite3 -bail -batch -nofollow -readonly \
-                "$SENSOR_DB" \
+                "$readonly_source" \
                 "PRAGMA trusted_schema=OFF; PRAGMA quick_check(1);"
         ) || [ "$database_check" != "ok" ]; then
             echo "[preinstall] Sensor database integrity check failed; aborting upgrade." >&2
@@ -415,10 +425,41 @@ create_upgrade_snapshot() {
             echo "[preinstall] Cannot prepare the SQLite rollback path." >&2
             return 1
         fi
-        if ! /usr/bin/sqlite3 -bail -batch -nofollow -readonly \
-            -cmd "PRAGMA trusted_schema=OFF;" "$SENSOR_DB" \
-            ".backup '$backup_dir/data/squirrelops.db'"; then
+        # macOS 27's SQLite CLI can skip a positional dot-command after -cmd
+        # while returning success. Feed both commands through the same input.
+        if ! printf '%s\n' \
+            "PRAGMA trusted_schema=OFF;" \
+            ".backup '$backup_dir/data/squirrelops.db'" \
+            | /usr/bin/sqlite3 -bail -batch -nofollow -readonly "$readonly_source"
+        then
             echo "[preinstall] Cannot create the SQLite rollback backup; aborting upgrade." >&2
+            return 1
+        fi
+        if [ -L "$backup_dir/data/squirrelops.db" ] \
+            || [ ! -f "$backup_dir/data/squirrelops.db" ] \
+            || [ ! -s "$backup_dir/data/squirrelops.db" ]
+        then
+            echo "[preinstall] SQLite did not create a regular rollback backup; aborting upgrade." >&2
+            return 1
+        fi
+        # A backup of a WAL database retains WAL mode but has no sidecars.
+        # Normalize only this new private copy before read-only verification
+        # so restoring it never requires a missing -wal or -shm file.
+        if ! backup_journal_mode=$(
+            /usr/bin/sqlite3 -bail -batch -nofollow \
+                "$backup_dir/data/squirrelops.db" \
+                "PRAGMA trusted_schema=OFF; PRAGMA journal_mode=DELETE;"
+        ) || [ "$backup_journal_mode" != "delete" ]; then
+            echo "[preinstall] Cannot make the SQLite rollback backup standalone; aborting upgrade." >&2
+            return 1
+        fi
+        # SQLite may leave a stale shared-memory file after leaving WAL mode.
+        # The destination connection is closed and DELETE mode is confirmed.
+        if ! rm -f \
+            "$backup_dir/data/squirrelops.db-wal" \
+            "$backup_dir/data/squirrelops.db-shm"
+        then
+            echo "[preinstall] Cannot retire rollback journal sidecars; aborting upgrade." >&2
             return 1
         fi
         if ! backup_database_check=$(

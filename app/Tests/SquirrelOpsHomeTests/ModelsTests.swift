@@ -7,6 +7,19 @@ import Testing
 @Suite("Codable Models")
 struct ModelsTests {
 
+    @Test("Studio diagnostics decode without breaking older sensor status")
+    func decodeDeepDecoyStatus() throws {
+        let base: [String: Any] = ["profile": "standard", "learning_mode": false,
+                                   "device_count": 1, "decoy_count": 0, "alert_count": 0]
+        let old = try JSONDecoder().decode(StatusResponse.self, from: JSONSerialization.data(withJSONObject: base))
+        #expect(old.deepDecoy == nil)
+        var updated = base
+        updated["deep_decoy"] = ["status": "degraded", "reason": "No verified virtual IP is available."]
+        let current = try JSONDecoder().decode(StatusResponse.self, from: JSONSerialization.data(withJSONObject: updated))
+        #expect(current.deepDecoy?.needsAttention == true)
+        #expect(current.deepDecoy?.reason == "No verified virtual IP is available.")
+    }
+
     // MARK: - DeviceSummary decoding
 
     @Test("Decode DeviceSummary from snake_case JSON")

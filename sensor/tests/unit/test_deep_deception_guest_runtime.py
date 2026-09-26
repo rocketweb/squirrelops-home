@@ -17,6 +17,15 @@ from squirrelops_home_sensor.decoys.deep.guest_runtime import (
 from squirrelops_home_sensor.decoys.deep.persona import build_studio_mini_persona
 
 
+def test_host_ready_budget_covers_persona_and_both_service_readiness_windows():
+    from squirrelops_home_sensor.decoys.deep.guest_runtime import _READY_TIMEOUT_SECONDS
+
+    # Swift permits 240 attempts with 250ms backoff for persona + SSH + SMB.
+    # Allow a further 30 seconds for VM start and process scheduling. The host
+    # must not kill a guest still inside its reviewed startup windows.
+    assert _READY_TIMEOUT_SECONDS >= 3 * 240 * 0.25 + 30
+
+
 def _write_bundle(root: Path) -> None:
     root.mkdir(mode=0o700)
     kernel = b"test-linux-kernel"
@@ -192,6 +201,44 @@ async def test_runtime_exit_before_readiness_fails_closed(tmp_path: Path) -> Non
     with pytest.raises(GuestRuntimeError, match="ready"):
         await controller.start()
     assert controller.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_ready_deadline_terminates_child_without_publishing_ports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from squirrelops_home_sensor.decoys.deep import guest_runtime
+
+    monkeypatch.setattr(guest_runtime, "_READY_TIMEOUT_SECONDS", 0.05)
+    bundle = tmp_path / "guest"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    # Exec avoids leaving a shell-owned sleep child behind during cleanup.
+    runtime.write_text("#!/bin/sh\nexec /bin/sleep 30\n", encoding="utf-8")
+    runtime.chmod(0o755)
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=tmp_path / "state",
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+    )
+    children: list[asyncio.subprocess.Process] = []
+    original_spawn = asyncio.create_subprocess_exec
+
+    async def capture_spawn(*args, **kwargs):
+        process = await original_spawn(*args, **kwargs)
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_spawn)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(controller.start(), timeout=3)
+    assert len(children) == 1
+    assert children[0].returncode is not None
+    assert controller.is_running is False
+    assert controller.backend_ports == {}
 
 
 @pytest.mark.asyncio

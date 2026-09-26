@@ -197,295 +197,83 @@ struct AlertFeedView: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        VStack(alignment: .leading, spacing: Spacing.s12) {
-            HStack(spacing: Spacing.md) {
-                Text("Alerts")
-                    .font(Typography.h3)
-                    .tracking(Typography.h3Tracking)
-                    .foregroundStyle(Theme.textPrimary(colorScheme))
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(title: "Alerts") {
+                InventorySearchField(title: "Search alerts…", text: $searchText)
+            }
 
-                Spacer()
+            HStack(spacing: Spacing.sm) {
+                Picker("Severity", selection: $severityFilter) {
+                    Text("All").tag(nil as String?)
+                    ForEach(Self.severityLevels, id: \.value) { level in
+                        Text(level.label).tag(Optional(level.value))
+                    }
+                }
+                .frame(width: 145)
 
-                // Show History toggle
+                Picker("Type", selection: $typeFilter) {
+                    Text("All Types").tag(nil as String?)
+                    ForEach(Self.alertTypes, id: \.label) { type in
+                        Text(type.label).tag(Optional(type.label))
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 130)
+
                 Button {
-                    showDismissed.toggle()
+                    showDateFilter.toggle()
+                    filterDateFrom = showDateFilter
+                        ? Calendar.current.date(byAdding: .day, value: -7, to: Date()) : nil
+                    filterDateTo = showDateFilter ? Date() : nil
                 } label: {
-                    HStack(spacing: Spacing.xs) {
-                        Image(systemName: showDismissed ? "clock.arrow.circlepath" : "clock")
-                        Text(showDismissed ? "Active Only" : "History")
-                            .font(Typography.bodySmall)
-                    }
-                    .foregroundStyle(
-                        showDismissed
-                            ? Theme.textPrimary(colorScheme)
-                            : Theme.textSecondary(colorScheme)
-                    )
-                    .padding(.horizontal, Spacing.s12)
-                    .padding(.vertical, Spacing.xs)
-                    .background(
-                        showDismissed
-                            ? Theme.backgroundTertiary(colorScheme)
-                            : Color.clear
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Spacing.radiusFull)
-                            .stroke(
-                                showDismissed
-                                    ? Theme.borderDefault(colorScheme)
-                                    : Theme.borderSubtle(colorScheme),
-                                lineWidth: 1
-                            )
-                    )
+                    Label(showDateFilter ? "Clear Dates" : "Dates", systemImage: "calendar")
                 }
-                .buttonStyle(.plain)
+                .help(showDateFilter ? "Remove date filter" : "Filter by date range")
 
-                if appState.alerts.contains(where: { $0.readAt == nil }) {
-                    Button {
-                        dismissAll()
-                    } label: {
-                        HStack(spacing: Spacing.xs) {
-                            Image(systemName: "checkmark.circle")
-                            Text("Dismiss All")
-                                .font(Typography.bodySmall)
-                        }
-                        .foregroundStyle(Theme.textSecondary(colorScheme))
-                        .padding(.horizontal, Spacing.s12)
-                        .padding(.vertical, Spacing.xs)
-                        .background(Theme.backgroundTertiary(colorScheme))
-                        .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Spacing.radiusFull)
-                                .stroke(Theme.borderSubtle(colorScheme), lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
+                Spacer(minLength: 0)
 
-                if hasAlertHistory {
-                    Button {
+                Menu("Actions") {
+                    Toggle("Show History", isOn: $showDismissed)
+                    Divider()
+                    Button("Dismiss All", systemImage: "checkmark.circle") { dismissAll() }
+                        .disabled(!appState.alerts.contains { $0.readAt == nil })
+                    Button("Export…", systemImage: "square.and.arrow.up") { showExportPopover = true }
+                    Divider()
+                    Button("Clear History…", systemImage: "trash", role: .destructive) {
                         showClearConfirmation = true
-                    } label: {
-                        HStack(spacing: Spacing.xs) {
-                            if isClearingHistory {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Image(systemName: "trash")
-                            }
-                            Text("Clear History")
-                                .font(Typography.bodySmall)
-                        }
-                        .foregroundStyle(Theme.statusError(colorScheme))
-                        .padding(.horizontal, Spacing.s12)
-                        .padding(.vertical, Spacing.xs)
-                        .background(Theme.statusError(colorScheme).opacity(0.06))
-                        .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: Spacing.radiusFull)
-                                .stroke(
-                                    Theme.statusError(colorScheme).opacity(0.35),
-                                    lineWidth: 1
-                                )
-                        )
                     }
-                    .buttonStyle(.plain)
-                    .disabled(isClearingHistory)
+                    .disabled(!hasAlertHistory || isClearingHistory)
                 }
+                .fixedSize()
+                .popover(isPresented: $showExportPopover) { exportPopover }
+            }
+            .pickerStyle(.menu)
+            .padding(.horizontal, Spacing.lg)
+            .padding(.bottom, Spacing.s12)
 
-                Button {
-                    showExportPopover = true
-                } label: {
-                    HStack(spacing: Spacing.xs) {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Export")
-                            .font(Typography.bodySmall)
-                    }
+            if showDismissed {
+                Label("Showing history, including dismissed alerts", systemImage: "clock")
+                    .font(Typography.bodySmall)
                     .foregroundStyle(Theme.textSecondary(colorScheme))
-                    .padding(.horizontal, Spacing.s12)
-                    .padding(.vertical, Spacing.xs)
-                    .background(Theme.backgroundTertiary(colorScheme))
-                    .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Spacing.radiusFull)
-                            .stroke(Theme.borderSubtle(colorScheme), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showExportPopover) {
-                    exportPopover
-                }
-
-                TextField("Search alerts...", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 220)
+                    .padding(.horizontal, Spacing.lg)
+                    .padding(.bottom, Spacing.sm)
             }
-
-            // Severity filter chips
-            HStack(spacing: Spacing.sm) {
-                filterChip(label: "All", value: nil)
-
-                ForEach(Self.severityLevels, id: \.value) { level in
-                    filterChip(label: level.label, value: level.value, severity: level.value)
-                }
-            }
-
-            // Type filter chips
-            HStack(spacing: Spacing.sm) {
-                typeChip(label: "All Types", value: nil)
-
-                ForEach(Self.alertTypes, id: \.label) { alertType in
-                    typeChip(label: alertType.label, value: alertType.label)
-                }
-
-                Spacer()
-
-                // Date filter toggle
-                Button {
-                    if showDateFilter {
-                        showDateFilter = false
-                        filterDateFrom = nil
-                        filterDateTo = nil
-                    } else {
-                        showDateFilter = true
-                        filterDateFrom = Calendar.current.date(byAdding: .day, value: -7, to: Date())
-                        filterDateTo = Date()
-                    }
-                } label: {
-                    HStack(spacing: Spacing.xs) {
-                        Image(systemName: "calendar")
-                        Text(showDateFilter ? "Clear Dates" : "Date Range")
-                            .font(Typography.bodySmall)
-                    }
-                    .foregroundStyle(
-                        showDateFilter
-                            ? Theme.textPrimary(colorScheme)
-                            : Theme.textSecondary(colorScheme)
-                    )
-                    .padding(.horizontal, Spacing.s12)
-                    .padding(.vertical, Spacing.xs)
-                    .background(
-                        showDateFilter
-                            ? Theme.backgroundTertiary(colorScheme)
-                            : Color.clear
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Spacing.radiusFull)
-                            .stroke(
-                                showDateFilter
-                                    ? Theme.borderDefault(colorScheme)
-                                    : Theme.borderSubtle(colorScheme),
-                                lineWidth: 1
-                            )
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-
-            // Date range pickers (when active)
             if showDateFilter {
                 HStack(spacing: Spacing.md) {
-                    HStack(spacing: Spacing.sm) {
-                        Text("FROM")
-                            .font(Typography.caption)
-                            .tracking(Typography.captionTracking)
-                            .foregroundStyle(Theme.textTertiary(colorScheme))
-                        DatePicker("", selection: Binding(
-                            get: { filterDateFrom ?? Date() },
-                            set: { filterDateFrom = $0 }
-                        ), displayedComponents: .date)
-                            .labelsHidden()
-                    }
-                    HStack(spacing: Spacing.sm) {
-                        Text("TO")
-                            .font(Typography.caption)
-                            .tracking(Typography.captionTracking)
-                            .foregroundStyle(Theme.textTertiary(colorScheme))
-                        DatePicker("", selection: Binding(
-                            get: { filterDateTo ?? Date() },
-                            set: { filterDateTo = $0 }
-                        ), displayedComponents: .date)
-                            .labelsHidden()
-                    }
+                    DatePicker("From", selection: Binding(
+                        get: { filterDateFrom ?? Date() },
+                        set: { filterDateFrom = $0 }
+                    ), displayedComponents: .date)
+                    DatePicker("To", selection: Binding(
+                        get: { filterDateTo ?? Date() },
+                        set: { filterDateTo = $0 }
+                    ), displayedComponents: .date)
+                    Spacer(minLength: 0)
                 }
+                .padding(.horizontal, Spacing.lg)
+                .padding(.bottom, Spacing.s12)
             }
         }
-        .padding(.horizontal, Spacing.lg)
-        .padding(.vertical, Spacing.md)
-    }
-
-    private func filterChip(label: String, value: String?, severity: String? = nil) -> some View {
-        let isActive = severityFilter == value
-
-        return Button {
-            severityFilter = value
-        } label: {
-            HStack(spacing: Spacing.xs) {
-                if let severity = severity {
-                    SeverityDot(severity: severity)
-                }
-                Text(label)
-                    .font(Typography.bodySmall)
-                    .foregroundStyle(
-                        isActive
-                            ? Theme.textPrimary(colorScheme)
-                            : Theme.textSecondary(colorScheme)
-                    )
-            }
-            .padding(.horizontal, Spacing.s12)
-            .padding(.vertical, Spacing.xs)
-            .background(
-                isActive
-                    ? Theme.backgroundTertiary(colorScheme)
-                    : Color.clear
-            )
-            .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
-            .overlay(
-                RoundedRectangle(cornerRadius: Spacing.radiusFull)
-                    .stroke(
-                        isActive
-                            ? Theme.borderDefault(colorScheme)
-                            : Theme.borderSubtle(colorScheme),
-                        lineWidth: 1
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func typeChip(label: String, value: String?) -> some View {
-        let isActive = typeFilter == value
-
-        return Button {
-            typeFilter = value
-        } label: {
-            Text(label)
-                .font(Typography.bodySmall)
-                .foregroundStyle(
-                    isActive
-                        ? Theme.textPrimary(colorScheme)
-                        : Theme.textSecondary(colorScheme)
-                )
-                .padding(.horizontal, Spacing.s12)
-                .padding(.vertical, Spacing.xs)
-                .background(
-                    isActive
-                        ? Theme.backgroundTertiary(colorScheme)
-                        : Color.clear
-                )
-                .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusFull))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Spacing.radiusFull)
-                        .stroke(
-                            isActive
-                                ? Theme.borderDefault(colorScheme)
-                                : Theme.borderSubtle(colorScheme),
-                            lineWidth: 1
-                        )
-                )
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Empty state
@@ -507,7 +295,7 @@ struct AlertFeedView: View {
                 }
                 .buttonStyle(.plain)
                 .font(Typography.bodySmall)
-                .foregroundStyle(Theme.accentDefault(colorScheme))
+                .foregroundStyle(Theme.accentText(colorScheme))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -648,7 +436,7 @@ struct AlertFeedView: View {
         isLoadingAlertDetail = true
         Task {
             do {
-                let detail: AlertDetail = try await appState.sensorClient!.request(.alert(id: alert.id))
+                let detail: AlertDetail = try await appState.requireSensorClient().request(.alert(id: alert.id))
                 await MainActor.run {
                     selectedAlertDetail = detail
                     isLoadingAlertDetail = false
@@ -675,7 +463,7 @@ struct AlertFeedView: View {
         incidentError = nil
         Task {
             do {
-                let incident: IncidentDetail = try await appState.sensorClient!.request(.incident(id: incidentId))
+                let incident: IncidentDetail = try await appState.requireSensorClient().request(.incident(id: incidentId))
                 await MainActor.run {
                     appState.addIncident(incident)
                     selectedIncident = incident
@@ -698,7 +486,7 @@ struct AlertFeedView: View {
             defer { isExporting = false }
 
             do {
-                let response: ExportResponse = try await appState.sensorClient!.request(
+                let response: ExportResponse = try await appState.requireSensorClient().request(
                     .exportAlerts(dateFrom: dateFrom, dateTo: dateTo)
                 )
 

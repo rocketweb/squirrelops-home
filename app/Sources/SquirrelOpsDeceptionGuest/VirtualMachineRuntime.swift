@@ -76,15 +76,27 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
 
         var ports: [UInt16: UInt16] = [:]
         for service in manifest.manifest.services {
-            let listener = try TCPListener(bindAddress: bindAddress) { [weak self] descriptor, peer in
-                Task { @MainActor [weak self] in
+            let handler = guestConnectionHandler(
+                limiter: limiter,
+                onConnection: { [output] peer in
+                    output.write([
+                        "event": "connection",
+                        "source_ip": peer.address,
+                        "source_port": Int(peer.port),
+                        "dest_port": Int(service.advertisedPort),
+                        "protocol": "tcp",
+                        "interaction_type": "\(service.name).connection",
+                        "timestamp": ISO8601DateFormatter().string(from: Date()),
+                    ])
+                },
+                onAccepted: { [weak self] connection, _ in
                     await self?.accept(
-                        descriptor: descriptor,
-                        peer: peer,
+                        connection: connection,
                         service: service
                     )
                 }
-            }
+            )
+            let listener = try TCPListener(bindAddress: bindAddress, handler: handler)
             listeners[service.advertisedPort] = listener
             ports[service.advertisedPort] = listener.localPort
         }
@@ -174,36 +186,22 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
     }
 
     private func accept(
-        descriptor: Int32,
-        peer: PeerEndpoint,
+        connection: RelayConnection,
         service: GuestManifest.Service
     ) async {
-        output.write([
-            "event": "connection",
-            "source_ip": peer.address,
-            "source_port": Int(peer.port),
-            "dest_port": Int(service.advertisedPort),
-            "protocol": "tcp",
-            "interaction_type": "\(service.name).connection",
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
-        ])
-        guard limiter.acquire(), let socketDevice else {
-            Darwin.close(descriptor)
-            return
-        }
+        // The connection owns its fd and allowance even if this guard fails.
+        guard let socketDevice else { return }
         do {
             let guestConnection = try await connect(
                 device: socketDevice,
                 port: service.guestVSOCKPort
             )
             SocketRelay(
-                clientDescriptor: descriptor,
-                guestConnection: guestConnection,
-                completion: { [limiter] in limiter.release() }
+                client: connection,
+                guestConnection: guestConnection
             ).start()
         } catch {
-            limiter.release()
-            Darwin.close(descriptor)
+            connection.close()
         }
     }
 

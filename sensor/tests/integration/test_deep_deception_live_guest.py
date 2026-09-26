@@ -211,7 +211,9 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
         state_dir=tmp_path / "runtime-state",
         bind_address="127.0.0.1",
         persona=persona,
-        trusted_uids={os.getuid()},
+        # Permit either reviewed source-build inputs or immutable installed
+        # inputs. The release runtime independently requires root-owned guest bytes.
+        trusted_uids={0, os.getuid()},
         on_connection=telemetry.append,
     )
 

@@ -126,74 +126,53 @@ struct DeviceInventoryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Toolbar
-            HStack(spacing: Spacing.md) {
-                Text("Devices")
-                    .font(Typography.h3)
-                    .tracking(Typography.h3Tracking)
-                    .foregroundStyle(Theme.textPrimary(colorScheme))
-
-                Picker("View", selection: $viewMode) {
-                    ForEach(ViewMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
+            VStack(spacing: 0) {
+                PageHeader(title: "Devices") {
+                    InventorySearchField(
+                        title: viewMode == .byDevice ? "Search devices…" : "Search ports…",
+                        text: $searchText
+                    )
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 180)
+                HStack(spacing: Spacing.s12) {
+                    Picker("View", selection: $viewMode) {
+                        ForEach(ViewMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 180)
 
-                Spacer()
+                    Spacer(minLength: 0)
 
-                if viewMode == .byDevice {
-                    HStack(spacing: Spacing.xs) {
-                        Text("Sort")
-                            .font(Typography.bodySmall)
-                            .foregroundStyle(Theme.textSecondary(colorScheme))
-                            .lineLimit(1)
-                            .fixedSize()
-
+                    if viewMode == .byDevice {
                         Picker("Sort", selection: $sortOrder) {
                             ForEach(SortOrder.allCases) { order in
                                 Text(order.rawValue).tag(order)
                             }
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-                    .frame(maxWidth: 360)
+                        .pickerStyle(.menu)
+                        .frame(width: 150)
 
-                    Toggle(isOn: $groupByArea) {
-                        Label("Areas", systemImage: "rectangle.3.group")
-                    }
-                    .toggleStyle(.button)
-                } else {
-                    HStack(spacing: Spacing.xs) {
-                        Text("Sort")
-                            .font(Typography.bodySmall)
-                            .foregroundStyle(Theme.textSecondary(colorScheme))
-                            .lineLimit(1)
-                            .fixedSize()
-
+                        Toggle(isOn: $groupByArea) {
+                            Label("Areas", systemImage: "rectangle.3.group")
+                        }
+                        .toggleStyle(.button)
+                        .help("Group devices by area")
+                    } else {
                         Picker("Sort", selection: $portSortOrder) {
                             ForEach(PortSortOrder.allCases) { order in
                                 Text(order.rawValue).tag(order)
                             }
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: 150)
                     }
-                    .frame(maxWidth: 260)
                 }
-
-                TextField(
-                    viewMode == .byDevice ? "Search devices..." : "Search ports...",
-                    text: $searchText
-                )
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 220)
+                .controlSize(.regular)
+                .padding(.horizontal, Spacing.lg)
+                .padding(.bottom, Spacing.s12)
             }
-            .padding(.horizontal, Spacing.lg)
-            .padding(.vertical, Spacing.md)
 
             Divider()
 
@@ -218,7 +197,7 @@ struct DeviceInventoryView: View {
     // MARK: - Device List Content
 
     private var deviceListContent: some View {
-        Group {
+        GeometryReader { viewport in
             if filteredDevices.isEmpty {
                 emptyState
             } else if groupByArea {
@@ -226,7 +205,7 @@ struct DeviceInventoryView: View {
                     ForEach(devicesByArea, id: \.area) { group in
                         Section {
                             ForEach(group.devices) { device in
-                                DeviceRow(device: device)
+                                DeviceRow(device: device, compact: viewport.size.width < 720)
                                     .tag(device)
                                     .listRowInsets(EdgeInsets())
                                     .listRowSeparator(.visible)
@@ -242,7 +221,7 @@ struct DeviceInventoryView: View {
                 .listStyle(.plain)
             } else {
                 List(filteredDevices, selection: $selectedDevice) { device in
-                    DeviceRow(device: device)
+                    DeviceRow(device: device, compact: viewport.size.width < 720)
                         .tag(device)
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.visible)

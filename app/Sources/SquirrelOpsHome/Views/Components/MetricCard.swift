@@ -8,7 +8,7 @@ struct MetricCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            HStack(spacing: Spacing.sm) {
+            HStack(alignment: .top, spacing: Spacing.sm) {
                 Image(systemName: icon)
                     .font(.system(size: 14))
                     .foregroundStyle(Theme.textTertiary(colorScheme))
@@ -17,6 +17,7 @@ struct MetricCard: View {
                     .tracking(Typography.captionTracking)
                     .foregroundStyle(Theme.textTertiary(colorScheme))
             }
+            .frame(minHeight: 30, alignment: .top)
             Text(value)
                 .font(Typography.h3)
                 .foregroundStyle(Theme.textPrimary(colorScheme))

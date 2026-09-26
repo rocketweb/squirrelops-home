@@ -107,7 +107,7 @@ class TestAutoDeployCreatesDecoys:
         )
         monkeypatch.setattr(
             "squirrelops_home_sensor.decoys.orchestrator._interface_ipv4_addresses",
-            lambda _: [],
+            lambda _: [route_address["value"]] if route_address["value"] else [],
         )
         orchestrator = DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
 

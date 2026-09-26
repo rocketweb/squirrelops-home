@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -122,6 +123,10 @@ class DeepDecoyOrchestrator:
         self._mdns_degraded = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._lifecycle_lock = asyncio.Lock()
+        self._startup_status = "starting"
+        self._failure_reason: str | None = None
+        self._next_retry_at = 0.0
+        self._shutting_down = False
 
     @property
     def is_active(self) -> bool:
@@ -133,7 +138,32 @@ class DeepDecoyOrchestrator:
 
     @property
     def active_count(self) -> int:
-        return 1 if self._active is not None else 0
+        return 1 if self.diagnostics["status"] == "active" else 0
+
+    @property
+    def diagnostics(self) -> dict[str, str | None]:
+        """Authenticated operator evidence, including failure before any DB row exists."""
+        if self._active is not None:
+            status = self.effective_status(self._active.primary_id, "active")
+            return {"status": status, "reason": None if status == "active" else (
+                "Studio services or Bonjour publication are incomplete."
+            )}
+        return {"status": self._startup_status, "reason": self._failure_reason}
+
+    def _failed(self, reason: str) -> bool:
+        self._startup_status = "degraded"
+        self._failure_reason = reason
+        return False
+
+    async def reconcile(self) -> bool:
+        """Retry enabled unavailable hosts on a later scan, never intentional stops."""
+        if self._shutting_down:
+            return False
+        if self._active is not None:
+            return self.diagnostics["status"] == "active"
+        if time.monotonic() < self._next_retry_at:
+            return False
+        return await self.start()
 
     def effective_status(self, decoy_id: int, persisted_status: str) -> str:
         """Overlay runtime and Bonjour truth without changing restart intent."""
@@ -168,6 +198,11 @@ class DeepDecoyOrchestrator:
     async def start(self) -> bool:
         """Resume an active host or provision the first Studio Mini."""
         async with self._lifecycle_lock:
+            if self._shutting_down:
+                return False
+            if self._active is not None:
+                return self.diagnostics["status"] == "active"
+            self._next_retry_at = time.monotonic() + 60.0
             self._loop = asyncio.get_running_loop()
             cursor = await self._db.execute(
                 """SELECT d.*, h.id AS deep_host_id
@@ -183,6 +218,8 @@ class DeepDecoyOrchestrator:
             if row is None:
                 return await self._provision()
             if row["status"] != "active":
+                self._startup_status = "stopped"
+                self._failure_reason = None
                 return False
             return await self._activate_existing(row)
 
@@ -190,7 +227,7 @@ class DeepDecoyOrchestrator:
         allocated = await self._ip_manager.allocate_verified(1)
         if len(allocated) != 1:
             logger.warning("Deep decoy could not obtain a verified virtual IP")
-            return False
+            return self._failed("No verified virtual IP is available. Startup will retry on a later network scan.")
         virtual_ip = allocated[0]
         created_at = datetime.now(UTC)
         persona = build_studio_mini_persona(self._deployment_secret, created_at)
@@ -302,30 +339,30 @@ class DeepDecoyOrchestrator:
         service_ids = await self._service_ids(host_id)
         if set(service_ids) != {service[0] for service in _SERVICES}:
             logger.error("Deep-decoy service set is incomplete")
-            return False
+            return self._failed("Studio service records are incomplete. Inspect the sensor startup log.")
         if persona is None:
             try:
                 config = json.loads(row["config"] or "{}")
                 created_at = datetime.fromisoformat(config["persona_created_at"])
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 logger.exception("Deep-decoy persona state is invalid")
-                return False
+                return self._failed("Studio persona state is invalid. Inspect the sensor startup log.")
             persona = build_studio_mini_persona(self._deployment_secret, created_at)
 
         if not await self._port_forward.quarantine_endpoints({primary_id: virtual_ip}):
             logger.error("Deep-decoy endpoint quarantine could not be established")
-            return False
+            return self._failed("Studio network quarantine could not be established. Check the privileged helper.")
         if not freshly_allocated:
             if not await self._ip_manager.remove_alias(virtual_ip):
                 logger.error("Deep-decoy virtual IP could not be withdrawn safely")
-                return False
+                return self._failed("Studio virtual IP could not be withdrawn safely. Check the privileged helper.")
             if not await self._ip_manager.is_verified_free(virtual_ip):
                 logger.error("Deep-decoy virtual IP is no longer verified free")
-                return False
+                return self._failed("Studio virtual IP is not verified free. No ports were published.")
         alias_created = await self._ip_manager.add_alias(virtual_ip)
         if not alias_created:
             logger.error("Deep-decoy virtual IP could not be published")
-            return False
+            return self._failed("Studio virtual IP could not be published. Check the privileged helper.")
 
         try:
             await self._db.execute(
@@ -359,18 +396,23 @@ class DeepDecoyOrchestrator:
                 (now, host_id),
             )
             await self._db.commit()
+            self._startup_status = "active"
+            self._failure_reason = None
             await self._publish_status(active, "active", now)
             logger.info("Studio Mini deep decoy active at %s", virtual_ip)
             return True
-        except BaseException:
+        except BaseException as exc:
             logger.exception("Deep-decoy activation failed")
             active = locals().get("active")
             if isinstance(active, _ActiveDeepHost):
                 await self._stop_components(active)
+            self._active = None
             removed = await self._ip_manager.remove_alias(virtual_ip)
             if removed:
                 await self._port_forward.remove_forwards(primary_id)
-            return False
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return self._failed("Studio guest or service startup failed. Inspect the sensor startup log for artifact, runtime, or publication errors.")
 
     async def _start_components(
         self,
@@ -484,6 +526,7 @@ class DeepDecoyOrchestrator:
                 logger.critical("Deep-decoy quarantine failed after runtime exit")
             await self._stop_components(active)
             self._active = None
+            self._failed("Studio guest exited unexpectedly. Recovery will retry on a later network scan.")
             removed = await self._ip_manager.remove_alias(active.virtual_ip)
             if removed:
                 if not await self._port_forward.remove_forwards(active.primary_id):
@@ -638,6 +681,7 @@ class DeepDecoyOrchestrator:
     async def stop_all(self) -> None:
         """Stop listeners under deny-all quarantine; shared cleanup removes IPs."""
         async with self._lifecycle_lock:
+            self._shutting_down = True
             active = self._active
             if active is None:
                 return
@@ -652,7 +696,31 @@ class DeepDecoyOrchestrator:
         """Stop the grouped host and release its virtual network state."""
         async with self._lifecycle_lock:
             active = self._active
-            if active is None or decoy_id not in active.service_ids.values():
+            if active is None:
+                cursor = await self._db.execute(
+                    """SELECT d.* FROM decoys d WHERE d.decoy_type = 'deep'
+                       AND d.is_primary = 1 AND d.retired_at IS NULL
+                       AND (d.id = ? OR d.host_id = (SELECT host_id FROM decoys WHERE id = ?))""",
+                    (decoy_id, decoy_id),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    return False
+                primary_id, virtual_ip = int(row["id"]), str(row["bind_address"])
+                if not await self._port_forward.quarantine_endpoints({primary_id: virtual_ip}):
+                    return False
+                if not await self._ip_manager.remove_alias(virtual_ip):
+                    return False
+                if not await self._port_forward.remove_forwards(primary_id):
+                    return False
+                await self._db.execute(
+                    "UPDATE decoys SET status = 'stopped', updated_at = ? WHERE host_id = ?",
+                    (datetime.now(UTC).isoformat(), row["host_id"]),
+                )
+                await self._db.commit()
+                self._startup_status, self._failure_reason = "stopped", None
+                return True
+            if decoy_id not in active.service_ids.values():
                 return False
             if not await self._port_forward.quarantine_endpoints(
                 {active.primary_id: active.virtual_ip}
@@ -670,6 +738,7 @@ class DeepDecoyOrchestrator:
                 (now, active.host_id),
             )
             await self._db.commit()
+            self._startup_status, self._failure_reason = "stopped", None
             await self._publish_status(active, "stopped", now)
             return True
 

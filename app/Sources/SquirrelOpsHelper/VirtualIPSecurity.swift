@@ -406,29 +406,97 @@ func defaultGateway(
     return route.gateway
 }
 
-/// Observe the IPv4 routing table explicitly.
-///
-/// `route get default` can select a different address family as network
-/// services change. Privileged LAN operations must never depend on that
-/// implicit selection.
+/// Observe the helper-selected physical LAN, independently of RPC parameters.
 func observeIPv4DefaultRoute(
     using runner: (
         _ executable: String,
         _ arguments: [String]
     ) throws -> CommandResult
 ) throws -> IPv4DefaultRoute {
-    let result = try runner(
-        "/sbin/route",
-        ipv4DefaultRouteCommandArguments
-    )
-    guard result.status == 0,
-          let route = ipv4DefaultRoute(from: result.stdout) else {
-        throw RPCError.internalError(
-            "Could not verify the private IPv4 default route "
-                + "(route status \(result.status))"
-        )
+    let result = try observeIPv4LANRouteResult(using: runner)
+    guard let route = ipv4DefaultRoute(from: result.stdout) else {
+        throw RPCError.internalError("Invalid observed LAN route")
     }
     return route
+}
+
+private func isPhysicalLANInterface(_ name: String) -> Bool {
+    name.hasPrefix("en") && name.count > 2 && name.count <= 16
+        && name.dropFirst(2).allSatisfy({ $0.isASCII && $0.isNumber })
+}
+
+/// Prefer an ordinary physical default. When a VPN owns the global default,
+/// use macOS network service order and verify an interface-scoped LAN route.
+/// The caller cannot nominate an interface or broaden this authority.
+func observeIPv4LANRouteResult(
+    using runner: (_ executable: String, _ arguments: [String]) throws -> CommandResult
+) throws -> CommandResult {
+    let global = try runner("/sbin/route", ipv4DefaultRouteCommandArguments)
+    if global.status == 0, let route = ipv4DefaultRoute(from: global.stdout),
+       isPhysicalLANInterface(route.interface) {
+        return global
+    }
+    let services = try runner("/usr/sbin/networksetup", ["-listnetworkserviceorder"])
+    guard services.status == 0, services.stdout.utf8.count <= 65_536 else {
+        throw RPCError.internalError("Could not inspect physical network service order")
+    }
+    var seen = Set<String>()
+    for line in services.stdout.split(whereSeparator: \.isNewline) {
+        guard let deviceRange = line.range(of: ", Device: "), line.hasSuffix(")") else {
+            continue
+        }
+        let interface = String(line[deviceRange.upperBound...].dropLast())
+        guard isPhysicalLANInterface(interface), seen.insert(interface).inserted else {
+            continue
+        }
+        let scoped = try runner(
+            "/sbin/route", ["-n", "get", "-inet", "-ifscope", interface, "default"]
+        )
+        guard scoped.status == 0, let route = ipv4DefaultRoute(from: scoped.stdout),
+              route.interface == interface else { continue }
+        let info = try runner("/sbin/ifconfig", [interface])
+        guard info.status == 0, ethernetAddressFromIfconfig(info.stdout) != nil,
+              let networks = try? interfaceIPv4Networks(from: info.stdout),
+              (try? physicalLANContext(route: route, networks: networks)) != nil else {
+            continue
+        }
+        return scoped
+    }
+    throw RPCError.internalError("Could not verify a private physical IPv4 LAN route")
+}
+
+/// Return the sole directly-connected subnet that contains the gateway.
+/// Host aliases and ambiguous configurations cannot become scan authority.
+func physicalLANContext(
+    route: IPv4DefaultRoute,
+    networks: [IPv4InterfaceNetwork]
+) throws -> [String: String] {
+    let matches = networks.filter { network in
+        guard let low = strictIPv4Value(network.network),
+              let high = strictIPv4Value(network.broadcast),
+              let gateway = strictIPv4Value(route.gateway),
+              let address = strictIPv4Value(network.address) else { return false }
+        return isRFC1918IPv4(network.address) && gateway > low && gateway < high
+            && address > low && address < high && address != gateway
+    }
+    guard isPhysicalLANInterface(route.interface), matches.count == 1,
+          let network = matches.first,
+          let low = strictIPv4Value(network.network),
+          let high = strictIPv4Value(network.broadcast) else {
+        throw RPCError.internalError(
+            "Physical LAN needs one unambiguous on-link private gateway"
+        )
+    }
+    let prefix = 32 - (high ^ low).nonzeroBitCount
+    let subnet = "\(network.network)/\(prefix)"
+    try validateARPScanCIDR(
+        subnet, interface: route.interface, networks: networks,
+        gateway: route.gateway, hasEthernetAddress: true
+    )
+    return [
+        "interface": route.interface, "sensor_ip": network.address,
+        "gateway_ip": route.gateway, "subnet": subnet,
+    ]
 }
 
 /// Parse one unambiguous private IPv4 default route.
