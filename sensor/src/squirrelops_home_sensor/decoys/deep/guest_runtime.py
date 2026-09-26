@@ -269,14 +269,27 @@ class GuestRuntimeController:
         )
 
     async def _drain_output(self, stream: asyncio.StreamReader) -> None:
+        discarding = False
         while True:
             try:
-                line = await stream.readline()
-            except (ValueError, asyncio.LimitOverrunError):
-                logger.warning("Deep-decoy runtime emitted an oversized telemetry record")
-                return
+                line = await stream.readuntil(b"\n")
+            except asyncio.LimitOverrunError as exc:
+                # Keep draining in bounded pieces until this record's newline.
+                # Its tail must never be reinterpreted as an independent event.
+                await stream.readexactly(exc.consumed)
+                if not discarding:
+                    logger.warning("Deep-decoy runtime emitted an oversized telemetry record")
+                discarding = True
+                continue
+            except asyncio.IncompleteReadError as exc:
+                line = exc.partial
+                if discarding:
+                    return
             if not line:
                 return
+            if discarding:
+                discarding = False
+                continue
             try:
                 event = self._parse_connection_event(line)
             except ValueError:

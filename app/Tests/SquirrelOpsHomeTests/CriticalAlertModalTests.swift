@@ -3,6 +3,25 @@ import Testing
 
 @Suite("CriticalAlertModal")
 struct CriticalAlertModalTests {
+    @Test("Destination deduplication does not turn a single-device alert into a group")
+    func destinationKeyPreservesSingleDevicePresentation() {
+        let alert = AlertSummary(
+            id: 1, alertType: "behavioral.anomaly", severity: "high", title: "New destination",
+            sourceIp: "192.0.2.1", createdAt: "2026-09-26T00:00:00Z",
+            deviceCount: 1, issueKey: "destination:1.2.3.4:80"
+        )
+        #expect(alert.groupedDeviceCount == nil)
+        #expect(alert.sourceIp == "192.0.2.1")
+    }
+
+    @Test("Grouped security alerts keep their affected-device count", arguments: ["security.port_risk", "security.arp_conflict"])
+    func securityGroupsKeepCounts(alertType: String) {
+        let alert = AlertSummary(
+            id: 1, alertType: alertType, severity: "high", title: "Security issue",
+            createdAt: "2026-09-26T00:00:00Z", deviceCount: 2, issueKey: "synthetic-group"
+        )
+        #expect(alert.groupedDeviceCount == 2)
+    }
 
     @Test("firstCriticalAlert returns first unread critical alert")
     @MainActor

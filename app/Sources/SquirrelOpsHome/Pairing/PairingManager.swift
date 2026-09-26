@@ -155,6 +155,7 @@ public enum PairingError: Error, LocalizedError, Sendable {
     case invalidCertificateData
     case keychainStoreFailed(String)
     case unsupportedProtocol(Int)
+    case nonceGenerationFailed
 
     public var errorDescription: String? {
         switch self {
@@ -170,6 +171,8 @@ public enum PairingError: Error, LocalizedError, Sendable {
             return "Failed to store credentials in Keychain: \(detail)"
         case .unsupportedProtocol(let version):
             return "The sensor uses unsupported pairing protocol version \(version)"
+        case .nonceGenerationFailed:
+            return "Could not securely generate the pairing nonce"
         }
     }
 }
@@ -260,6 +263,10 @@ public final class PairingManager: @unchecked Sendable {
 
     private let client: any PairingClientProtocol
     private let localEnrollmentProvider: any LocalEnrollmentProviding
+    // Internal injection point for testing Security framework failures.
+    var fillRandomBytes: (UnsafeMutableRawBufferPointer) -> OSStatus = { buffer in
+        SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
+    }
     private var browser: NWBrowser?
     private var browserStateHandler: ((NWBrowser.State) -> Void)?
 
@@ -577,9 +584,8 @@ public final class PairingManager: @unchecked Sendable {
         // Step 3: Generate nonce and authenticate the v2 pairing transcript.
         let challengeData = try PairingCrypto.hexDecode(challengeResponse.challenge)
         var clientNonce = Data(count: 32)
-        clientNonce.withUnsafeMutableBytes { buffer in
-            _ = SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
-        }
+        let randomStatus = clientNonce.withUnsafeMutableBytes(fillRandomBytes)
+        guard randomStatus == errSecSuccess else { throw PairingError.nonceGenerationFailed }
         let clientNonceHex = PairingCrypto.hexEncode(clientNonce)
         let hmac = PairingCrypto.computeHMAC(
             challenge: challengeData,

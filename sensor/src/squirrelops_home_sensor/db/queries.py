@@ -148,15 +148,16 @@ async def insert_alert(
     device_id: int | None = None,
     decoy_id: int | None = None,
     event_seq: int | None = None,
+    issue_key: str | None = None,
 ) -> int:
     """Insert an alert and return its id."""
     cursor = await db.execute(
         """INSERT INTO home_alerts
            (incident_id, alert_type, severity, title, detail, source_ip,
-            source_mac, device_id, decoy_id, event_seq, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            source_mac, device_id, decoy_id, event_seq, created_at, issue_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (incident_id, alert_type, severity, title, detail, source_ip,
-         source_mac, device_id, decoy_id, event_seq, created_at),
+         source_mac, device_id, decoy_id, event_seq, created_at, issue_key),
     )
     await db.commit()
     return _lastrowid(cursor, "Alert insert")

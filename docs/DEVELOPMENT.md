@@ -330,6 +330,15 @@ guest exposes no network interface beyond loopback, and both relayed protocols
 emit connection telemetry. The SMB client is a development-only dependency and
 does not enter the sensor distribution.
 
+The same test checks SMB responses after a client write-side half-close,
+repeated authenticated SSH and SMB close-and-reconnect cycles beyond the
+16-slot pool size, and clean runtime exit while both protocol sockets are open. It uses loopback
+listeners in a disposable VM, not the installed sensor or its virtual IPs.
+`SocketRelayTests` separately exercises deterministic delayed workers,
+exact-once descriptor/lease release, cancellation, and concurrent byte parity.
+See the [relay/control fix report](testing/2026-09-26-relay-control-fixes.md)
+for the current candidate's results and limitations.
+
 Cross-device Finder and `smbutil` acceptance through the production virtual IP
 and packet-filter rules, Time Machine discovery, Bonjour discovery from another
 LAN device, and signed-package containment remain mandatory manual deception

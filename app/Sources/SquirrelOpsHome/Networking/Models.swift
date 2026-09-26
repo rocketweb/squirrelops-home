@@ -372,6 +372,14 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
     public let deviceCount: Int?
     public let issueKey: String?
 
+    public var groupedDeviceCount: Int? {
+        // Destination keys deduplicate a single device's behavioral alert;
+        // only grouped security findings replace the source address with a count.
+        guard alertType.hasPrefix("security."), issueKey != nil,
+              let deviceCount, deviceCount > 0 else { return nil }
+        return deviceCount
+    }
+
     public init(
         id: Int,
         incidentId: Int? = nil,

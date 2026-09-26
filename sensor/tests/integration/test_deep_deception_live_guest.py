@@ -173,7 +173,7 @@ def _smb_round_trip(port: int, password: str) -> None:
         smbclient.delete_session(server, port=port)
 
 
-async def _smb2_negotiate(port: int) -> bytes:
+async def _smb2_negotiate(port: int, *, half_close: bool = False) -> bytes:
     header = bytes.fromhex(
         "fe534d4240000000000000000000010000000000000000000000000000000000"
         "0000000000000000000000000000000000000000000000000000000000000000"
@@ -187,8 +187,13 @@ async def _smb2_negotiate(port: int) -> bytes:
     try:
         writer.write(len(packet).to_bytes(4, "big") + packet)
         await writer.drain()
-        response_length = int.from_bytes(await reader.readexactly(4), "big")
-        return await reader.readexactly(response_length)
+        if half_close:
+            writer.write_eof()
+        response_length = int.from_bytes(
+            await asyncio.wait_for(reader.readexactly(4), timeout=5), "big"
+        )
+        assert response_length <= 64 * 1024
+        return await asyncio.wait_for(reader.readexactly(response_length), timeout=5)
     finally:
         writer.close()
         await writer.wait_closed()
@@ -251,6 +256,30 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
                 ports[445],
                 persona.login_password,
             )
+            # More than the 16-slot admission pool, sequentially: both normal
+            # closes and write-side EOF must release their relay ownership.
+            for attempt in range(20):
+                response = await _smb2_negotiate(ports[445], half_close=attempt % 2 == 0)
+                assert response.startswith(b"\xfeSMB")
+                # Authenticate rather than deliberately triggering OpenSSH's
+                # existing penalty for repeated pre-auth disconnects.
+                assert await _ssh_command(
+                    ports[22], persona.login_password, tmp_path, "printf 'reconnected\\n'"
+                ) == "reconnected\n"
+                await asyncio.sleep(0.02)
+
+            # Stop this disposable VM with both protocol relays still open.
+            peers = [await asyncio.open_connection("127.0.0.1", ports[p]) for p in (22, 445)]
+            process = controller._process
+            try:
+                await controller.stop()
+                assert process is not None and process.returncode == 0
+                for reader, _ in peers:
+                    await asyncio.wait_for(reader.read(), timeout=5)
+            finally:
+                for _, writer in peers:
+                    writer.close()
+                    await writer.wait_closed()
         except BaseException as exc:
             pytest.fail(f"{exc}\nGuest diagnostics:\n{controller.diagnostic_tail}")
     finally:

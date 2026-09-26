@@ -157,28 +157,44 @@ final class TCPListener: @unchecked Sendable {
     }
 }
 
+protocol RelayGuestConnection: AnyObject {
+    var fileDescriptor: Int32 { get }
+    func close()
+}
+
+extension VZVirtioSocketConnection: RelayGuestConnection {}
+
 final class SocketRelay: @unchecked Sendable {
     private let client: RelayConnection
-    private let guestConnection: VZVirtioSocketConnection
+    private let guestConnection: any RelayGuestConnection
     private let lock = NSLock()
     private var closed = false
+    private var started = false
+    private var finishedPumps = 0
+    private var aborting = false
 
     init(
         client: RelayConnection,
-        guestConnection: VZVirtioSocketConnection
+        guestConnection: any RelayGuestConnection
     ) {
         self.client = client
         self.guestConnection = guestConnection
     }
 
-    func start() {
+    func start(schedule: (@escaping @Sendable () -> Void) -> Void = { work in
+        DispatchQueue.global(qos: .utility).async(execute: work)
+    }) {
+        lock.lock()
+        guard !started, !closed else { lock.unlock(); return }
+        started = true
+        lock.unlock()
         let clientDescriptor = client.descriptor
         let guestDescriptor = guestConnection.fileDescriptor
-        DispatchQueue.global(qos: .utility).async { [self] in
+        schedule { [self] in
             pump(from: clientDescriptor, to: guestDescriptor)
             finish()
         }
-        DispatchQueue.global(qos: .utility).async { [self] in
+        schedule { [self] in
             pump(from: guestDescriptor, to: clientDescriptor)
             finish()
         }
@@ -188,9 +204,15 @@ final class SocketRelay: @unchecked Sendable {
         var buffer = [UInt8](repeating: 0, count: 32 * 1024)
         while true {
             let count = Darwin.read(source, &buffer, buffer.count)
-            if count == 0 { return }
+            if count == 0 {
+                // EOF closes only this direction. The peer may still be preparing
+                // a response, and both descriptors remain owned until both pumps exit.
+                shutdown(destination, SHUT_WR)
+                return
+            }
             if count < 0 {
                 if errno == EINTR { continue }
+                cancel()
                 return
             }
             var written = 0
@@ -202,8 +224,9 @@ final class SocketRelay: @unchecked Sendable {
                         count - written
                     )
                 }
-                if result < 0 {
-                    if errno == EINTR { continue }
+                if result <= 0 {
+                    if result < 0 && errno == EINTR { continue }
+                    cancel()
                     return
                 }
                 written += result
@@ -211,15 +234,30 @@ final class SocketRelay: @unchecked Sendable {
         }
     }
 
+    /// Interrupt I/O without releasing descriptors a worker could still use.
+    func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, !aborting else { return }
+        aborting = true
+        shutdown(client.descriptor, SHUT_RDWR)
+        shutdown(guestConnection.fileDescriptor, SHUT_RDWR)
+        if !started {
+            closed = true
+            client.close()
+            guestConnection.close()
+        }
+    }
+
     private func finish() {
         lock.lock()
-        guard !closed else {
-            lock.unlock()
-            return
-        }
+        defer { lock.unlock() }
+        finishedPumps += 1
+        guard finishedPumps == 2, !closed else { return }
+        // Neither worker can make another syscall after its completion report.
+        // Only now may these descriptor numbers and the admission slot be reused.
         closed = true
         client.close()
         guestConnection.close()
-        lock.unlock()
     }
 }

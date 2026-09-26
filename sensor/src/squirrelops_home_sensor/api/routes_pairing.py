@@ -25,13 +25,14 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.x509.oid import NameOID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from squirrelops_home_sensor.api.deps import get_config, get_db, verify_client_cert
 from squirrelops_home_sensor.api.pairing_authority import (
     cert_fingerprint,
     sign_client_cert,
 )
+from squirrelops_home_sensor.api.pairing_validation import validated_client_name
 from squirrelops_home_sensor.secure_io import atomic_write_private_text
 from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
 
@@ -64,6 +65,11 @@ class VerifyRequest(BaseModel):
     response: str  # hex-encoded HMAC-SHA256 over the v2 transcript
     client_nonce: str  # hex-encoded 32 random bytes
     client_name: str
+
+    @field_validator("client_name")
+    @classmethod
+    def validate_client_name(cls, value: str) -> str:
+        return validated_client_name(value)
 
 
 class VerifyResponse(BaseModel):
@@ -397,7 +403,7 @@ def _verify_pairing(body: VerifyRequest, config: dict, ps: dict) -> VerifyRespon
     ).derive(ikm)
 
     session["shared_key"] = shared_key
-    session["client_name"] = body.client_name[:200]
+    session["client_name"] = body.client_name
     session["verified"] = True
 
     # Encrypt CA cert with shared key

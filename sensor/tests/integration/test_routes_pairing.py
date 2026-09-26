@@ -62,6 +62,32 @@ class TestPairingChallenge:
 class TestPairingVerify:
     """POST /pairing/verify -- HMAC verification and HKDF key derivation."""
 
+    @pytest.mark.parametrize("name", ["", "   ", "a" * 129, "Mac\nname", "\nMac", "Mac\t", "Mac\x00", "Mac\x7f"])
+    def test_invalid_client_name_never_verifies_session(self, client, app, name):
+        challenge, code = self._get_challenge_and_code(client, app)
+        nonce = os.urandom(32)
+        response = client.post("/pairing/verify", json={
+            "challenge_id": challenge["challenge_id"],
+            "response": self._compute_hmac(challenge, nonce, code),
+            "client_nonce": nonce.hex(), "client_name": name,
+        })
+        assert response.status_code == 422
+        session = app.state.pairing_state["sessions"][challenge["challenge_id"]]
+        assert not session.get("verified")
+        assert not session.get("shared_key")
+
+    def test_valid_unicode_client_name_is_trimmed(self, client, app):
+        challenge, code = self._get_challenge_and_code(client, app)
+        nonce = os.urandom(32)
+        response = client.post("/pairing/verify", json={
+            "challenge_id": challenge["challenge_id"],
+            "response": self._compute_hmac(challenge, nonce, code),
+            "client_nonce": nonce.hex(), "client_name": "  Matt’s Mac  ",
+        })
+        assert response.status_code == 200
+        session = app.state.pairing_state["sessions"][challenge["challenge_id"]]
+        assert session["client_name"] == "Matt’s Mac"
+
     def _get_challenge_and_code(self, client, app):
         """Helper: get challenge and extract the current pairing code from app state."""
         response = client.get("/pairing/code/challenge")

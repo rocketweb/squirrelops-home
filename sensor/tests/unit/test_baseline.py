@@ -16,6 +16,26 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+@pytest.mark.asyncio
+async def test_dedup_uses_exact_destination_not_title_substring(db):
+    await BaselineCollector(db=db).record_connections(1, [("10.0.0.1", 443)])
+    detector = AnomalyDetector(db=db)
+    for destination in [("11.2.3.4", 8080), ("1.2.3.4", 80), ("1.2.3.4", 8080)]:
+        assert len(await detector.check_device(1, [destination])) == 1
+        assert await detector.check_device(1, [destination]) == []
+
+
+@pytest.mark.asyncio
+async def test_dedup_key_survives_title_change_and_matches_legacy_title(db):
+    await BaselineCollector(db=db).record_connections(1, [("10.0.0.1", 443)])
+    detector = AnomalyDetector(db=db)
+    await detector.check_device(1, [("1.2.3.4", 80)])
+    await db.execute("UPDATE home_alerts SET title = 'Display copy changed'")
+    assert await detector.check_device(1, [("1.2.3.4", 80)]) == []
+    await db.execute("UPDATE home_alerts SET issue_key = NULL, title = 'New connection destination: 1.2.3.4:80'")
+    assert await detector.check_device(1, [("1.2.3.4", 80)]) == []
+
+
 @pytest.fixture
 async def db():
     """In-memory SQLite DB with full schema and a test device."""

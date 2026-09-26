@@ -28,6 +28,17 @@ are ignored, and plaintext development authentication is restricted to a
 literal loopback peer. mDNS is discovery only and is not an authorization
 boundary.
 
+Control WebSocket frames must be JSON objects. Malformed authentication is
+rejected; malformed messages after authentication close the connection with a
+protocol error. Replay cursors must be nonnegative signed-64-bit integers, not
+booleans or coerced strings. These checks apply to the management API, not to
+decoy protocols.
+
+Remote pairing and local enrollment use the same nonempty, trimmed client name
+with a 128-character maximum and no ASCII control characters. The app aborts
+remote pairing if secure nonce generation fails, before sending a proof or
+storing credentials.
+
 ## Automatic local enrollment
 
 The signed macOS package installs the app, unprivileged sensor, and root helper

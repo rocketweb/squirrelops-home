@@ -75,6 +75,27 @@ final class MockLocalEnrollmentProvider: LocalEnrollmentProviding, @unchecked Se
 
 @Suite("PairingManager", .serialized)
 struct PairingManagerTests {
+    @Test("Nonce RNG failure stops pairing before verify or credential storage")
+    func nonceFailureStopsPairing() async {
+        let client = MockPairingClient()
+        client.challengeResponse = ChallengeResponse(
+            challenge: String(repeating: "ab", count: 32),
+            sensorId: "synthetic-sensor", sensorName: "Synthetic Sensor"
+        )
+        let manager = PairingManager(client: client)
+        manager.fillRandomBytes = { _ in -1 }
+        let sensor = PairingManager.DiscoveredSensor(
+            name: "Synthetic", endpoint: .hostPort(host: "127.0.0.1", port: 8443),
+            host: "127.0.0.1", port: 8443
+        )
+        do {
+            _ = try await manager.pair(sensor: sensor, code: "synthetic-code")
+            Issue.record("Expected random generation failure")
+        } catch {
+            #expect(error.localizedDescription == "Could not securely generate the pairing nonce")
+        }
+        #expect(client.callLog == ["challenge"])
+    }
 
     private func useIsolatedPairedSensorAccount() -> String {
         let account = "io.squirrelops.home.paired-sensor.test.\(UUID().uuidString)"

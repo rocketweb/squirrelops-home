@@ -46,7 +46,7 @@ struct CriticalAlertModal: View {
                         .multilineTextAlignment(.center)
 
                     // Source info: device count for grouped, IP for single
-                    if alert.issueKey != nil, let count = alert.deviceCount, count > 0 {
+                    if let count = alert.groupedDeviceCount {
                         Text("Affecting \(count) device\(count == 1 ? "" : "s")")
                             .font(Typography.body)
                             .foregroundStyle(Theme.textSecondary(colorScheme))

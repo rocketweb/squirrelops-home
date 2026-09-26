@@ -17,6 +17,32 @@ from squirrelops_home_sensor.decoys.deep.guest_runtime import (
 from squirrelops_home_sensor.decoys.deep.persona import build_studio_mini_persona
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunked", [False, True])
+async def test_oversized_telemetry_resynchronizes_at_newline(tmp_path, chunked):
+    received = []
+    controller = GuestRuntimeController(
+        executable=tmp_path / "unused", bundle_root=tmp_path, state_dir=tmp_path,
+        bind_address="127.0.0.1", persona=_persona(), on_connection=received.append,
+    )
+    event = json.dumps({
+        "event": "connection", "source_ip": "192.0.2.44", "source_port": 53012,
+        "dest_port": 445, "protocol": "tcp", "interaction_type": "smb.connection",
+        "timestamp": "2026-08-31T16:01:02Z",
+    }).encode() + b"\n"
+    stream = asyncio.StreamReader(limit=512)
+    task = asyncio.create_task(controller._drain_output(stream))
+    stream.feed_data(b"x" * 2048)
+    if chunked:
+        for _ in range(3):
+            await asyncio.sleep(0)
+    # A valid-looking tail is still part of the bad record, not a new event.
+    stream.feed_data(event + event)
+    stream.feed_eof()
+    await asyncio.wait_for(task, timeout=2)
+    assert len(received) == 1
+
+
 def test_host_ready_budget_covers_persona_and_both_service_readiness_windows():
     from squirrelops_home_sensor.decoys.deep.guest_runtime import _READY_TIMEOUT_SECONDS
 
