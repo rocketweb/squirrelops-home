@@ -110,6 +110,27 @@ def _persona():
     )
 
 
+@pytest.mark.parametrize("service,port", [("ssh", 22), ("smb", 445)])
+@pytest.mark.parametrize("outcome", [
+    "guest_connected", "capacity_rejected", "guest_connect_failed", "guest_connect_timeout",
+])
+def test_guest_telemetry_preserves_relay_outcome(service, port, outcome):
+    interaction = f"{service}.{outcome}"
+    event = GuestRuntimeController._parse_connection_event(json.dumps({
+        "event": "connection", "source_ip": "192.0.2.44", "source_port": 53012,
+        "dest_port": port, "protocol": "tcp", "interaction_type": interaction,
+        "timestamp": "2026-08-31T16:01:02Z",
+    }).encode())
+    assert event.interaction_type == interaction
+
+
+def test_guest_ssh_shared_source_does_not_trigger_global_penalties():
+    config = (Path(__file__).resolve().parents[3] /
+              "guest/studio-mini/rootfs/etc/ssh/sshd_config").read_text()
+    assert "PerSourcePenaltyExemptList 127.0.0.1/32" in config
+    assert "MaxStartups 16\n" in config
+
+
 @pytest.mark.asyncio
 async def test_runtime_reports_only_ssh_and_smb_backend_ports(tmp_path: Path) -> None:
     bundle = tmp_path / "guest"

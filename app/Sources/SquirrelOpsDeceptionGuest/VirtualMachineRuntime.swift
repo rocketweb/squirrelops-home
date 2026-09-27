@@ -2,10 +2,6 @@ import Dispatch
 import Foundation
 import Virtualization
 
-private struct SocketConnectionTransfer: @unchecked Sendable {
-    let value: VZVirtioSocketConnection
-}
-
 final class RuntimeOutput: @unchecked Sendable {
     private let lock = NSLock()
 
@@ -30,9 +26,11 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
     private let limiter: ConnectionLimiter
     private let virtualMachine: VZVirtualMachine
     private var socketDevice: VZVirtioSocketDevice?
+    private let connector = GuestSocketConnector()
     private var listeners: [UInt16: TCPListener] = [:]
     private var stopContinuation: CheckedContinuation<Void, Never>?
     private var stopped = false
+    private var stopping = false
 
     init(
         manifest: ValidatedGuestManifest,
@@ -78,19 +76,20 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
         for service in manifest.manifest.services {
             let handler = guestConnectionHandler(
                 limiter: limiter,
-                onConnection: { [output] peer in
+                onConnection: { [output] peer, outcome in
                     output.write([
                         "event": "connection",
                         "source_ip": peer.address,
                         "source_port": Int(peer.port),
                         "dest_port": Int(service.advertisedPort),
                         "protocol": "tcp",
-                        "interaction_type": "\(service.name).connection",
+                        "interaction_type": "\(service.name).\(outcome.rawValue)",
                         "timestamp": ISO8601DateFormatter().string(from: Date()),
                     ])
                 },
                 onAccepted: { [weak self] connection, _ in
-                    await self?.accept(
+                    guard let self else { return .guestConnectFailed }
+                    return await self.accept(
                         connection: connection,
                         service: service
                     )
@@ -112,7 +111,7 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
                 connection.close()
                 return
             } catch {
-                if attempt == 239 {
+                if connector.isUnavailable || attempt == 239 {
                     throw GuestRuntimeFailure.guestServiceUnavailable(10_000)
                 }
                 try await Task.sleep(for: .milliseconds(250))
@@ -160,6 +159,7 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
                 connection.close()
                 return
             } catch {
+                if connector.isUnavailable { throw error }
                 try await Task.sleep(for: .milliseconds(250))
             }
         }
@@ -169,28 +169,20 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
     private func connect(
         device: VZVirtioSocketDevice,
         port: UInt32
-    ) async throws -> VZVirtioSocketConnection {
-        let transferred: SocketConnectionTransfer = try await withCheckedThrowingContinuation { continuation in
+    ) async throws -> any RelayGuestConnection {
+        try await connector.connect { callback in
             device.connect(toPort: port) { result in
-                switch result {
-                case let .success(connection):
-                    continuation.resume(
-                        returning: SocketConnectionTransfer(value: connection)
-                    )
-                case let .failure(error):
-                    continuation.resume(throwing: error)
-                }
+                callback(result.map { GuestSocketTransfer(value: $0) })
             }
         }
-        return transferred.value
     }
 
     private func accept(
         connection: RelayConnection,
         service: GuestManifest.Service
-    ) async {
+    ) async -> RelayOutcome {
         // The connection owns its fd and allowance even if this guard fails.
-        guard let socketDevice else { return }
+        guard !stopped, !stopping, let socketDevice else { return .guestConnectFailed }
         do {
             let guestConnection = try await connect(
                 device: socketDevice,
@@ -200,8 +192,17 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
                 client: connection,
                 guestConnection: guestConnection
             ).start()
+            return .guestConnected
         } catch {
             connection.close()
+            if case GuestConnectFailure.timedOut = error {
+                output.write(["event": "guest_error", "message": "Guest socket connection timed out"])
+                // Emit the outcome before process shutdown. The connector already
+                // refuses new VZ requests and closes every late callback.
+                Task { @MainActor [weak self] in await self?.stop() }
+                return .guestConnectTimeout
+            }
+            return .guestConnectFailed
         }
     }
 
@@ -213,7 +214,9 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
     }
 
     func stop() async {
-        guard !stopped else { return }
+        guard !stopped, !stopping else { return }
+        stopping = true
+        connector.invalidate()
         for listener in listeners.values {
             listener.stop()
         }
@@ -241,6 +244,7 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
     private func completeStop() {
         guard !stopped else { return }
         stopped = true
+        connector.invalidate()
         stopContinuation?.resume()
         stopContinuation = nil
     }

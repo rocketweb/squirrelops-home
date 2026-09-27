@@ -163,7 +163,9 @@ struct DesktopPolishTests {
                             #expect(rect.width >= 160, "\(section): search field is only \(rect.width) points wide")
                             #expect(rect.minX >= 0 && rect.maxX <= size.width, "\(section): search field escapes the window")
                         }
-                        view.subviews.forEach(checkSearchFields)
+                        for child in view.subviews {
+                            checkSearchFields(child)
+                        }
                     }
                     checkSearchFields(host)
                     if section == .devices || section == .alerts { #expect(searchFieldCount > 0) }

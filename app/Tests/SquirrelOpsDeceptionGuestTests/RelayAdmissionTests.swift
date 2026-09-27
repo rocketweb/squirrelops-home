@@ -11,8 +11,9 @@ struct RelayAdmissionTests {
         let limiter = ConnectionLimiter(maximum: 2)
         let gate = RelayGate()
         let observed = ConnectionCounter()
-        let handler = guestConnectionHandler(limiter: limiter, onConnection: { _ in observed.record() }) { _, _ in
+        let handler = guestConnectionHandler(limiter: limiter, onConnection: { _, outcome in observed.record(outcome) }) { _, _ in
             await gate.wait()
+            return .guestConnected
         }
         var peers: [Int32] = []
         var admitted: [Int32] = []
@@ -27,19 +28,18 @@ struct RelayAdmissionTests {
         }
         #expect(fcntl(admitted[0], F_GETFD) >= 0)
         #expect(fcntl(admitted[1], F_GETFD) >= 0)
-        let rejectedStatus = fcntl(admitted[2], F_GETFD)
-        let rejectedError = errno
-        #expect(rejectedStatus == -1)
-        #expect(rejectedError == EBADF)
-        #expect(observed.count == 3) // Rejected connections still produce evidence.
+        #expect(peerIsClosed(peers[2]))
+        #expect(observed.outcomes == [.capacityRejected])
         let extraSlot = limiter.acquire()
         #expect(!extraSlot)
         if extraSlot { limiter.release() }
         await gate.release()
         for _ in 0..<100 {
-            if fcntl(admitted[0], F_GETFD) == -1 && fcntl(admitted[1], F_GETFD) == -1 { break }
+            if peerIsClosed(peers[0]) && peerIsClosed(peers[1]) { break }
             try await Task.sleep(for: .milliseconds(5))
         }
+        #expect(observed.outcomes.filter { $0 == .guestConnected }.count == 2)
+        #expect(observed.outcomes.count == 3)
         #expect(limiter.acquire())
         #expect(limiter.acquire())
         #expect(!limiter.acquire())
@@ -74,16 +74,18 @@ struct RelayAdmissionTests {
     @Test("Early receiver exit releases the descriptor and allowance")
     func missingReceiverReleasesConnection() async throws {
         let limiter = ConnectionLimiter(maximum: 1)
-        let handler = guestConnectionHandler(limiter: limiter, onConnection: { _ in }) { _, _ in }
+        let observed = ConnectionCounter()
+        let handler = guestConnectionHandler(limiter: limiter, onConnection: { _, outcome in observed.record(outcome) }) { _, _ in .guestConnectFailed }
         var pair = [Int32](repeating: -1, count: 2)
         #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0)
         defer { Darwin.close(pair[1]) }
         handler(pair[0], PeerEndpoint(address: "127.0.0.1", port: 12345))
         for _ in 0..<100 {
-            if fcntl(pair[0], F_GETFD) == -1 { break }
+            if peerIsClosed(pair[1]) { break }
             try await Task.sleep(for: .milliseconds(5))
         }
-        #expect(fcntl(pair[0], F_GETFD) == -1)
+        #expect(peerIsClosed(pair[1]))
+        #expect(observed.outcomes == [.guestConnectFailed])
         #expect(limiter.acquire())
         #expect(!limiter.acquire())
         limiter.release()
@@ -101,17 +103,26 @@ struct RelayAdmissionTests {
     }
 }
 
+// Observe the peer we still own, not a closed descriptor number that another
+// concurrent suite (or the runtime) may already have reused.
+private func peerIsClosed(_ descriptor: Int32) -> Bool {
+    var readiness = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+    guard poll(&readiness, 1, 0) > 0 else { return false }
+    var byte: UInt8 = 0
+    return recv(descriptor, &byte, 1, MSG_PEEK | MSG_DONTWAIT) == 0
+}
+
 private final class ConnectionCounter: @unchecked Sendable {
     private let lock = NSLock()
-    private var value = 0
-    var count: Int {
+    private var value: [RelayOutcome] = []
+    var outcomes: [RelayOutcome] {
         lock.lock()
         defer { lock.unlock() }
         return value
     }
-    func record() {
+    func record(_ outcome: RelayOutcome) {
         lock.lock()
-        value += 1
+        value.append(outcome)
         lock.unlock()
     }
 }

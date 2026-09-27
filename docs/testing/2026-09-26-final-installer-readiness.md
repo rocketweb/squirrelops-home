@@ -2,11 +2,13 @@
 
 Date: 2026-09-26. Decision: **not yet ready to call an installer final**.
 
-Current source status: the [relay/control fixes](2026-09-26-relay-control-fixes.md)
-postdate review-fix batch 2 and have a rebuilt, verified local-test installer.
+Current source status: the [availability follow-up](2026-09-26-availability-review-fixes.md)
+postdates the relay/control fixes and has a rebuilt local-test installer.
+Its exact extracted release-mode VM acceptance needs approval for temporary
+root-owned guest copies; debug-runtime real-guest acceptance passed.
 That installer has not been installed and is not a notarized public release.
 The [GitHub preparation checklist](2026-09-26-github-release-preparation.md)
-records current remote controls and the proposed independent-reviewer change.
+records the baseline and approved independent-reviewer change.
 PF ownership-guard and recovery changes are implemented, but A5 still requires
 live acceptance. The remaining review items are not all closed. The entries
 below preserve earlier checkpoints and do not describe the newest artifact.

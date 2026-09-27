@@ -30,19 +30,29 @@ final class RelayConnection: @unchecked Sendable {
     deinit { close() }
 }
 
+enum RelayOutcome: String, Sendable {
+    case guestConnected = "guest_connected"
+    case capacityRejected = "capacity_rejected"
+    case guestConnectFailed = "guest_connect_failed"
+    case guestConnectTimeout = "guest_connect_timeout"
+}
+
 func guestConnectionHandler(
     limiter: ConnectionLimiter,
-    onConnection: @escaping @Sendable (PeerEndpoint) -> Void,
-    onAccepted: @escaping @MainActor @Sendable (RelayConnection, PeerEndpoint) async -> Void
+    onConnection: @escaping @Sendable (PeerEndpoint, RelayOutcome) -> Void,
+    onAccepted: @escaping @MainActor @Sendable (RelayConnection, PeerEndpoint) async -> RelayOutcome
 ) -> TCPListener.Handler {
     { descriptor, peer in
         // Reserve on the listener queue, before another MainActor task or fd can
         // accumulate. The existing ceiling includes queued and connected peers.
         let connection = RelayConnection(descriptor: descriptor, limiter: limiter)
-        onConnection(peer)
-        guard let connection else { return }
+        guard let connection else {
+            onConnection(peer, .capacityRejected)
+            return
+        }
         Task { @MainActor in
-            await onAccepted(connection, peer)
+            let outcome = await onAccepted(connection, peer)
+            onConnection(peer, outcome)
         }
     }
 }

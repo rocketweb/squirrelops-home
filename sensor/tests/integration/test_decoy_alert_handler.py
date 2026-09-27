@@ -86,6 +86,25 @@ class TestDecoyTrip:
     """A decoy.trip event should create a HIGH severity alert."""
 
     @pytest.mark.asyncio
+    async def test_rejected_and_relayed_attempts_keep_distinct_operator_evidence(self, handler, bus, db):
+        outcomes = ["capacity_rejected", "guest_connect_failed", "guest_connect_timeout", "guest_connected"]
+        for index, outcome in enumerate(outcomes):
+            await bus.deliver("decoy.trip", {
+                "source_ip": "192.0.2.44", "source_port": 53012 + index,
+                "dest_port": 22, "protocol": "tcp", "interaction_type": f"ssh.{outcome}",
+                "timestamp": f"2026-09-26T12:00:0{index}Z",
+            })
+        rows = await (await db.execute("SELECT detail FROM home_alerts")).fetchall()
+        assert len(rows) == 1
+        detail = json.loads(rows[0]["detail"])
+        assert detail["connection_count"] == 4
+        assert [e["interaction_type"] for e in detail["recent_connections"]] == [
+            f"ssh.{outcome}" for outcome in outcomes
+        ]
+        assert len(bus.events_of_type("alert.new")) == 1
+        assert len(bus.events_of_type("alert.updated")) == 3
+
+    @pytest.mark.asyncio
     async def test_creates_alert_row(self, handler, bus, db):
         await bus.deliver("decoy.trip", {
             "source_ip": "10.0.0.5",

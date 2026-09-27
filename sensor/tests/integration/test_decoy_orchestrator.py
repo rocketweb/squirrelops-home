@@ -519,6 +519,7 @@ class TestHealthStateMachine:
         self, orchestrator, db, monkeypatch,
     ):
         """Manual restart should reset failure count and return to ACTIVE."""
+        monkeypatch.setattr(orchestrator, "_get_bind_address", AsyncMock(return_value="127.0.0.1"))
         decoy = FakeDecoy(decoy_id=1, name="test", port=9999)
         await db.execute(
             """INSERT INTO decoys

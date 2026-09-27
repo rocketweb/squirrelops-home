@@ -246,9 +246,16 @@ class GuestRuntimeController:
             or dest_port not in {22, 445}
         ):
             raise ValueError("runtime event port is invalid")
-        expected_interaction = {22: "ssh.connection", 445: "smb.connection"}
+        service = {22: "ssh", 445: "smb"}[dest_port]
+        allowed_interactions = {
+            f"{service}.{outcome}" for outcome in (
+                "connection",  # Legacy runtimes did not distinguish relay admission.
+                "guest_connected", "capacity_rejected",
+                "guest_connect_failed", "guest_connect_timeout",
+            )
+        }
         interaction_type = payload["interaction_type"]
-        if interaction_type != expected_interaction[dest_port]:
+        if not isinstance(interaction_type, str) or interaction_type not in allowed_interactions:
             raise ValueError("runtime interaction type does not match its service")
         timestamp_value = payload["timestamp"]
         if not isinstance(timestamp_value, str) or len(timestamp_value) > 64:

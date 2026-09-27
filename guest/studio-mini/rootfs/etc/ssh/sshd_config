@@ -14,6 +14,10 @@ TCPKeepAlive yes
 ClientAliveInterval 0
 MaxAuthTries 6
 MaxSessions 10
+# Virtio relay peers share this address; penalties must not silence every visitor.
+PerSourcePenaltyExemptList 127.0.0.1/32
+# Match the existing host admission ceiling without an earlier random-drop threshold.
+MaxStartups 16
 AcceptEnv LANG LC_*
 Subsystem sftp internal-sftp
 AllowUsers buildbot

@@ -454,6 +454,19 @@ public struct AlertSummary: Codable, Sendable, Identifiable, Equatable, Hashable
         return parts.joined(separator: " · ")
     }
 
+    public static func relayOutcomeDescription(_ interaction: String?) -> String? {
+        guard let interaction else { return nil }
+        let parts = interaction.split(separator: ".")
+        guard parts.count == 2, parts[0] == "ssh" || parts[0] == "smb" else { return nil }
+        switch parts[1] {
+        case "guest_connected": return "Guest connected"
+        case "capacity_rejected": return "Rejected: guest at capacity"
+        case "guest_connect_failed": return "Guest connection failed"
+        case "guest_connect_timeout": return "Guest connection timed out"
+        default: return nil // Legacy .connection did not prove guest admission.
+        }
+    }
+
     public static func decoyServiceName(_ port: Int) -> String {
         switch port {
         case 22: return "SSH"

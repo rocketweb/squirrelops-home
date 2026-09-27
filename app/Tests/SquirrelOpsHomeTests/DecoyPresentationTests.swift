@@ -5,6 +5,17 @@ import Testing
 
 @Suite("Decoy presentation")
 struct DecoyPresentationTests {
+    @Test("Connection evidence distinguishes guest admission from rejected attempts")
+    func relayOutcomeLabels() {
+        #expect(AlertSummary.relayOutcomeDescription("ssh.guest_connected") == "Guest connected")
+        #expect(AlertSummary.relayOutcomeDescription("smb.capacity_rejected") == "Rejected: guest at capacity")
+        #expect(AlertSummary.relayOutcomeDescription("ssh.guest_connect_failed") == "Guest connection failed")
+        #expect(AlertSummary.relayOutcomeDescription("smb.guest_connect_timeout") == "Guest connection timed out")
+        // Old .connection events were ambiguous; never relabel them as successful.
+        #expect(AlertSummary.relayOutcomeDescription("ssh.connection") == nil)
+        #expect(AlertSummary.relayOutcomeDescription("http.guest_connected") == nil)
+    }
+
     @Test("Routine Studio states do not occupy the message area", arguments: ["active", "stopped", "disabled"])
     func routineStatesAreQuiet(status: String) {
         #expect(DeepDecoyStatus(status: status, reason: nil).operationalNote == nil)

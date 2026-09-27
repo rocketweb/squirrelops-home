@@ -5,6 +5,84 @@ import Testing
 
 @Suite("Socket relay lifetime", .serialized)
 struct SocketRelayTests {
+    @Test("Automatic half-close watchdog preserves progressing responses then cleans up a silent tail")
+    func progressingHalfClose() throws {
+        let fixture = try RelayFixture(policy: RelayTimeoutPolicy(idle: 0.3, halfClosedIdle: 0.3, pollInterval: 0.01))
+        fixture.relay.start()
+        defer { fixture.relay.cancel() }
+        shutdown(fixture.clientPeer, SHUT_WR)
+        #expect(try readThroughEOF(fixture.guestPeer).isEmpty)
+        // Total response duration exceeds the idle limit; progress keeps it alive.
+        for _ in 0..<10 {
+            try writeAll([42], to: fixture.guestPeer)
+            var byte: UInt8 = 0
+            #expect(Darwin.read(fixture.clientPeer, &byte, 1) == 1)
+            #expect(byte == 42)
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        #expect(try readThroughEOF(fixture.clientPeer).isEmpty)
+        // Worker finalization may follow EOF by a scheduler turn.
+        for _ in 0..<100 where fixture.guest.closeCount == 0 { Thread.sleep(forTimeInterval: 0.005) }
+        #expect(fixture.guest.closeCount == 1)
+        #expect(fixture.limiter.acquire())
+        fixture.limiter.release()
+    }
+
+    @Test("Idle watchdog interrupts a blocked writer without premature descriptor reuse")
+    func blockedWriteDeadline() throws {
+        let fixture = try RelayFixture(policy: RelayTimeoutPolicy(idle: 0.1, halfClosedIdle: 0.1, pollInterval: 0.01))
+        fixture.relay.start()
+        defer { fixture.relay.cancel() }
+        let finished = DispatchSemaphore(value: 0)
+        let peer = fixture.clientPeer
+        DispatchQueue.global().async {
+            var bytes = [UInt8](repeating: 42, count: 8192)
+            while Darwin.write(peer, &bytes, bytes.count) > 0 {}
+            finished.signal()
+        }
+        // Guest deliberately never drains its receive buffer.
+        #expect(finished.wait(timeout: .now() + 3) == .success)
+        for _ in 0..<100 where fixture.guest.closeCount == 0 { Thread.sleep(forTimeInterval: 0.005) }
+        #expect(fixture.guest.closeCount == 1)
+        #expect(fixture.limiter.acquire())
+        fixture.limiter.release()
+    }
+
+    @Test("Guest EOF cannot retain a silent client's admission indefinitely")
+    func guestEOFCleanup() throws {
+        let clock = RelayTestClock()
+        let fixture = try RelayFixture(now: { clock.now })
+        var jobs: [@Sendable () -> Void] = []
+        fixture.relay.start { jobs.append($0) }
+        fixture.closeGuestPeer()
+        jobs[1]()
+        clock.advance(31)
+        #expect(fixture.relay.checkDeadline())
+        // Deadline cancellation must retain ownership until the delayed worker exits.
+        #expect(fixture.guest.closeCount == 0)
+        fixture.relay.cancel() // Bounded cleanup even against the old behavior.
+        jobs[0]()
+        #expect(fixture.guest.closeCount == 1)
+        #expect(fixture.limiter.acquire())
+        fixture.limiter.release()
+    }
+
+    @Test("Idle connections expire without closing descriptors under a delayed worker")
+    func idleCleanup() throws {
+        let clock = RelayTestClock()
+        let fixture = try RelayFixture(now: { clock.now })
+        var jobs: [@Sendable () -> Void] = []
+        fixture.relay.start { jobs.append($0) }
+        clock.advance(299)
+        #expect(!fixture.relay.checkDeadline())
+        clock.advance(2)
+        #expect(fixture.relay.checkDeadline())
+        #expect(fixture.guest.closeCount == 0)
+        fixture.relay.cancel()
+        jobs.forEach { $0() }
+        #expect(fixture.guest.closeCount == 1)
+    }
+
     @Test("Cancel keeps descriptors until every scheduled worker exits; repeated start is inert")
     func cancelWithDelayedWorkers() throws {
         let fixture = try RelayFixture()
@@ -190,7 +268,8 @@ private final class RelayFixture {
     private(set) var guestPeer: Int32
     let relay: SocketRelay
 
-    init() throws {
+    init(policy: RelayTimeoutPolicy = RelayTimeoutPolicy(),
+         now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         var first = [Int32](repeating: -1, count: 2)
         try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &first) == 0)
         var second = [Int32](repeating: -1, count: 2)
@@ -208,7 +287,7 @@ private final class RelayFixture {
         guest = TestGuestConnection(second[0])
         clientPeer = first[1]
         guestPeer = second[1]
-        relay = SocketRelay(client: client, guestConnection: guest)
+        relay = SocketRelay(client: client, guestConnection: guest, timeoutPolicy: policy, now: now)
     }
 
     deinit {
@@ -220,4 +299,11 @@ private final class RelayFixture {
         Darwin.close(guestPeer)
         guestPeer = -1
     }
+}
+
+private final class RelayTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval = 0
+    var now: TimeInterval { lock.withLock { value } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { value += seconds } }
 }

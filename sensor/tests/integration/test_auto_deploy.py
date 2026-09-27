@@ -31,8 +31,11 @@ def event_bus():
 
 
 @pytest.fixture()
-def orchestrator(event_bus, db):
-    return DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
+def orchestrator(event_bus, db, monkeypatch):
+    instance = DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
+    # Lifecycle tests bind only loopback; LAN selection is tested separately.
+    monkeypatch.setattr(instance, "_get_bind_address", AsyncMock(return_value="127.0.0.1"))
+    return instance
 
 
 class TestAutoDeployReconcilesExistingTypes:
@@ -98,16 +101,11 @@ class TestAutoDeployCreatesDecoys:
         self, db, event_bus, monkeypatch,
     ):
         """No-LAN scans create no unreachable rows and re-resolve on the next scan."""
-        bindable_lan_address = orchestrator_module._route_selected_ip()
-        assert bindable_lan_address is not None
+        bindable_lan_address = "127.0.0.1"
         route_address: dict[str, str | None] = {"value": None}
         monkeypatch.setattr(
-            "squirrelops_home_sensor.decoys.orchestrator._route_selected_ip",
-            lambda: route_address["value"],
-        )
-        monkeypatch.setattr(
-            "squirrelops_home_sensor.decoys.orchestrator._interface_ipv4_addresses",
-            lambda _: [route_address["value"]] if route_address["value"] else [],
+            orchestrator_module, "_resolve_bind_address",
+            lambda **_: route_address["value"],
         )
         orchestrator = DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
 

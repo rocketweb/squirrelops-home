@@ -164,6 +164,12 @@ protocol RelayGuestConnection: AnyObject {
 
 extension VZVirtioSocketConnection: RelayGuestConnection {}
 
+struct RelayTimeoutPolicy: Sendable {
+    var idle: TimeInterval = 300
+    var halfClosedIdle: TimeInterval = 30
+    var pollInterval: TimeInterval = 1
+}
+
 final class SocketRelay: @unchecked Sendable {
     private let client: RelayConnection
     private let guestConnection: any RelayGuestConnection
@@ -172,13 +178,40 @@ final class SocketRelay: @unchecked Sendable {
     private var started = false
     private var finishedPumps = 0
     private var aborting = false
+    private let timeoutPolicy: RelayTimeoutPolicy
+    private let now: @Sendable () -> TimeInterval
+    private var lastProgress: TimeInterval
+    private var halfClosed = false
+    private var watchdog: DispatchSourceTimer?
 
     init(
         client: RelayConnection,
-        guestConnection: any RelayGuestConnection
+        guestConnection: any RelayGuestConnection,
+        timeoutPolicy: RelayTimeoutPolicy = RelayTimeoutPolicy(),
+        now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.client = client
         self.guestConnection = guestConnection
+        self.timeoutPolicy = timeoutPolicy
+        self.now = now
+        lastProgress = now()
+    }
+
+    @discardableResult
+    func checkDeadline() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard started, !closed, !aborting else { return false }
+        let limit = halfClosed ? timeoutPolicy.halfClosedIdle : timeoutPolicy.idle
+        guard now() - lastProgress >= limit else { return false }
+        cancelLocked()
+        return true
+    }
+
+    private func madeProgress() {
+        lock.lock()
+        lastProgress = now()
+        lock.unlock()
     }
 
     func start(schedule: (@escaping @Sendable () -> Void) -> Void = { work in
@@ -186,7 +219,25 @@ final class SocketRelay: @unchecked Sendable {
     }) {
         lock.lock()
         guard !started, !closed else { lock.unlock(); return }
+        // Shutdown alone is not a reliable wakeup for every Darwin socket
+        // interleaving. Nonblocking I/O plus bounded polls lets each worker
+        // observe cancellation without closing a descriptor under the other.
+        for descriptor in [client.descriptor, guestConnection.fileDescriptor] {
+            let flags = fcntl(descriptor, F_GETFL)
+            guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                cancelLocked()
+                lock.unlock()
+                return
+            }
+        }
         started = true
+        lastProgress = now()
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + timeoutPolicy.pollInterval,
+                       repeating: timeoutPolicy.pollInterval)
+        timer.setEventHandler { [weak self] in self?.checkDeadline() }
+        watchdog = timer
+        timer.activate()
         lock.unlock()
         let clientDescriptor = client.descriptor
         let guestDescriptor = guestConnection.fileDescriptor
@@ -202,21 +253,29 @@ final class SocketRelay: @unchecked Sendable {
 
     private func pump(from source: Int32, to destination: Int32) {
         var buffer = [UInt8](repeating: 0, count: 32 * 1024)
-        while true {
+        while waitForIO(source, event: Int16(POLLIN)) {
             let count = Darwin.read(source, &buffer, buffer.count)
             if count == 0 {
                 // EOF closes only this direction. The peer may still be preparing
                 // a response, and both descriptors remain owned until both pumps exit.
-                shutdown(destination, SHUT_WR)
+                lock.lock()
+                if !aborting {
+                    shutdown(destination, SHUT_WR)
+                    lastProgress = now()
+                    halfClosed = true
+                }
+                lock.unlock()
                 return
             }
             if count < 0 {
-                if errno == EINTR { continue }
+                if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
                 cancel()
                 return
             }
+            madeProgress()
             var written = 0
             while written < count {
+                guard waitForIO(destination, event: Int16(POLLOUT)) else { return }
                 let result = buffer.withUnsafeBytes { bytes in
                     Darwin.write(
                         destination,
@@ -225,21 +284,41 @@ final class SocketRelay: @unchecked Sendable {
                     )
                 }
                 if result <= 0 {
-                    if result < 0 && errno == EINTR { continue }
+                    if result < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) { continue }
                     cancel()
                     return
                 }
                 written += result
+                madeProgress()
             }
         }
+    }
+
+    private func waitForIO(_ descriptor: Int32, event: Int16) -> Bool {
+        while !lock.withLock({ aborting }) {
+            var request = pollfd(fd: descriptor, events: event, revents: 0)
+            let result = poll(&request, 1, 100)
+            if result > 0 { return !lock.withLock { aborting } }
+            if result < 0 && errno != EINTR {
+                cancel()
+                return false
+            }
+        }
+        return false
     }
 
     /// Interrupt I/O without releasing descriptors a worker could still use.
     func cancel() {
         lock.lock()
         defer { lock.unlock() }
+        cancelLocked()
+    }
+
+    private func cancelLocked() {
         guard !closed, !aborting else { return }
         aborting = true
+        watchdog?.cancel()
+        watchdog = nil
         shutdown(client.descriptor, SHUT_RDWR)
         shutdown(guestConnection.fileDescriptor, SHUT_RDWR)
         if !started {
@@ -257,6 +336,8 @@ final class SocketRelay: @unchecked Sendable {
         // Neither worker can make another syscall after its completion report.
         // Only now may these descriptor numbers and the admission slot be reused.
         closed = true
+        watchdog?.cancel()
+        watchdog = nil
         client.close()
         guestConnection.close()
     }

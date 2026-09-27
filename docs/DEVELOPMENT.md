@@ -339,6 +339,15 @@ exact-once descriptor/lease release, cancellation, and concurrent byte parity.
 See the [relay/control fix report](testing/2026-09-26-relay-control-fixes.md)
 for the current candidate's results and limitations.
 
+The follow-up availability test adds unauthenticated banner grabs, failed
+passwords followed by a valid login, and a full 16-slot pool. It leaves one
+client silent after the guest closes, then checks that the real 30-second
+half-close deadline restores that slot and records capacity rejection exactly
+once. Guest connection setup is bounded at 10 seconds. Unit tests cover late
+callbacks, blocked writers, deadline cancellation, and responses that continue
+past the idle interval while making progress. See the
+[availability follow-up report](testing/2026-09-26-availability-review-fixes.md).
+
 Cross-device Finder and `smbutil` acceptance through the production virtual IP
 and packet-filter rules, Time Machine discovery, Bonjour discovery from another
 LAN device, and signed-package containment remain mandatory manual deception

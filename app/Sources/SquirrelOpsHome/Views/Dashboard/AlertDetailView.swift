@@ -246,10 +246,18 @@ struct AlertDetailView: View {
                             .tracking(Typography.monoTracking)
                             .foregroundStyle(Theme.textTertiary(colorScheme))
                         Spacer()
-                        Text("\(AlertSummary.decoyServiceName(item.port)) :\(item.port)")
-                            .font(Typography.mono)
-                            .tracking(Typography.monoTracking)
-                            .foregroundStyle(Theme.textSecondary(colorScheme))
+                        VStack(alignment: .trailing, spacing: Spacing.xs) {
+                            Text("\(AlertSummary.decoyServiceName(item.port)) :\(item.port)")
+                                .font(Typography.mono)
+                                .tracking(Typography.monoTracking)
+                            if let outcome = item.outcome {
+                                Text(outcome)
+                                    .font(Typography.caption)
+                                    .multilineTextAlignment(.trailing)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
                     }
                     if index < connections.count - 1 {
                         Divider()
@@ -358,6 +366,7 @@ struct AlertDetailView: View {
     private struct RecentConnection {
         let port: Int
         let timestamp: String
+        let outcome: String?
     }
 
     private func recentConnections(_ alert: AlertDetail) -> [RecentConnection] {
@@ -371,7 +380,11 @@ struct AlertDetailView: View {
                   case .string(let timestamp) = connection["timestamp"] else {
                 return nil
             }
-            return RecentConnection(port: port, timestamp: timestamp)
+            let interaction: String?
+            if case .string(let value) = connection["interaction_type"] { interaction = value }
+            else { interaction = nil }
+            return RecentConnection(port: port, timestamp: timestamp,
+                                    outcome: AlertSummary.relayOutcomeDescription(interaction))
         }
     }
 

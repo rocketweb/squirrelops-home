@@ -670,6 +670,19 @@ creates connection evidence, but it cannot produce a Credential Trip because
 the sensor does not inspect encrypted protocol contents. Use the agent API test
 above to verify the explicit credential-detection path.
 
+New SSH/SMB records in **Recent Connections** also show whether the guest was
+connected, was at capacity, failed to connect, or timed out. A rejected attempt
+still increments the counter and triggers or updates the alert: it reached a
+decoy even though no guest session opened. Older records have no outcome label
+because they did not distinguish admission. **Guest connected** means the
+relay opened, not that the visitor authenticated.
+
+The guest supports 16 simultaneous SSH/SMB relays in total. Silent relays close
+after five minutes without progress; after one direction closes, the remaining
+direction gets 30 seconds without progress. Transfers that keep moving data
+continue. A guest-connect timeout stops the unhealthy runtime and leaves the
+host degraded; check its status before restarting it.
+
 If ARP resolution fails, confirm both devices are on the same non-isolated LAN.
 If ARP resolves but the advertised ports time out, inspect the sensor Mac's
 packet-filter forwarding. If the ports answer but counters do not change, the

@@ -155,6 +155,23 @@ internet connection. SSH and SMB listeners are opaque byte relays to two fixed
 guest socket ports, under the same connection ceiling as the VM. Neither the
 sensor nor runtime parses attacker-controlled SSH or SMB messages.
 
+The shared host ceiling remains 16 connections. A guest socket must connect
+within 10 seconds; a missed callback invalidates that VM's connector and stops
+the runtime rather than accumulating uncancellable Virtio requests. Late
+callbacks close their sockets. Active relays expire after five minutes without
+byte progress, or 30 seconds without progress after either direction reaches
+EOF. Progress renews the applicable deadline; active transfers have no absolute
+session-duration limit. Cancellation interrupts I/O but retains descriptor
+ownership and admission until both workers finish. Nonblocking I/O and bounded
+polls let workers observe cancellation even if socket shutdown misses a wakeup.
+
+Guest sshd exempts `127.0.0.1/32` from per-source penalties because every Virtio
+relay appears at that address. Its `MaxStartups 16` matches the host ceiling.
+This prevents one visitor's scan from penalizing all later SSH visitors.
+Connection evidence distinguishes guest-connected, capacity-rejected,
+guest-connect-failed, and guest-connect-timeout outcomes. Rejected attempts
+remain decoy hits; a connected guest channel is not proof of authentication.
+
 The guest kernel, initramfs, containment declaration, resources, services, and
 SHA-256 digests are validated before packaging and again before launch. Release
 artifacts must be root-owned and non-writable by other accounts. A linked,

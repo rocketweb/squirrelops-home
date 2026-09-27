@@ -199,6 +199,48 @@ async def _smb2_negotiate(port: int, *, half_close: bool = False) -> bytes:
         await writer.wait_closed()
 
 
+async def _capacity_and_guest_eof(ports, telemetry) -> None:
+    """One guest-closed SSH peer plus 15 silent SMB peers fills the real VZ pool."""
+    peers = []
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", ports[22])
+        peers.append((reader, writer))
+        assert (await asyncio.wait_for(reader.readline(), 5)).startswith(b"SSH-2.0-")
+        writer.write(b"NOT-AN-SSH-CLIENT\r\n")
+        await writer.drain()
+        await asyncio.wait_for(reader.read(), 5)  # Guest closes, client sends no FIN.
+        for _ in range(15):
+            peers.append(await asyncio.open_connection("127.0.0.1", ports[445]))
+        rejected_reader, rejected_writer = await asyncio.open_connection("127.0.0.1", ports[22])
+        rejected_port = rejected_writer.get_extra_info("sockname")[1]
+        try:
+            assert await asyncio.wait_for(rejected_reader.read(), 5) == b""
+        finally:
+            rejected_writer.close()
+            await rejected_writer.wait_closed()
+        for _ in range(100):
+            if any(e.source_port == rejected_port for e in telemetry):
+                break
+            await asyncio.sleep(0.01)
+        assert [e.interaction_type for e in telemetry if e.source_port == rejected_port] == [
+            "ssh.capacity_rejected"
+        ]
+        # Exact production half-close policy, not a test-only timeout override.
+        await asyncio.sleep(32)
+        resumed_reader, resumed_writer = await asyncio.open_connection("127.0.0.1", ports[22])
+        try:
+            assert (await asyncio.wait_for(resumed_reader.readline(), 5)).startswith(b"SSH-2.0-")
+        finally:
+            resumed_writer.close()
+            await resumed_writer.wait_closed()
+    finally:
+        for _, writer in peers:
+            writer.close()
+        for _, writer in peers:
+            await writer.wait_closed()
+    await asyncio.sleep(1)  # Let the guest-side bridges finish their peer cleanup.
+
+
 @pytest.mark.asyncio
 async def test_live_guest_serves_file_operations_and_isolates_host(
     tmp_path: Path,
@@ -225,6 +267,19 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
     ports = await controller.start()
     try:
         try:
+            # Scanner-style banner grabs must not penalize the shared guest source.
+            for _ in range(24):
+                reader, writer = await asyncio.open_connection("127.0.0.1", ports[22])
+                try:
+                    assert (await asyncio.wait_for(reader.readline(), 5)).startswith(b"SSH-2.0-")
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+                await asyncio.sleep(0.02)
+            for _ in range(5):
+                with pytest.raises(AssertionError, match="Permission denied"):
+                    await _ssh_command(ports[22], "deliberately-wrong-test-password", tmp_path, "true")
+            await _capacity_and_guest_eof(ports, telemetry)
             ssh_output = await _ssh_command(
                 ports[22], persona.login_password, tmp_path, "sw_vers"
             )
@@ -261,8 +316,7 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
             for attempt in range(20):
                 response = await _smb2_negotiate(ports[445], half_close=attempt % 2 == 0)
                 assert response.startswith(b"\xfeSMB")
-                # Authenticate rather than deliberately triggering OpenSSH's
-                # existing penalty for repeated pre-auth disconnects.
+                # Authenticated reconnects complement the scanner-style probes above.
                 assert await _ssh_command(
                     ports[22], persona.login_password, tmp_path, "printf 'reconnected\\n'"
                 ) == "reconnected\n"
@@ -291,3 +345,6 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
     assert smb_response.startswith(b"\xfeSMB")
     assert int.from_bytes(smb_response[12:14], "little") == 0
     assert {event.dest_port for event in telemetry} == {22, 445}
+    assert {event.interaction_type for event in telemetry} >= {
+        "ssh.guest_connected", "smb.guest_connected", "ssh.capacity_rejected",
+    }
