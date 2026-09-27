@@ -30,12 +30,17 @@ def event_bus():
     return bus
 
 
+@pytest.fixture(autouse=True)
+def isolated_lan_resolution(monkeypatch):
+    # Include orchestrators constructed within individual lifecycle tests.
+    # The offline/online test overrides this seam to exercise deferred startup.
+    # Concrete LAN selection is covered separately by resolver tests.
+    monkeypatch.setattr(orchestrator_module, "_resolve_bind_address", lambda **_: "127.0.0.1")
+
+
 @pytest.fixture()
-def orchestrator(event_bus, db, monkeypatch):
-    instance = DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
-    # Lifecycle tests bind only loopback; LAN selection is tested separately.
-    monkeypatch.setattr(instance, "_get_bind_address", AsyncMock(return_value="127.0.0.1"))
-    return instance
+def orchestrator(event_bus, db):
+    return DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
 
 
 class TestAutoDeployReconcilesExistingTypes:

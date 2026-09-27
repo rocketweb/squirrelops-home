@@ -37,5 +37,14 @@ jobs:
       - name: Build
         run: swift build
 
-      - name: Test
-        run: swift test
+      # Keep AppKit rendering and helper subprocess checks from starving the
+      # relay's sub-second deadline tests on the shared runner. Every target
+      # still runs in full, using the same target boundaries as local acceptance.
+      - name: Test app
+        run: swift test --filter SquirrelOpsHomeTests
+
+      - name: Test helper
+        run: swift test --skip-build --filter SquirrelOpsHelperTests
+
+      - name: Test guest runtime
+        run: swift test --skip-build --filter SquirrelOpsDeceptionGuestTests

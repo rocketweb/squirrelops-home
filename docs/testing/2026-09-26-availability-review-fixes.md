@@ -32,6 +32,14 @@ No installation, PF mutation, merge, tag, release dispatch, or publication.
 - App CI: replace recursive `forEach` in the desktop-layout test with explicit
   traversal compatible with Xcode 16.2. Sensor CI: isolate lifecycle fixtures
   from real `en0`/LAN resolution; production fail-closed binding is unchanged.
+- The first pushed App CI run compiled and ran all 538 tests, but its combined
+  run timed out in one sub-second socket deadline test while other suites executed.
+  CI now runs the three test targets separately, as in local acceptance. No
+  test is removed. Run `36286665185` preserves the failing combined-run evidence.
+- Sensor CI exposed one more directly constructed orchestrator outside the shared
+  fixture. LAN isolation now covers the entire lifecycle module, including that
+  instance; the offline/online test overrides the same resolver seam. The local
+  forced-missing-LAN reproduction changed from one failure to all tests passing.
 
 Transport timing and SSH refusal behavior change deliberately under the approved
 deception review. No banner, credential, protocol parser, forwarding policy,
@@ -77,6 +85,7 @@ All artifact paths below are relative to ignored `build/test-artifacts/`.
 | Disposable real guest | Passed, 59.80 seconds, final bounded-I/O runtime | `availability-live-guest-final.log` |
 | Release/package contracts | 132 passed, 6.72 seconds | `availability-contracts.log` |
 | Sensor type check | Pyright: zero errors, 29 warnings | `availability-pyright.log` |
+| CI fixture follow-up | 15 auto-deploy tests passed with missing LAN; 47 lifecycle/resolver tests passed normally; 132 release/package contracts passed again | `availability-auto-deploy-no-lan-green.log`, `availability-lifecycle-followup.log`, `availability-contracts-ci-followup.log` |
 | ARM64 and x86_64 guests | Both rebuilt from the pinned Alpine digest and unchanged package inventory | `availability-guest-arm64-build.log`, `availability-guest-x86_64-build.log` |
 | Extracted package | Exact app/Python/script/lock parity, guest digests, metadata, entitlement and 48 native-Python signatures, pip check, 19 isolated imports passed | `availability-package-verification-final.log` |
 
@@ -114,7 +123,10 @@ The live test uses the newly built ad-hoc-signed debug runtime and rebuilt
 ARM64 guest with the documented `SQUIRRELOPS_DECEPTION_RUNTIME` and
 `SQUIRRELOPS_GUEST_BUNDLE` variables. It binds only loopback. The package check
 script is `build/test-artifacts/verify-availability.sh`. Source/build/test
-inputs are hashed in `availability-source-sha256.txt` (439 entries).
+inputs are hashed in `availability-source-sha256.txt` (439 entries). The original
+installer-build manifest is retained as `availability-build-source-sha256.txt`;
+the final manifest includes the CI/test-only follow-up. Product-source parity
+with the extracted installer was checked again after that follow-up.
 
 ## Local installer
 
@@ -132,6 +144,9 @@ and was not installed. The previous package directory is preserved at
 preserved under `guest/studio-mini/build/*-before-availability`.
 The intermediate package from before the bounded-I/O follow-up is separately
 preserved as `build/test-artifacts/SquirrelOpsHome-2.1.0-before-bounded-io-local-test.pkg`.
+Its product sources are commit `3c2df5543aa1c343f13f5b2d699158d3bb709ca5`;
+the subsequent CI-isolation follow-up changes only tests/workflow/documentation,
+so the same verified installer bytes remain applicable.
 
 The build used CLT/macOS 26.5, scratch `.build/availability-release`,
 `SQUIRRELOPS_LOCAL_TEST_BUILD=1`, and `SKIP_PKG_SIGNING=1`. Apple identity,
