@@ -1,6 +1,6 @@
 """SQLite schema definitions for SquirrelOps Home Sensor.
 
-Extends Pingting's existing tables with 11 new tables for device fingerprints,
+Extends Pingting's existing tables with sensor-owned tables for device fingerprints,
 trust management, incidents, alerts, decoys, credentials, pairing, canary
 observations, and event logging.
 """
@@ -8,7 +8,7 @@ observations, and event logging.
 from __future__ import annotations
 
 # Current schema version -- increment when adding migrations
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # All table names managed by this schema (does NOT include Pingting's tables)
 _TABLE_NAMES: list[str] = [
@@ -22,6 +22,7 @@ _TABLE_NAMES: list[str] = [
     "decoys",
     "planted_credentials",
     "decoy_connections",
+    "deception_campaigns",
     "pairing",
     "canary_observations",
     "connection_baselines",

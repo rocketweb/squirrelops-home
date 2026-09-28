@@ -46,10 +46,11 @@ The supported release installation is the signed macOS package.
 
 ### Path A: Docker on Linux/NAS
 
-Linux release installation is paused. The current architecture gives the
-sensor container host networking and network-administration capabilities.
-Publication remains blocked until those operations move to a constrained
-companion service, or the product is explicitly reviewed as macOS-only.
+Linux release installation is paused. The source architecture now isolates
+host networking and network-administration capabilities in a constrained
+network-helper companion; the sensor itself is unprivileged. Publication
+remains blocked pending independent review and real-LAN acceptance of that
+boundary. Its presence in source does not mean a Linux release is approved.
 Existing experimental operators should stop the container when it is not
 needed and follow [Release security](RELEASE_SECURITY.md) before upgrading.
 
@@ -374,6 +375,26 @@ The **Decoys** tab shows all deployed deception. Traditional honeypots appear as
 individual cards. Service decoys copied from the same source are grouped into
 one fake-host card with a shared virtual IP and hostname.
 
+Pull down at the top of the list until **Release to refresh** appears, then
+release to reload decoys and their startup status. Short pulls and ordinary
+scrolling within the list do not refresh it.
+You can also press **Command-R** while Decoys is open, or right-click the list
+and choose **Refresh Decoys**. These actions also work when the list is empty.
+After both the list and status load successfully, **Updated just now** appears
+above the list for three seconds, then fades away without moving the cards.
+This confirms the refresh even when nothing has changed. VoiceOver receives a
+“Decoys updated” announcement; Reduce Motion disables the fade. Failed refreshes
+show an error instead, and background updates do not show the confirmation.
+The message area appears only for startup progress or useful diagnostic notes;
+routine active, stopped, and disabled states do not need a permanent banner.
+
+With macOS **Keyboard navigation** enabled, use Tab and Shift-Tab to move
+between controls. Space on **View Details** opens the decoy sheet; Escape
+closes it and returns focus to the link. If an already-open window still skips
+buttons after changing the macOS setting, reopen the app. VoiceOver names
+detail links by service and address, and enable switches by the fake host or
+listener they control.
+
 - Decoy name and type icon
 - Bind address and advertised service ports
 - Status badge (Active, Degraded, Stopped)
@@ -388,15 +409,293 @@ one fake-host card with a shared virtual IP and hostname.
 | Home Assistant | House | Fake Home Assistant login page and API |
 | File Share | Folder | Fake SMB/AFP share with planted credentials |
 | Mimic | Device-specific | A grouped fake host built from the observed services of one real source device |
+| Studio Build Mac | Desktop Mac | A grouped macOS-shaped host with real SSH and SMB plus Ollama, OpenAI-compatible, and MCP services |
 
 Traditional honeypot decoys are automatically selected based on what real services exist on your network. The sensor deploys complementary decoys — it won't duplicate services already present. Mimic decoys are deployed by the Squirrel Scouts subsystem and appear in the grid alongside honeypots, giving you a single view of all deception deployed on your network.
+
+### Studio Build Mac
+
+On a packaged macOS 2.1 installation, SquirrelOps also publishes one coherent
+deep decoy named `studio-mini.local`. It looks like a forgotten Mac mini used
+to build the synthetic FieldKit iOS app:
+
+- OpenSSH provides the `buildbot` shell and SFTP access.
+- Samba provides writable `Builds`, `Engineering`, and `Time Machine Backups`
+  shares using Apple's SMB extensions.
+- Ollama, OpenAI-compatible, and MCP endpoints expose the same project,
+  runbooks, model setup, build history, and synthetic credentials.
+- Shell history, Git metadata, Fastlane logs, Cursor, Claude, and Codex files
+  all come from the same persona and remain stable across sensor restarts.
+
+SSH and SMB run inside a fresh memory-only guest. It has no network adapter,
+host folders, clipboard, disk image, Keychain access, camera, microphone, or
+graphics device. The guest disappears when the deep decoy stops. Any file a
+visitor writes is synthetic and lost with that guest.
+
+The five service cards are grouped under one host and share one lifecycle
+control. The hostname and persona are release-managed so the surfaces cannot
+drift apart. If the signed runtime, architecture-matched guest, packet-filter
+isolation, virtual address, or Bonjour records cannot be established, the host
+is shown as **Degraded** and its public ports remain closed.
+
+The agent-facing APIs keep a source-specific narrative. Basic discovery stays
+ordinary. Requests for credentials, model tools, build runbooks, or deployment
+details reveal progressively deeper parts of the same synthetic world. The
+sensor never sends a visitor to a real repository, service, customer, or
+deployment.
+
+### Safely test the Studio Build Mac
+
+If Studio has no service cards, a **Studio Build Mac** notice at the top of
+Decoys shows startup progress or an actionable diagnostic reason. Normal stopped
+and disabled states stay quiet. Pull down on the list or press **Command-R** to
+reload that evidence; refreshing does not bypass startup checks or restart the guest. An enabled
+host whose startup failed is retried on a later network scan, no more often
+than once per minute. An intentionally stopped host stays stopped.
+
+OpenAI-compatible chat supports `stream: true` with SSE. Ollama chat streams
+NDJSON by default; use `stream: false` for one JSON response. Streaming and
+non-streaming replies describe the same synthetic workspace, and one request
+still produces one connection event.
+
+Ordinary HTTP File Share decoys provide parseable, unencrypted RSA key bait.
+Those keys are not authorized on the sensor Mac or any real service. On restart
+or upgrade, a file share replaces invalid legacy key bait for serving while
+retaining the original credential rows and trip history. Downloading a key is
+recorded as a connection, not proof that the key was successfully used elsewhere.
+
+Only run these tests against a SquirrelOps decoy you own or are authorized to
+test. Use the virtual IP shown on the Studio Build Mac card. Do not substitute
+the sensor Mac's normal address, another household device, or a public target.
+Run the network tests from a second device on the same LAN. Host-local traffic
+on the sensor Mac does not exercise the proxy ARP and packet-filter ingress
+path.
+
+The examples below use an environment variable so the target remains visible
+in every command:
+
+```bash
+DECOY_IP=192.168.1.203
+```
+
+Replace the example address with the address shown in the app.
+
+#### 1. Confirm the route and advertised ports from Linux
+
+```bash
+ip route get "$DECOY_IP"
+ip neigh show "$DECOY_IP"
+
+IFACE=$(ip route get "$DECOY_IP" | awk '/dev/ {for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}')
+printf 'LAN interface: %s\n' "$IFACE"
+sudo arping -I "$IFACE" -c 3 "$DECOY_IP"
+
+nc -w 3 -vz "$DECOY_IP" 22
+nc -w 3 -vz "$DECOY_IP" 445
+nmap -Pn -sT -sV -T3 --reason -p 22,445,1234,8765,11434 "$DECOY_IP"
+```
+
+`ip neigh` should show a MAC address instead of `INCOMPLETE` or `FAILED`.
+OpenSSH should answer on port 22 and Samba on port 445. The version scan may
+make several TCP connections, and every accepted connection should increase
+the corresponding counter in **Decoys > Studio Build Mac**.
+
+On another Mac, use these equivalents:
+
+```bash
+route -n get "$DECOY_IP"
+arp -n "$DECOY_IP"
+nc -G 3 -vz "$DECOY_IP" 22
+nc -G 3 -vz "$DECOY_IP" 445
+nmap -Pn -sT -sV -T3 --reason -p 22,445,1234,8765,11434 "$DECOY_IP"
+```
+
+#### 2. Exercise real SSH
+
+First verify negotiation without authenticating:
+
+```bash
+ssh -vvv -o ConnectTimeout=5 \
+  -o PreferredAuthentications=password \
+  -o PubkeyAuthentication=no \
+  "buildbot@$DECOY_IP"
+```
+
+Reaching a password prompt proves that TCP, OpenSSH negotiation, key exchange,
+and the guest relay are working. Press Control-C if you only want a connection
+test.
+
+For an authorized authenticated test, retrieve the install-specific synthetic
+password on the sensor Mac. This query reads only the SquirrelOps database and
+does not reveal a real account credential:
+
+```bash
+sudo -u _squirrelops /usr/bin/sqlite3 -readonly \
+  /Library/SquirrelOps/sensor/data/squirrelops.db \
+  "SELECT credential_value FROM planted_credentials WHERE planted_location='SSH buildbot login' ORDER BY id DESC LIMIT 1;"
+```
+
+Then connect from the second device and enter that synthetic password at the
+prompt:
+
+```bash
+TEST_KNOWN_HOSTS=$(mktemp)
+ssh -o UserKnownHostsFile="$TEST_KNOWN_HOSTS" \
+  -o StrictHostKeyChecking=accept-new \
+  -o PreferredAuthentications=password \
+  -o PubkeyAuthentication=no \
+  "buildbot@$DECOY_IP"
+```
+
+Inside the synthetic shell, inspect the coherent persona:
+
+```bash
+sw_vers
+id
+hostname
+ls -la /Users/buildbot
+find /Users/buildbot -maxdepth 3 -type f | sort | head -50
+cat /Users/buildbot/Projects/fieldkit-ios/README.md
+```
+
+The guest has no network device or access to the sensor Mac's files. Everything
+under `/Users/buildbot` is synthetic and disappears when the deep decoy stops.
+
+#### 3. Exercise SFTP read and write behavior
+
+Create a harmless local probe file on the second device:
+
+```bash
+printf 'SquirrelOps authorized acceptance test\n' > /tmp/squirrelops-acceptance.txt
+sftp -o UserKnownHostsFile="$TEST_KNOWN_HOSTS" \
+  -o StrictHostKeyChecking=accept-new \
+  -o PreferredAuthentications=password \
+  -o PubkeyAuthentication=no \
+  "buildbot@$DECOY_IP"
+```
+
+At the `sftp>` prompt:
+
+```text
+get /Users/buildbot/Projects/fieldkit-ios/README.md /tmp/fieldkit-readme.md
+put /tmp/squirrelops-acceptance.txt /Users/buildbot/Builds/squirrelops-acceptance.txt
+get /Users/buildbot/Builds/squirrelops-acceptance.txt /tmp/squirrelops-roundtrip.txt
+rm /Users/buildbot/Builds/squirrelops-acceptance.txt
+quit
+```
+
+#### 4. Exercise real SMB
+
+Anonymous share discovery confirms Samba negotiation but does not grant share
+access:
+
+```bash
+smbclient -L "//$DECOY_IP" -N -m SMB3
+```
+
+Authenticate to the synthetic Engineering share with user `buildbot`. Enter
+the same install-specific synthetic password when prompted:
+
+```bash
+smbclient "//$DECOY_IP/Engineering" -U buildbot -m SMB3
+```
+
+At the `smb: \\>` prompt:
+
+```text
+ls
+cd fieldkit-ios
+get README.md /tmp/fieldkit-smb-readme.md
+put /tmp/squirrelops-acceptance.txt squirrelops-acceptance.txt
+get squirrelops-acceptance.txt /tmp/squirrelops-smb-roundtrip.txt
+del squirrelops-acceptance.txt
+quit
+```
+
+These writes occur only in the memory-only synthetic guest.
+
+#### 5. Exercise the agent bait and a credential trip
+
+Basic discovery should return internally consistent synthetic model and build
+data:
+
+```bash
+curl --max-time 5 --fail-with-body \
+  "http://$DECOY_IP:1234/v1/models" | python3 -m json.tool
+
+curl --max-time 5 --fail-with-body \
+  "http://$DECOY_IP:11434/api/tags" | python3 -m json.tool
+
+curl --max-time 5 --fail-with-body \
+  -H 'Content-Type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_secrets","arguments":{"query":"OPENAI_API_KEY"}}}' \
+  "http://$DECOY_IP:8765/mcp" | python3 -m json.tool
+```
+
+The MCP response reveals a synthetic API key. To verify the Critical
+Credential Trip path without writing the key into shell history, read it into a
+temporary variable and submit it back to the decoy:
+
+```bash
+read -rsp 'Paste the synthetic API key: ' DECOY_API_KEY; printf '\n'
+curl --max-time 5 --fail-with-body \
+  -H "Authorization: Bearer $DECOY_API_KEY" \
+  "http://$DECOY_IP:1234/v1/models" | python3 -m json.tool
+unset DECOY_API_KEY
+```
+
+#### 6. Verify evidence in SquirrelOps
+
+Expected results:
+
+1. **Decoys > Studio Build Mac** shows increasing per-service connection
+   counters for SSH, SMB, Inference, Ollama, and MCP.
+2. The first connection from the test device creates one High Decoy Activity
+   alert.
+3. Further connections from the same source update that active alert. The
+   prompt and alert row show the total and a per-service breakdown such as
+   `10 connections · SSH 4 · SMB 6`.
+4. Opening the alert shows first and last seen times plus the 50 most recent
+   connection records. Every connection remains in the per-decoy forensic log,
+   even when the active alert is folded.
+5. Touching two or more decoy services promotes the alert to Port Scan
+   Detected.
+6. Submitting the synthetic API key produces a separate Critical Credential
+   Trip and increments the credential trip counter.
+7. **Clear** acknowledges the current active alert. The next connection then
+   creates a new alert. **History** shows previously acknowledged alerts.
+
+SSH and SMB are opaque encrypted relays. Successful SSH or SMB authentication
+creates connection evidence, but it cannot produce a Credential Trip because
+the sensor does not inspect encrypted protocol contents. Use the agent API test
+above to verify the explicit credential-detection path.
+
+New SSH/SMB records in **Recent Connections** also show whether the guest was
+connected, was at capacity, failed to connect, or timed out. A rejected attempt
+still increments the counter and triggers or updates the alert: it reached a
+decoy even though no guest session opened. Older records have no outcome label
+because they did not distinguish admission. **Guest connected** means the
+relay opened, not that the visitor authenticated.
+
+The guest supports 16 simultaneous SSH/SMB relays in total. Silent relays close
+after five minutes without progress; after one direction closes, the remaining
+direction gets 30 seconds without progress. Transfers that keep moving data
+continue. A guest-connect timeout stops the unhealthy runtime and leaves the
+host degraded; check its status before restarting it.
+
+If ARP resolution fails, confirm both devices are on the same non-isolated LAN.
+If ARP resolves but the advertised ports time out, inspect the sensor Mac's
+packet-filter forwarding. If the ports answer but counters do not change, the
+failure is in guest telemetry. If counters change but no alert appears, check
+the active alert, **History**, and notification settings before treating it as
+an alert pipeline failure.
 
 ### Decoy Status
 
 | Status | Meaning |
 |--------|---------|
 | **Active** | Running and listening for connections |
-| **Degraded** | Failed to restart after 3 crashes in 5 minutes — restart manually or wait for the 30-minute health check |
+| **Degraded** | The intended decoy is not fully operational. For Studio Build Mac this also covers a missing or rejected guest/runtime or incomplete Bonjour publication. |
 | **Stopped** | Disabled by user |
 
 For degraded decoys, a **Restart** button appears on the card. Restart, stop,
@@ -408,7 +707,7 @@ service row.
 Click a decoy card to open its detail sheet:
 
 - **Decoy Info** — Type, address, connection count, credential trip count, failure count, creation date
-- **Configuration** — View and edit decoy-specific configuration values (click **Edit Config** to modify)
+- **Configuration:** View and edit ordinary decoy-specific configuration values. The Studio Build Mac persona is release-managed and read-only.
 - **Connection Log** — Chronological list of all connections to this decoy, showing source IP, request path, timestamp, and whether a credential was used (highlighted with a "CREDENTIAL" label)
 
 ---
@@ -436,6 +735,15 @@ resemble real systems already present on the network. Supported HTTP credential
 routes trigger alerts when accessed.
 
 On macOS, proxy-ARP virtual IPs share the Mac's physical-interface MAC address.
+The macOS helper selects a physical Ethernet or Wi-Fi LAN. If a VPN owns the
+global default route, it checks physical interfaces in macOS network service
+order and verifies a private, directly connected gateway. The sensor uses that
+same interface, subnet, address, and gateway for scanning and decoy publication;
+it does not use the VPN tunnel's address. Automatic network settings stay
+automatic when saved. An explicit interface or subnet that conflicts with the
+helper-selected LAN is rejected before publication. This selection does not
+disable a VPN, change system routes, or override a VPN's local-network blocking.
+
 A reverse-DNS scan can also report the Mac's real hostname for those addresses.
 These are known Layer 2 limitations of this architecture. The fake services are
 designed to withstand ordinary service discovery, but this release does not
@@ -512,7 +820,7 @@ to implement a full authentication server.
 
 ### Alert Feed
 
-The **Alerts** tab shows a chronological feed of alerts within the 90-day retention window. By default, only **active (undismissed) alerts** are shown. Click the **History** toggle in the toolbar to include previously dismissed alerts.
+The **Alerts** tab shows a chronological feed of alerts within the 90-day retention window. By default, only **active (undismissed) alerts** are shown. Choose **Actions → Show History** in the toolbar to include previously dismissed alerts.
 
 All timestamps in the app use local system time in
 `YYYY-MM-DD HH:MM:SS` format.
@@ -528,8 +836,10 @@ New High and Critical alerts open a prompt over the dashboard:
   panel and are not deleted from the database.
 
 Several decoy connections from the same source are coalesced into one active
-scan alert instead of creating one alert row per port. Every individual
-connection is still retained in the decoy's forensic connection log.
+alert instead of creating one alert row per socket. The prompt and alert row
+show the total connection count and per-service breakdown. Opening the alert
+shows first and last seen times plus a bounded recent-connection timeline.
+Every individual connection is still retained in the decoy's forensic log.
 
 **Alert types:**
 
@@ -564,21 +874,22 @@ Click any grouped alert to open its **Alert Detail View**, which shows the full 
 
 The toolbar provides multiple filtering dimensions:
 
-- **Severity chips** — All, Critical, High, Medium, Low
-- **Type chips** — All Types, Decoy Trip, Credential Trip, New Device, MAC Changed, Security, System
-- **Date Range** — Click the calendar button to filter by date range (From/To)
-- **Search** — Free-text search across alert titles, source IPs, and alert types
-- **History toggle** — Show or hide previously dismissed alerts
+- **Severity menu**: All, Critical, High, Medium, Low
+- **Type menu**: All Types, Decoy Trip (including credential trips), New Device, MAC Changed, Security, System
+- **Dates**: Click the calendar button to filter by date range (From/To)
+- **Search**: Free-text search across alert titles, source IPs, and alert types
+- **Actions → Show History**: Show or hide previously dismissed alerts
 
-All filters combine (AND logic). Active filters appear highlighted.
+All filters combine (AND logic). The menus display the selected filters; a note appears when history is included.
 
 ### Alert Detail View
 
 Click any alert in the feed to open a detail sheet showing the full context of the alert:
 
-- **Header** — Severity indicator, title, alert type badge (e.g., "Port Scan Detected", "Credential Accessed"), severity label, and timestamp
+- **Header** — Severity indicator, title, alert type badge (e.g., "Decoy Activity", "Port Scan Detected", "Credential Accessed"), severity label, and timestamp
 - **Source** — IP address, MAC address (if the device was identified), hostname, vendor, and device ID
-- **Intrusion Details** — Destination port, protocol, request path (for HTTP-based detections), and detection method (HTTP Decoy or Mimic Decoy)
+- **Intrusion Details** — Folded connection count, per-service totals, latest destination port, protocol, first and last seen times, request path (for HTTP-based detections), and detection method
+- **Recent Connections** — Up to 50 timestamped service and port entries represented by a folded decoy alert
 - **Credential Access** (only for credential trip alerts) — Which planted credential was accessed and the request path used
 - **Decoy** — Which decoy was tripped, with name and ID
 
@@ -598,7 +909,7 @@ Use **Dismiss All** to acknowledge all alerts in an incident at once.
 
 ### Exporting Alerts
 
-Click **Export** in the alert feed toolbar to save alerts as JSON:
+Choose **Actions → Export…** in the alert feed toolbar to save alerts as JSON:
 
 1. Choose a date range or click **Export All** for the entire retention window
 2. Select a save location in the standard macOS save dialog
@@ -610,12 +921,12 @@ This is useful for preserving alert history beyond the 90-day retention window.
 
 There are several ways to dismiss alerts:
 
-- **Hover dismiss** — Hover over any alert in the feed to reveal a dismiss button (×) on the right side
+- **Dismiss button**: Each active alert has a dismiss button (×) on its right side, available without hovering
 - **Context menu** — Right-click any alert and select **Dismiss**
 - **Detail view** — Open a grouped alert's detail view and click the **Dismiss** button
-- **Bulk dismiss** — Click **Dismiss All** in the toolbar to dismiss all visible alerts at once
+- **Bulk dismiss**: Choose **Actions → Dismiss All** to acknowledge all active alerts, including ones hidden by the current filters
 
-Dismissed alerts are hidden from the default feed view but remain accessible via the **History** toggle. The unread count badge on the Alerts sidebar item updates automatically.
+Dismissed alerts are hidden from the default feed view but remain accessible via **Actions → Show History**. The unread count badge on the Alerts sidebar item updates automatically.
 
 Dismissing a grouped security alert is like saying "I've seen this, I know about it." If the situation changes — for example, a new device appears with the same risky port — the alert automatically becomes active again so you don't miss the change.
 
@@ -868,6 +1179,17 @@ The app reconnects automatically on a 30-second interval. After 5 minutes of dis
 - **No suitable candidates** — The scout engine needs eligible real devices with observed service ports. It creates one fake host per source, so a Full profile can legitimately have fewer than 10 fake hosts.
 - **Virtual IPs exhausted** — On macOS, the privileged helper always enforces offsets 200 through 250 from the observed network base. Every address is checked on the physical LAN before use; real devices are skipped, so fewer slots may be available.
 
+**macOS 27 recovery testing:** If a mimic briefly appears and then disappears,
+logs reporting the Mac's own Ethernet MAC as an IP conflict can indicate the
+Python interface-identity redaction issue. The recovery build reads identities
+through the authenticated helper. A `decoy_hosts.bind_address` uniqueness error
+is separate: stopped Studio hosts still reserve their addresses, and new mimics
+must skip those reservations. Do not delete the database or history to work
+around either issue. Classic listeners also need to bind to the selected LAN,
+not a VPN's default-route address. See the
+[September 25 recovery report](testing/2026-09-25-macos27-decoy-recovery.md)
+for the candidate's exact verification status and remaining acceptance steps.
+
 ### Settings Won't Save
 
 **Symptoms:** Error messages appear when changing settings.
@@ -989,10 +1311,10 @@ After pairing, the macOS app pins the sensor's TLS certificate by SHA-256 finger
 
 ### Virtual IP Safety
 
-Virtual IPs used by mimic decoys are:
+Virtual IPs used by mimic and Studio Build Mac decoys are:
 - Allocated from helper-enforced offsets 200 through 250 from the observed network base on macOS to avoid DHCP conflicts
 - Excluded from the sensor's own scan loop to prevent false device discoveries
-- Automatically evacuated if a real device claims the same IP — the mimic is stopped, the alias is removed, and the IP is reallocated
+- Automatically evacuated if a real device claims the same IP. The affected fake host is stopped and the alias is removed before the address can answer again.
 
 On macOS, the virtual IPs are published through proxy ARP and therefore share
 the sensor Mac's physical MAC address. The sensor advertises distinct mDNS

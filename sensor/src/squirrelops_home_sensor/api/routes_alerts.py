@@ -34,6 +34,9 @@ class AlertSummary(BaseModel):
     actioned_at: str | None = None
     created_at: str
     alert_count: int | None = None  # present when this represents an incident
+    connection_count: int | None = None  # folded decoy connections
+    ports: list[int] | None = None  # advertised ports represented by a decoy alert
+    service_counts: dict[str, int] | None = None  # folded count by advertised port
     device_count: int | None = None  # grouped alert: number of affected devices
     issue_key: str | None = None  # grouped alert: grouping key
 
@@ -163,6 +166,58 @@ def _parse_alert_row(row: aiosqlite.Row) -> AlertDetail:
     )
 
 
+def _decoy_activity_summary(
+    row: aiosqlite.Row,
+) -> tuple[int | None, list[int] | None, dict[str, int] | None]:
+    """Extract validated folded-connection fields from an alert detail."""
+    if row["alert_type"] != "decoy.trip":
+        return None, None, None
+
+    import json as _json
+
+    detail = row["detail"]
+    if isinstance(detail, str):
+        try:
+            detail = _json.loads(detail)
+        except (_json.JSONDecodeError, TypeError):
+            return None, None, None
+    if not isinstance(detail, dict):
+        return None, None, None
+
+    raw_connection_count = detail.get("connection_count")
+    connection_count = (
+        raw_connection_count
+        if isinstance(raw_connection_count, int)
+        and not isinstance(raw_connection_count, bool)
+        and raw_connection_count > 0
+        else None
+    )
+    raw_ports = detail.get("ports")
+    ports = (
+        sorted(
+            {
+                port
+                for port in raw_ports
+                if isinstance(port, int) and not isinstance(port, bool)
+            }
+        )
+        if isinstance(raw_ports, list)
+        else None
+    )
+    raw_service_counts = detail.get("service_counts")
+    service_counts = None
+    if isinstance(raw_service_counts, dict):
+        service_counts = {
+            str(port): count
+            for port, count in raw_service_counts.items()
+            if str(port).isdigit()
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and count > 0
+        }
+    return connection_count, ports, service_counts
+
+
 # ---------- Alert routes ----------
 
 
@@ -257,6 +312,7 @@ async def list_alerts(
     items = []
     for row in rows:
         keys = row.keys()
+        connection_count, ports, service_counts = _decoy_activity_summary(row)
         items.append(
             AlertSummary(
                 id=row["id"],
@@ -269,6 +325,9 @@ async def list_alerts(
                 actioned_at=row["actioned_at"],
                 created_at=row["created_at"],
                 alert_count=row["alert_count"],
+                connection_count=connection_count,
+                ports=ports,
+                service_counts=service_counts,
                 device_count=row["device_count"] if "device_count" in keys else None,
                 issue_key=row["issue_key"] if "issue_key" in keys else None,
             )

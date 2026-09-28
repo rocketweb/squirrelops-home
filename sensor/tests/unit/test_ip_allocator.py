@@ -487,6 +487,7 @@ class TestVirtualIPManager:
         ops.arp_scan.return_value = [
             ("192.168.1.1", "00:11:22:33:44:55"),
         ]
+        ops.local_interface_macs.return_value = {"1C:1D:D3:E0:7D:03"}
         ops.add_ip_alias = AsyncMock(return_value=True)
         alloc = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.50")
         mgr = VirtualIPManager(ops, alloc, db)
@@ -531,6 +532,7 @@ class TestVirtualIPManager:
         ops.arp_scan.return_value = [
             ("192.168.1.1", "00:11:22:33:44:55"),
         ]
+        ops.local_interface_macs.return_value = {"1C:1D:D3:E0:7D:03"}
         ops.add_ip_alias = AsyncMock(return_value=False)
         alloc = IPAllocator(
             "192.168.1.0/24",

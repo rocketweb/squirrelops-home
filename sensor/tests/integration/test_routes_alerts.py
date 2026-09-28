@@ -108,6 +108,35 @@ class TestListAlerts:
         assert data["total"] == 0
         assert data["items"] == []
 
+    def test_list_exposes_folded_decoy_activity_summary(self, client, db):
+        detail = json.dumps(
+            {
+                "dest_port": 445,
+                "protocol": "tcp",
+                "connection_count": 10,
+                "ports": [22, 445],
+                "service_counts": {"22": 4, "445": 6},
+            }
+        )
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(
+            db.execute(
+                """INSERT INTO home_alerts
+                   (alert_type, severity, title, detail, source_ip, created_at)
+                   VALUES ('decoy.trip', 'high', 'Port scan detected', ?, ?, ?)""",
+                (detail, "192.168.1.7", "2026-09-03T05:11:01Z"),
+            )
+        )
+        loop.run_until_complete(db.commit())
+
+        response = client.get("/alerts")
+
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["connection_count"] == 10
+        assert item["ports"] == [22, 445]
+        assert item["service_counts"] == {"22": 4, "445": 6}
+
 
 class TestGetAlert:
     """GET /alerts/{id} -- standalone alert detail."""

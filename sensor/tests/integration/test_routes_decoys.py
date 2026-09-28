@@ -67,18 +67,54 @@ class _FakeMimicOrchestrator:
         return True
 
 
+class _FakeDeepOrchestrator:
+    def __init__(self, db):
+        self.db = db
+        self.calls = []
+        self.operational = False
+
+    def effective_status(self, _decoy_id, persisted_status):
+        if persisted_status == "active" and not self.operational:
+            return "degraded"
+        return persisted_status
+
+    async def restart(self, decoy_id):
+        self.calls.append(("restart", decoy_id))
+        self.operational = True
+        return True
+
+    async def enable(self, decoy_id):
+        self.calls.append(("enable", decoy_id))
+        self.operational = True
+        return True
+
+    async def disable(self, decoy_id):
+        self.calls.append(("disable", decoy_id))
+        self.operational = False
+        await self.db.execute(
+            "UPDATE decoys SET status = 'stopped' WHERE id = ?", (decoy_id,)
+        )
+        await self.db.commit()
+        return True
+
 @pytest.fixture(autouse=True)
 def live_decoy_controls(app, db):
-    from squirrelops_home_sensor.api.routes_decoys import get_decoy_orchestrator
+    from squirrelops_home_sensor.api.routes_decoys import (
+        get_decoy_orchestrator,
+        get_deep_decoy_orchestrator,
+    )
     from squirrelops_home_sensor.api.routes_scouts import get_mimic_orchestrator
 
     classic = _FakeDecoyOrchestrator(db)
     mimic = _FakeMimicOrchestrator(db)
+    deep = _FakeDeepOrchestrator(db)
     app.dependency_overrides[get_decoy_orchestrator] = lambda: classic
     app.dependency_overrides[get_mimic_orchestrator] = lambda: mimic
-    yield classic, mimic
+    app.dependency_overrides[get_deep_decoy_orchestrator] = lambda: deep
+    yield classic, mimic, deep
     app.dependency_overrides.pop(get_decoy_orchestrator, None)
     app.dependency_overrides.pop(get_mimic_orchestrator, None)
+    app.dependency_overrides.pop(get_deep_decoy_orchestrator, None)
 
 
 async def seed_decoy_connections(db, decoy_id, count=3):
@@ -156,6 +192,25 @@ class TestListDecoys:
         response = client.get("/decoys")
         data = response.json()
         assert "connection_count" in data["items"][0]
+
+    def test_list_overlays_unavailable_deep_host_as_degraded(
+        self,
+        client,
+        db,
+    ):
+        ids = asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                "UPDATE decoys SET decoy_type = 'deep' WHERE id = ?",
+                (ids[0],),
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        response = client.get("/decoys")
+
+        assert response.status_code == 200
+        assert response.json()["items"][0]["status"] == "degraded"
 
     def test_list_includes_credential_trip_count(self, client, db):
         asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
@@ -248,6 +303,22 @@ class TestRestartDecoy:
 
         assert response.status_code == 200
         assert ("restart", ids[0]) in live_decoy_controls[1].calls
+
+    def test_restart_controls_grouped_deep_runtime(
+        self, client, db, live_decoy_controls,
+    ):
+        ids = asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                "UPDATE decoys SET decoy_type = 'deep' WHERE id = ?", (ids[0],)
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        response = client.post(f"/decoys/{ids[0]}/restart")
+
+        assert response.status_code == 200
+        assert ("restart", ids[0]) in live_decoy_controls[2].calls
 
 
 class TestEnableDecoy:
@@ -400,6 +471,22 @@ class TestUpdateDecoyConfig:
     def test_update_config_nonexistent_returns_404(self, client, db):
         response = client.put("/decoys/9999/config", json={"key": "value"})
         assert response.status_code == 404
+
+    def test_deep_persona_config_is_not_mutable(self, client, db):
+        ids = asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        asyncio.get_event_loop().run_until_complete(
+            db.execute(
+                "UPDATE decoys SET decoy_type = 'deep' WHERE id = ?", (ids[0],)
+            )
+        )
+        asyncio.get_event_loop().run_until_complete(db.commit())
+
+        response = client.put(
+            f"/decoys/{ids[0]}/config",
+            json={"persona": "attacker-selected"},
+        )
+
+        assert response.status_code == 409
 
 
 class TestDecoyConnections:

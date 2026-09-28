@@ -31,6 +31,7 @@ from squirrelops_home_sensor.api.pairing_authority import (
     cert_fingerprint,
     sign_client_cert,
 )
+from squirrelops_home_sensor.api.pairing_validation import validated_client_name
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,6 @@ ENROLLMENT_EXPIRY_SECONDS = 300
 MAX_PENDING_ENROLLMENTS = 8
 MAX_REQUEST_BYTES = 16_384
 MAX_CSR_BYTES = 8_192
-MAX_CLIENT_NAME_LENGTH = 128
 
 
 class LocalEnrollmentError(ValueError):
@@ -72,14 +72,10 @@ def _validated_request_id(value: str) -> str:
 
 
 def _validated_client_name(value: str) -> str:
-    if not isinstance(value, str):
-        raise LocalEnrollmentError("Invalid client name.")
-    normalized = value.strip()
-    if not normalized or len(normalized) > MAX_CLIENT_NAME_LENGTH:
-        raise LocalEnrollmentError("Invalid client name.")
-    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in normalized):
-        raise LocalEnrollmentError("Invalid client name.")
-    return normalized
+    try:
+        return validated_client_name(value)
+    except ValueError as exc:
+        raise LocalEnrollmentError(str(exc)) from exc
 
 
 def _validated_csr(csr_pem: str, client_name: str) -> x509.CertificateSigningRequest:

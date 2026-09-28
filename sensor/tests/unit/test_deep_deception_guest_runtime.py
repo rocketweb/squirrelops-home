@@ -1,0 +1,412 @@
+"""Process-boundary tests for the signed macOS deception guest runtime."""
+
+import asyncio
+import hashlib
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from squirrelops_home_sensor.decoys.deep.guest_runtime import (
+    GuestConnectionTelemetry,
+    GuestRuntimeController,
+    GuestRuntimeError,
+)
+from squirrelops_home_sensor.decoys.deep.persona import build_studio_mini_persona
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunked", [False, True])
+async def test_oversized_telemetry_resynchronizes_at_newline(tmp_path, chunked):
+    received = []
+    controller = GuestRuntimeController(
+        executable=tmp_path / "unused", bundle_root=tmp_path, state_dir=tmp_path,
+        bind_address="127.0.0.1", persona=_persona(), on_connection=received.append,
+    )
+    event = json.dumps({
+        "event": "connection", "source_ip": "192.0.2.44", "source_port": 53012,
+        "dest_port": 445, "protocol": "tcp", "interaction_type": "smb.connection",
+        "timestamp": "2026-08-31T16:01:02Z",
+    }).encode() + b"\n"
+    stream = asyncio.StreamReader(limit=512)
+    task = asyncio.create_task(controller._drain_output(stream))
+    stream.feed_data(b"x" * 2048)
+    if chunked:
+        for _ in range(3):
+            await asyncio.sleep(0)
+    # A valid-looking tail is still part of the bad record, not a new event.
+    stream.feed_data(event + event)
+    stream.feed_eof()
+    await asyncio.wait_for(task, timeout=2)
+    assert len(received) == 1
+
+
+def test_host_ready_budget_covers_persona_and_both_service_readiness_windows():
+    from squirrelops_home_sensor.decoys.deep.guest_runtime import _READY_TIMEOUT_SECONDS
+
+    # Swift permits 240 attempts with 250ms backoff for persona + SSH + SMB.
+    # Allow a further 30 seconds for VM start and process scheduling. The host
+    # must not kill a guest still inside its reviewed startup windows.
+    assert _READY_TIMEOUT_SECONDS >= 3 * 240 * 0.25 + 30
+
+
+def _write_bundle(root: Path) -> None:
+    root.mkdir(mode=0o700)
+    kernel = b"test-linux-kernel"
+    initramfs = b"test-memory-only-rootfs"
+    (root / "vmlinuz").write_bytes(kernel)
+    (root / "studio-mini.initramfs").write_bytes(initramfs)
+    manifest = {
+        "schema_version": 1,
+        "persona_id": "studio-mini-v1",
+        "boot": {
+            "kernel": {
+                "path": "vmlinuz",
+                "sha256": hashlib.sha256(kernel).hexdigest(),
+            },
+            "initial_ramdisk": {
+                "path": "studio-mini.initramfs",
+                "sha256": hashlib.sha256(initramfs).hexdigest(),
+            },
+            "command_line": "console=hvc0 rdinit=/sbin/init",
+        },
+        "resources": {
+            "cpu_count": 2,
+            "memory_bytes": 1073741824,
+            "max_connections": 16,
+        },
+        "containment": {
+            "network_devices": 0,
+            "host_shares": [],
+            "clipboard": False,
+            "egress": "none",
+            "root_filesystem": "memory-only",
+        },
+        "services": [
+            {"name": "ssh", "advertised_port": 22, "guest_vsock_port": 10022},
+            {"name": "smb", "advertised_port": 445, "guest_vsock_port": 10445},
+        ],
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _write_runtime(path: Path, ready_line: str, *, keep_running: bool = True) -> None:
+    tail = "while true; do sleep 1; done" if keep_running else "exit 0"
+    path.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' '{ready_line}'\n"
+        f"{tail}\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _persona():
+    return build_studio_mini_persona(
+        b"r" * 32,
+        datetime(2026, 8, 31, 16, 0, tzinfo=UTC),
+    )
+
+
+@pytest.mark.parametrize("service,port", [("ssh", 22), ("smb", 445)])
+@pytest.mark.parametrize("outcome", [
+    "guest_connected", "capacity_rejected", "guest_connect_failed", "guest_connect_timeout",
+])
+def test_guest_telemetry_preserves_relay_outcome(service, port, outcome):
+    interaction = f"{service}.{outcome}"
+    event = GuestRuntimeController._parse_connection_event(json.dumps({
+        "event": "connection", "source_ip": "192.0.2.44", "source_port": 53012,
+        "dest_port": port, "protocol": "tcp", "interaction_type": interaction,
+        "timestamp": "2026-08-31T16:01:02Z",
+    }).encode())
+    assert event.interaction_type == interaction
+
+
+def test_guest_ssh_shared_source_does_not_trigger_global_penalties():
+    config = (Path(__file__).resolve().parents[3] /
+              "guest/studio-mini/rootfs/etc/ssh/sshd_config").read_text()
+    assert "PerSourcePenaltyExemptList 127.0.0.1/32" in config
+    assert "MaxStartups 16\n" in config
+
+
+@pytest.mark.asyncio
+async def test_runtime_reports_only_ssh_and_smb_backend_ports(tmp_path: Path) -> None:
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    _write_runtime(
+        runtime,
+        '{"status":"ready","persona_id":"studio-mini-v1",'
+        '"services":{"22":49122,"445":49445}}',
+    )
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=state,
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+    )
+
+    ports = await controller.start()
+    try:
+        assert ports == {22: 49122, 445: 49445}
+        assert controller.is_running is True
+    finally:
+        await controller.stop()
+
+    assert controller.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_executable_must_not_be_symlinked(tmp_path: Path) -> None:
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    real_runtime = tmp_path / "real-runtime"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    _write_runtime(real_runtime, '{"status":"ready"}')
+    runtime.symlink_to(real_runtime)
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=state,
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+    )
+
+    with pytest.raises(GuestRuntimeError, match="regular file"):
+        await controller.start()
+
+
+@pytest.mark.asyncio
+async def test_runtime_executable_must_not_be_group_writable(tmp_path: Path) -> None:
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    _write_runtime(runtime, '{"status":"ready"}')
+    runtime.chmod(0o775)
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=state,
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+    )
+
+    with pytest.raises(GuestRuntimeError, match="writable"):
+        await controller.start()
+
+
+@pytest.mark.asyncio
+async def test_runtime_cannot_publish_unreviewed_port(tmp_path: Path) -> None:
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    _write_runtime(
+        runtime,
+        '{"status":"ready","persona_id":"studio-mini-v1",'
+        '"services":{"22":49122,"445":49445,"9001":49901}}',
+    )
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=state,
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+    )
+
+    with pytest.raises(GuestRuntimeError, match="service set"):
+        await controller.start()
+    assert controller.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_exit_before_readiness_fails_closed(tmp_path: Path) -> None:
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    _write_runtime(runtime, '{"status":"starting"}', keep_running=False)
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=state,
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+    )
+
+    with pytest.raises(GuestRuntimeError, match="ready"):
+        await controller.start()
+    assert controller.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_ready_deadline_terminates_child_without_publishing_ports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from squirrelops_home_sensor.decoys.deep import guest_runtime
+
+    monkeypatch.setattr(guest_runtime, "_READY_TIMEOUT_SECONDS", 0.05)
+    bundle = tmp_path / "guest"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    # Exec avoids leaving a shell-owned sleep child behind during cleanup.
+    runtime.write_text("#!/bin/sh\nexec /bin/sleep 30\n", encoding="utf-8")
+    runtime.chmod(0o755)
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=tmp_path / "state",
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+    )
+    children: list[asyncio.subprocess.Process] = []
+    original_spawn = asyncio.create_subprocess_exec
+
+    async def capture_spawn(*args, **kwargs):
+        process = await original_spawn(*args, **kwargs)
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", capture_spawn)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(controller.start(), timeout=3)
+    assert len(children) == 1
+    assert children[0].returncode is not None
+    assert controller.is_running is False
+    assert controller.backend_ports == {}
+
+
+@pytest.mark.asyncio
+async def test_runtime_drains_and_validates_connection_telemetry(tmp_path: Path) -> None:
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    runtime.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' '{\"status\":\"ready\",\"persona_id\":\"studio-mini-v1\","
+        "\"services\":{\"22\":49122,\"445\":49445}}'\n"
+        "printf '%s\\n' '{\"event\":\"connection\",\"source_ip\":\"192.0.2.44\","
+        "\"source_port\":53012,\"dest_port\":445,\"protocol\":\"tcp\","
+        "\"interaction_type\":\"smb.connection\","
+        "\"timestamp\":\"2026-08-31T16:01:02Z\"}'\n"
+        "while true; do sleep 1; done\n",
+        encoding="utf-8",
+    )
+    runtime.chmod(0o755)
+    received: list[GuestConnectionTelemetry] = []
+    observed = asyncio.Event()
+
+    def capture(event: GuestConnectionTelemetry) -> None:
+        received.append(event)
+        observed.set()
+
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=state,
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+        on_connection=capture,
+    )
+
+    await controller.start()
+    try:
+        await asyncio.wait_for(observed.wait(), timeout=2)
+        assert received == [
+            GuestConnectionTelemetry(
+                source_ip="192.0.2.44",
+                source_port=53012,
+                dest_port=445,
+                protocol="tcp",
+                interaction_type="smb.connection",
+                timestamp=datetime(2026, 8, 31, 16, 1, 2, tzinfo=UTC),
+            )
+        ]
+    finally:
+        await controller.stop()
+
+
+@pytest.mark.asyncio
+async def test_runtime_reports_an_unexpected_exit_and_clears_backend_ports(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    runtime.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' '{\"status\":\"ready\",\"persona_id\":\"studio-mini-v1\","
+        "\"services\":{\"22\":49122,\"445\":49445}}'\n"
+        "sleep 0.1\n"
+        "exit 23\n",
+        encoding="utf-8",
+    )
+    runtime.chmod(0o755)
+    exit_codes: list[int] = []
+    exited = asyncio.Event()
+
+    def capture_exit(returncode: int) -> None:
+        exit_codes.append(returncode)
+        exited.set()
+
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=state,
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+        on_exit=capture_exit,
+    )
+
+    assert await controller.start() == {22: 49122, 445: 49445}
+    await asyncio.wait_for(exited.wait(), timeout=2)
+
+    assert exit_codes == [23]
+    assert controller.is_running is False
+    assert controller.backend_ports == {}
+    await controller.stop()
+
+
+@pytest.mark.asyncio
+async def test_requested_runtime_stop_does_not_report_a_crash(tmp_path: Path) -> None:
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    _write_runtime(
+        runtime,
+        '{"status":"ready","persona_id":"studio-mini-v1",'
+        '"services":{"22":49122,"445":49445}}',
+    )
+    exit_codes: list[int] = []
+    controller = GuestRuntimeController(
+        executable=runtime,
+        bundle_root=bundle,
+        state_dir=state,
+        bind_address="127.0.0.1",
+        trusted_uids={os.getuid()},
+        persona=_persona(),
+        on_exit=exit_codes.append,
+    )
+
+    await controller.start()
+    await controller.stop()
+    await asyncio.sleep(0)
+
+    assert exit_codes == []

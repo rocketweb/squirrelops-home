@@ -183,8 +183,9 @@ def _resolve_bind_address(
 
     Binding classic decoys to ``0.0.0.0`` also exposed them on every mimic
     virtual-IP alias, making those aliases look exactly like the sensor host.
-    The default-route address is authoritative while online. Offline, use the
-    configured interface's primary non-virtual address. Active virtual IPs and
+    The configured interface is authoritative, including when a VPN owns the
+    global default route. Prefer the route-selected address only if that
+    interface actually owns it. Active virtual IPs and
     the configured allocation range are excluded so a classic listener can
     never accidentally bind to a mimic alias.
     """
@@ -203,10 +204,11 @@ def _resolve_bind_address(
             and virtual_ip_range_start <= host_octet <= virtual_ip_range_end
         )
 
+    interface_addresses = _interface_ipv4_addresses(interface)
     routed = _route_selected_ip()
-    if usable(routed, exclude_virtual_range=False):
+    if routed in interface_addresses and usable(routed, exclude_virtual_range=False):
         return routed
-    for candidate in _interface_ipv4_addresses(interface):
+    for candidate in interface_addresses:
         if usable(candidate, exclude_virtual_range=True):
             return candidate
     return None
@@ -311,6 +313,7 @@ class DecoyOrchestrator:
     ) -> None:
         self._event_bus = event_bus
         self._db = db
+        self._credential_load_lock = asyncio.Lock()
         self._max_decoys = max_decoys
         self._canary_enabled = canary_enabled
         self._canary_domain = canary_domain
@@ -727,15 +730,23 @@ class DecoyOrchestrator:
         return decoy, now
 
     async def _load_credentials(self, decoy_id: int) -> list:
-        """Load planted credentials for a decoy from the database."""
-        from squirrelops_home_sensor.decoys.credentials import GeneratedCredential
+        """Load bait, repairing legacy keys once without rewriting trip history."""
+        async with self._credential_load_lock:
+            return await self._load_served_credentials(decoy_id)
+
+    async def _load_served_credentials(self, decoy_id: int) -> list:
+        from squirrelops_home_sensor.decoys.credentials import (
+            CredentialGenerator,
+            GeneratedCredential,
+            is_parseable_ssh_key,
+        )
 
         cursor = await self._db.execute(
             "SELECT * FROM planted_credentials WHERE decoy_id = ?",
             (decoy_id,),
         )
         rows = await cursor.fetchall()
-        return [
+        credentials = [
             GeneratedCredential(
                 credential_type=row["credential_type"],
                 credential_value=row["credential_value"],
@@ -744,6 +755,36 @@ class DecoyOrchestrator:
             )
             for row in rows
         ]
+        served = []
+        invalid_locations = set()
+        for credential in credentials:
+            if credential.credential_type == "ssh_key" and not await asyncio.to_thread(
+                is_parseable_ssh_key, credential.credential_value,
+            ):
+                invalid_locations.add(credential.planted_location)
+            else:
+                served.append(credential)
+        valid_locations = {
+            credential.planted_location for credential in served
+            if credential.credential_type == "ssh_key"
+        }
+        for location in sorted(invalid_locations - valid_locations):
+            replacement = await asyncio.to_thread(CredentialGenerator().generate_ssh_key)
+            credential = GeneratedCredential(
+                credential_type="ssh_key", credential_value=replacement.credential_value,
+                planted_location=location,
+            )
+            await self._db.execute(
+                """INSERT INTO planted_credentials
+                   (credential_type, credential_value, planted_location, decoy_id, created_at)
+                   VALUES ('ssh_key', ?, ?, ?, ?)""",
+                (credential.credential_value, location, decoy_id, datetime.now(UTC).isoformat()),
+            )
+            served.append(credential)
+        if invalid_locations - valid_locations:
+            await self._db.commit()
+            logger.info("Replaced invalid SSH bait for decoy %d; historical rows retained", decoy_id)
+        return served
 
     # -----------------------------------------------------------------
     # Deployment
@@ -1113,6 +1154,9 @@ class DecoyOrchestrator:
                 "protocol": event.protocol,
                 "request_path": event.request_path,
                 "credential_used": event.credential_used,
+                "intruder_intent": event.intruder_intent,
+                "narrative_stage": event.narrative_stage,
+                "interaction_type": event.interaction_type,
                 "timestamp": event.timestamp.isoformat(),
                 "decoy_id": decoy_id,
                 "decoy_name": decoy_name,
@@ -1129,6 +1173,9 @@ class DecoyOrchestrator:
                     "dest_port": event.dest_port,
                     "credential_used": event.credential_used,
                     "request_path": event.request_path,
+                    "intruder_intent": event.intruder_intent,
+                    "narrative_stage": event.narrative_stage,
+                    "interaction_type": event.interaction_type,
                     "timestamp": event.timestamp.isoformat(),
                     "detection_method": "decoy_http",
                     "decoy_id": decoy_id,

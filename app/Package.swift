@@ -35,6 +35,15 @@ let package = Package(
                 .swiftLanguageMode(.v6),
             ]
         ),
+        .executableTarget(
+            name: "SquirrelOpsDeceptionGuest",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ],
+            linkerSettings: [
+                .linkedFramework("Virtualization"),
+            ]
+        ),
         .testTarget(
             name: "SquirrelOpsHomeTests",
             dependencies: ["SquirrelOpsHome"],
@@ -45,6 +54,13 @@ let package = Package(
         .testTarget(
             name: "SquirrelOpsHelperTests",
             dependencies: ["SquirrelOpsHelper"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .testTarget(
+            name: "SquirrelOpsDeceptionGuestTests",
+            dependencies: ["SquirrelOpsDeceptionGuest"],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

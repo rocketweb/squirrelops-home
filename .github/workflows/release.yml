@@ -91,6 +91,7 @@ jobs:
             app/Package.swift \
             app/Package.resolved \
             app/Sources \
+            app/entitlements \
             app/build-app.sh || {
               echo "Current app source differs from ${APP_TAG}; bump and tag the app first." >&2
               exit 1
@@ -153,10 +154,49 @@ jobs:
               "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_ACTOR_ID"
           done
 
+  build-deception-guests:
+    name: Build pinned Studio Mini guest bundles
+    runs-on: ubuntu-latest
+    needs: verify-release
+    permissions:
+      contents: read
+    env:
+      SQUIRRELOPS_RELEASE_BUILD: "1"
+      ALPINE_IMAGE: alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+    steps:
+      - name: Checkout immutable release commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.verify-release.outputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Enable cross-architecture guest builds
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up isolated Docker builder
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Build digest-pinned guests
+        run: |
+          set -euo pipefail
+          bash guest/studio-mini/build-guest.sh arm64
+          bash guest/studio-mini/build-guest.sh x86_64
+
+      - name: Upload immutable guest inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: studio-mini-guests
+          path: guest/studio-mini/build
+          if-no-files-found: error
+          retention-days: 1
+
   build-macos-pkg:
     name: Build signed and notarized macOS package
     runs-on: macos-15
-    needs: verify-release
+    needs:
+      - verify-release
+      - build-deception-guests
     environment: release
     permissions:
       actions: read
@@ -323,6 +363,12 @@ jobs:
         with:
           version: "0.10.2"
           enable-cache: false
+
+      - name: Download verified Studio Mini guest inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: studio-mini-guests
+          path: guest/studio-mini/build
 
       - name: Build .pkg
         env:

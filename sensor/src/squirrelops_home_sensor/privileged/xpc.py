@@ -85,6 +85,39 @@ class MacOSPrivilegedOps(PrivilegedOperations):
             logger.debug("Privileged helper capability probe failed", exc_info=True)
             return False
 
+    async def lan_context(self) -> dict[str, str]:
+        """Read the same helper-selected LAN used to authorize ARP and PF."""
+        import ipaddress
+        import re
+
+        result = await self._call("getLANContext")
+        if not isinstance(result, dict) or not all(
+            isinstance(result.get(key), str)
+            for key in ("interface", "sensor_ip", "gateway_ip", "subnet")
+        ):
+            raise RuntimeError("Invalid helper LAN context")
+        try:
+            network = ipaddress.IPv4Network(result["subnet"])
+            address = ipaddress.IPv4Address(result["sensor_ip"])
+            gateway = ipaddress.IPv4Address(result["gateway_ip"])
+        except ValueError as exc:
+            raise RuntimeError("Invalid helper LAN addresses") from exc
+        private_lans = (
+            ipaddress.IPv4Network("10.0.0.0/8"),
+            ipaddress.IPv4Network("172.16.0.0/12"),
+            ipaddress.IPv4Network("192.168.0.0/16"),
+        )
+        if (
+            re.fullmatch(r"en[0-9]+", result["interface"]) is None
+            or not any(network.subnet_of(lan) for lan in private_lans)
+            or not 24 <= network.prefixlen <= 30
+            or address not in network or gateway not in network
+            or address in (network.network_address, network.broadcast_address, gateway)
+            or gateway in (network.network_address, network.broadcast_address)
+        ):
+            raise RuntimeError("Unsafe helper LAN context")
+        return {key: result[key] for key in ("interface", "sensor_ip", "gateway_ip", "subnet")}
+
     async def _call(
         self,
         method: str,
@@ -159,6 +192,25 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         finally:
             writer.close()
             await writer.wait_closed()
+
+    async def local_interface_macs(self) -> set[str]:
+        """Observe MACs through the same authenticated helper as ARP scanning.
+
+        Do not fall back to psutil or Python child processes on macOS: both
+        can return the same privacy placeholder for every physical interface.
+        """
+        from squirrelops_home_sensor.network.identity import normalize_local_macs
+
+        result = await self._call("getLocalInterfaceMACs")
+        if (
+            not isinstance(result, list) or not 1 <= len(result) <= 256
+            or not all(isinstance(item, str) for item in result)
+        ):
+            raise RuntimeError("Invalid helper MAC inventory")
+        observed = normalize_local_macs(result)
+        if not observed or len(observed) != len(set(result)):
+            raise RuntimeError("Unavailable or invalid helper MAC inventory")
+        return observed
 
     async def arp_scan(self, subnet: str) -> list[tuple[str, str]]:
         """Delegate ARP scan to the helper."""

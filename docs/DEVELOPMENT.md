@@ -100,7 +100,7 @@ Useful flags:
 ```bash
 cd app
 bash build-app.sh
-open .build/$(uname -m)-apple-macosx/debug/SquirrelOpsHome.app
+open "$(bash build-app.sh --print-bundle-path)"
 ```
 
 > **Note:** Debug builds skip `SMAppService` helper registration (requires code signing). Use `dev-install-helper.sh` instead — see [First-Time Setup](#1-install-the-privileged-helper).
@@ -169,7 +169,18 @@ TCP service scanning on macOS uses bounded, unprivileged connections directly
 from the Python sensor. Passive DNS capture is not currently supported on
 macOS and is not advertised by the helper.
 
-**On Linux/Docker**, the sensor runs as root with `CAP_NET_RAW` and `CAP_NET_ADMIN`, so it performs these operations directly using scapy and iptables. No helper needed.
+PF development tests use injected command runners and `pfctl -n` for syntax
+validation. They do not load rules. `PFListenerGuardTests` covers translation
+tags, socket-owner UID checks, failed quarantine writes, state-cleanup retries,
+and UID changes. The native CLT test runner needs an absolute test-bundle path
+for app resource lookup. Current commands, results, and the separate live-PF
+acceptance gate are in the [PF safety record](testing/2026-09-26-pf-safety-development.md).
+
+**On Linux/Docker**, the source Compose configuration runs the sensor as an
+unprivileged UID on a private bridge with all capabilities dropped. Only the
+constrained `network-helper` sidecar uses host networking and
+`CAP_NET_RAW`/`CAP_NET_ADMIN`. Linux publication remains blocked pending
+independent review of that boundary; see [Release security](RELEASE_SECURITY.md).
 
 ---
 
@@ -231,6 +242,117 @@ The helper isn't running or can't execute `ifconfig`. Reinstall and check logs.
 | App (release) | `cd app && BUILD_CONFIG=release bash build-app.sh` |
 | Installer (.pkg) | `bash scripts/build-pkg.sh` |
 
+#### macOS 27 development-tool caveat
+
+On the reviewed macOS 27.0 build (26A428), the available CLT macOS 27 SDK
+referenced an unavailable SwiftUI macro plugin. The installed macOS 26.5 SDK
+successfully compiled the app, helper, guest runtime, and all test targets:
+
+```bash
+cd app
+DEVELOPER_DIR=/Library/Developer/CommandLineTools swift build \
+  --sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+  --scratch-path .build/ui-refresh --build-tests \
+  -Xswiftc -plugin-path \
+  -Xswiftc /Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing
+```
+
+Both build scripts now resolve the output with `swift build --show-bin-path`
+using the same configuration, architecture, SDK, and scratch directory as the
+compilation. They do not fall back to an older output directory. To assemble a
+release app with the SDK verified on this Mac, run from the repository root:
+
+```bash
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+SQUIRRELOPS_SWIFT_SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+SQUIRRELOPS_SWIFT_SCRATCH_PATH=.build/final-readiness-release \
+BUILD_CONFIG=release bash app/build-app.sh
+```
+
+`SQUIRRELOPS_SWIFT_SDK` is optional; the selected toolchain's default SDK remains
+the default. `SQUIRRELOPS_SWIFT_SCRATCH_PATH` defaults to `app/.build`; relative
+values are resolved from `app/`. To query an existing build without rebuilding
+or signing it, use the same environment with
+`bash app/build-app.sh --print-bundle-path`. The package builder uses this query
+and inherits both options. Preserve needed previous package artifacts before
+running it: `build-pkg.sh` cleans `build/pkg`.
+
+The local release app bundle was built successfully with these options. That
+does not establish signed-installer or upgrade acceptance. Do not substitute a
+stale app from another directory or disable package checks. See the
+[2.1 readiness report](testing/2026-09-26-final-installer-readiness.md) for current
+test evidence and remaining acceptance gates. Xcode license acceptance is a
+separate operator action; these tests did not accept it.
+
+### Studio Mini guest
+
+The deep-decoy guest is an architecture-specific release input. Build it with
+Docker Buildx, then pass the exact directory to the app builder:
+
+```bash
+bash guest/studio-mini/build-guest.sh "$(uname -m)"
+python3 scripts/verify-guest-bundle.py \
+  "guest/studio-mini/build/$(uname -m)" \
+  --architecture "$(uname -m)"
+SQUIRRELOPS_GUEST_BUNDLE="guest/studio-mini/build/$(uname -m)" \
+  bash app/build-app.sh
+```
+
+Release builds additionally require `ALPINE_IMAGE` to use an exact image
+digest. `guest/studio-mini/packages.lock` pins the complete installed package
+inventory, and the build fails when either architecture resolves a different
+version set. Update that inventory only after reviewing the repository change
+and rebuilding both architectures from the same image digest. The Home release
+workflow builds both ARM64 and x86_64 guest bundles on Linux, downloads them
+into the macOS job, selects the package architecture, and validates the copied
+app resource before signing.
+
+For a local live acceptance, build the guest and the debug app as shown above,
+then run the opt-in test. The debug app builder ad-hoc signs the nested runtime
+with only `app/entitlements/deception-guest.entitlements`; release signing is a
+separate Developer ID step.
+
+```bash
+cd sensor
+SQUIRRELOPS_DECEPTION_RUNTIME="$(BUILD_CONFIG=debug bash ../app/build-app.sh --print-bundle-path)/Contents/Library/Helpers/com.squirrelops.deception-guest" \
+SQUIRRELOPS_GUEST_BUNDLE=../guest/studio-mini/build/arm64 \
+uv run pytest tests/integration/test_deep_deception_live_guest.py -q -s
+```
+
+When querying either bundle path, keep the same SDK, scratch directory,
+architecture, and toolchain environment used for its build.
+
+This opt-in test boots the real VM, authenticates an install-specific SSH
+login, runs the macOS persona commands, exercises SFTP read and write behavior,
+and uses a real SMB client to list shares and read, write, and delete a bounded
+file through Samba. It also verifies that a host-only canary is absent, the
+guest exposes no network interface beyond loopback, and both relayed protocols
+emit connection telemetry. The SMB client is a development-only dependency and
+does not enter the sensor distribution.
+
+The same test checks SMB responses after a client write-side half-close,
+repeated authenticated SSH and SMB close-and-reconnect cycles beyond the
+16-slot pool size, and clean runtime exit while both protocol sockets are open. It uses loopback
+listeners in a disposable VM, not the installed sensor or its virtual IPs.
+`SocketRelayTests` separately exercises deterministic delayed workers,
+exact-once descriptor/lease release, cancellation, and concurrent byte parity.
+See the [relay/control fix report](testing/2026-09-26-relay-control-fixes.md)
+for the current candidate's results and limitations.
+
+The follow-up availability test adds unauthenticated banner grabs, failed
+passwords followed by a valid login, and a full 16-slot pool. It leaves one
+client silent after the guest closes, then checks that the real 30-second
+half-close deadline restores that slot and records capacity rejection exactly
+once. Guest connection setup is bounded at 10 seconds. Unit tests cover late
+callbacks, blocked writers, deadline cancellation, and responses that continue
+past the idle interval while making progress. See the
+[availability follow-up report](testing/2026-09-26-availability-review-fixes.md).
+
+Cross-device Finder and `smbutil` acceptance through the production virtual IP
+and packet-filter rules, Time Machine discovery, Bonjour discovery from another
+LAN device, and signed-package containment remain mandatory manual deception
+review checks before a release is approved.
+
 An explicit local-test package requires `SQUIRRELOPS_LOCAL_TEST_BUILD=1` and
 the one-time root-owned opt-in printed by the builder. The build writes a UUID
 into the app's local-test marker. That UUID is used only to isolate test
@@ -275,8 +397,10 @@ Every publishing job uses the protected `release` environment. Component
 identity and distribution releases are intentionally separate:
 
 1. A protected `app-vX.Y.Z` tag identifies the exact app component source.
-2. `Release Sensor` verifies `sensor-vX.Y.Z`, builds and attests the
-   multi-architecture image, and publishes the digest-pinned Linux installer.
+2. When Linux publication is independently approved, `Release Sensor` verifies
+   `sensor-vX.Y.Z`, builds and attests the multi-architecture image, and publishes
+   the digest-pinned Linux installer. Until then, the sensor tag identifies the
+   component embedded in Home; it does not authorize Linux publication.
 3. `Release Home Distribution` verifies `home-vX.Y.Z`, confirms that the
    embedded app and sensor source exactly match their existing component tags,
    and builds the signed and notarized macOS package.
@@ -319,12 +443,15 @@ git tag -s app-vX.Y.Z -m "SquirrelOps Home App X.Y.Z"
 git push origin app-vX.Y.Z
 git tag -s sensor-vX.Y.Z -m "SquirrelOps Home Sensor X.Y.Z"
 git push origin sensor-vX.Y.Z
-# After the sensor release is independently verified:
+# After applicable component identity and release gates are verified:
 git tag -s home-vX.Y.Z -m "SquirrelOps Home X.Y.Z"
 git push origin home-vX.Y.Z
 ```
 
-Dispatch `Release Sensor` before `Release Home Distribution` when both changed.
+Do not dispatch `Release Sensor` while Linux publication is blocked. The Home
+workflow verifies both component tags but does not publish a Linux image.
+When both publication paths are approved and needed, verify the Sensor release
+before dispatching Home.
 After publication, verify each immutable release and attestation. Verify the
 package digest and notarization for Home releases and the GHCR digest for
 sensor releases before opening website and Homebrew promotion pull requests.

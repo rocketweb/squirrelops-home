@@ -23,7 +23,15 @@ struct AlertDetailView: View {
                         .font(Typography.body)
                         .foregroundStyle(Theme.textSecondary(colorScheme))
                 }
+                .padding(Spacing.lg)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                HStack {
+                    Button("Try Again") { Task { await fetchAlert() } }
+                    Spacer()
+                    Button("Close") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                .padding(Spacing.md)
             } else if let alert = alertDetail {
                 alertContent(alert)
             }
@@ -47,6 +55,9 @@ struct AlertDetailView: View {
                     } else {
                         sourceSection(alert)
                         intrusionSection(alert)
+                        if !recentConnections(alert).isEmpty {
+                            connectionTimelineSection(alert)
+                        }
                     }
                     if hasCredentialInfo(alert) {
                         credentialSection(alert)
@@ -75,7 +86,7 @@ struct AlertDetailView: View {
                 }
 
                 HStack(spacing: Spacing.s12) {
-                    Text(friendlyAlertType(alert.alertType))
+                    Text(friendlyAlertType(alert))
                         .font(Typography.bodySmall)
                         .foregroundStyle(Theme.textSecondary(colorScheme))
                         .padding(.horizontal, Spacing.sm)
@@ -185,8 +196,14 @@ struct AlertDetailView: View {
             sectionHeader("INTRUSION DETAILS")
 
             VStack(alignment: .leading, spacing: Spacing.sm) {
+                if let count = detailValue(alert, "connection_count") {
+                    detailRow(label: "Connections", value: count, mono: true)
+                }
+                if let services = serviceCountsSummary(alert) {
+                    detailRow(label: "Services", value: services)
+                }
                 if let port = detailValue(alert, "dest_port") {
-                    detailRow(label: "Port", value: port, mono: true)
+                    detailRow(label: "Latest Port", value: port, mono: true)
                 }
                 if let proto = detailValue(alert, "protocol") {
                     detailRow(label: "Protocol", value: proto.uppercased())
@@ -196,6 +213,55 @@ struct AlertDetailView: View {
                 }
                 if let method = detailValue(alert, "detection_method") {
                     detailRow(label: "Detection", value: friendlyDetectionMethod(method))
+                }
+                if let firstSeen = detailValue(alert, "first_seen") {
+                    detailRow(
+                        label: "First Seen",
+                        value: TimestampPresentation.local(firstSeen),
+                        mono: true
+                    )
+                }
+                if let lastSeen = detailValue(alert, "last_seen") {
+                    detailRow(
+                        label: "Last Seen",
+                        value: TimestampPresentation.local(lastSeen),
+                        mono: true
+                    )
+                }
+            }
+            .sectionCard(colorScheme: colorScheme)
+        }
+    }
+
+    private func connectionTimelineSection(_ alert: AlertDetail) -> some View {
+        let connections = Array(recentConnections(alert).reversed())
+        return VStack(alignment: .leading, spacing: Spacing.s12) {
+            sectionHeader("RECENT CONNECTIONS")
+
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                ForEach(Array(connections.enumerated()), id: \.offset) { index, item in
+                    HStack(alignment: .top, spacing: Spacing.sm) {
+                        Text(TimestampPresentation.local(item.timestamp))
+                            .font(Typography.mono)
+                            .tracking(Typography.monoTracking)
+                            .foregroundStyle(Theme.textTertiary(colorScheme))
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: Spacing.xs) {
+                            Text("\(AlertSummary.decoyServiceName(item.port)) :\(item.port)")
+                                .font(Typography.mono)
+                                .tracking(Typography.monoTracking)
+                            if let outcome = item.outcome {
+                                Text(outcome)
+                                    .font(Typography.caption)
+                                    .multilineTextAlignment(.trailing)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
+                    }
+                    if index < connections.count - 1 {
+                        Divider()
+                    }
                 }
             }
             .sectionCard(colorScheme: colorScheme)
@@ -281,13 +347,59 @@ struct AlertDetailView: View {
         }
     }
 
+    private func serviceCountsSummary(_ alert: AlertDetail) -> String? {
+        guard case .object(let detail) = alert.detail,
+              case .object(let rawCounts) = detail["service_counts"] else {
+            return nil
+        }
+        let parts: [(port: Int, label: String)] = rawCounts.compactMap {
+            key, value in
+            guard let port = Int(key), case .int(let count) = value, count > 0 else {
+                return nil
+            }
+            return (port, "\(AlertSummary.decoyServiceName(port)) \(count)")
+        }
+        let labels = parts.sorted { $0.port < $1.port }.map(\.label)
+        return labels.isEmpty ? nil : labels.joined(separator: " · ")
+    }
+
+    private struct RecentConnection {
+        let port: Int
+        let timestamp: String
+        let outcome: String?
+    }
+
+    private func recentConnections(_ alert: AlertDetail) -> [RecentConnection] {
+        guard case .object(let detail) = alert.detail,
+              case .array(let rawConnections) = detail["recent_connections"] else {
+            return []
+        }
+        return rawConnections.compactMap { rawConnection in
+            guard case .object(let connection) = rawConnection,
+                  case .int(let port) = connection["dest_port"],
+                  case .string(let timestamp) = connection["timestamp"] else {
+                return nil
+            }
+            let interaction: String?
+            if case .string(let value) = connection["interaction_type"] { interaction = value }
+            else { interaction = nil }
+            return RecentConnection(port: port, timestamp: timestamp,
+                                    outcome: AlertSummary.relayOutcomeDescription(interaction))
+        }
+    }
+
     private func hasCredentialInfo(_ alert: AlertDetail) -> Bool {
         detailValue(alert, "credential_used") != nil
     }
 
-    private func friendlyAlertType(_ type: String) -> String {
-        switch type {
-        case "decoy.trip": return "Port Scan Detected"
+    private func friendlyAlertType(_ alert: AlertDetail) -> String {
+        switch alert.alertType {
+        case "decoy.trip":
+            guard case .object(let detail) = alert.detail,
+                  case .array(let ports) = detail["ports"] else {
+                return "Decoy Activity"
+            }
+            return ports.count >= 2 ? "Port Scan Detected" : "Decoy Activity"
         case "decoy.credential_trip": return "Credential Accessed"
         case "device.new": return "New Device"
         case "device.verification_needed": return "Device Verification"
@@ -297,7 +409,7 @@ struct AlertDetailView: View {
         case "security.vendor_advisory": return "Vendor Advisory"
         case "system.sensor_offline": return "Sensor Offline"
         case "system.learning_complete": return "Learning Complete"
-        default: return type
+        default: return alert.alertType
         }
     }
 
@@ -325,7 +437,10 @@ struct AlertDetailView: View {
         isLoading = true
         errorMessage = nil
         do {
-            let detail: AlertDetail = try await appState.sensorClient!.request(.alert(id: alertId))
+            guard let client = appState.sensorClient else {
+                throw SensorClientError.connectionFailed("Sensor is not connected")
+            }
+            let detail: AlertDetail = try await client.request(.alert(id: alertId))
             await MainActor.run {
                 alertDetail = detail
                 isLoading = false

@@ -17,6 +17,9 @@
 #                         Optional assertion; must match sensor/pyproject.toml
 #   BUILD_ARCH            Architecture: "arm64" or "x86_64"
 #                         (default: current architecture)
+#   SQUIRRELOPS_SWIFT_SDK Optional explicit SDK directory for the app build
+#   SQUIRRELOPS_SWIFT_SCRATCH_PATH
+#                         Optional Swift build directory, relative to app/ or absolute
 #   SIGNING_IDENTITY      App signing identity (default: "Developer ID Application")
 #   INSTALLER_IDENTITY    Installer signing identity (default: "Developer ID Installer")
 #   APPLE_ID              Apple ID for notarization (optional)
@@ -223,14 +226,12 @@ info "Building SquirrelOps Home.app (config=release, arch=$BUILD_ARCH)..."
     BUILD_CONFIG=release BUILD_ARCH="$BUILD_ARCH" bash build-app.sh
 )
 
-# Locate the built .app bundle
-if [ "$BUILD_ARCH" = "universal" ]; then
-    APP_BUILD_DIR="$REPO_ROOT/app/.build/apple/Products/Release"
-else
-    APP_BUILD_DIR="$REPO_ROOT/app/.build/${BUILD_ARCH}-apple-macosx/release"
-fi
-
-APP_BUNDLE="$APP_BUILD_DIR/SquirrelOpsHome.app"
+# Query the same builder so SDK, scratch path, architecture, and configuration
+# cannot drift between compilation and packaging. Do not guess SwiftPM's layout.
+APP_BUNDLE="$(
+    cd "$REPO_ROOT/app"
+    BUILD_CONFIG=release BUILD_ARCH="$BUILD_ARCH" bash build-app.sh --print-bundle-path
+)"
 
 if [ ! -d "$APP_BUNDLE" ]; then
     error "App bundle not found at $APP_BUNDLE"
@@ -238,8 +239,13 @@ fi
 
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/SquirrelOpsHome"
 HELPER_PATH="$APP_BUNDLE/Contents/Library/LaunchServices/com.squirrelops.helper"
+DECEPTION_RUNTIME_PATH="$APP_BUNDLE/Contents/Library/Helpers/com.squirrelops.deception-guest"
+DECEPTION_GUEST_BUNDLE="$APP_BUNDLE/Contents/Resources/DeceptionGuest"
 validate_macho_arch "$APP_EXECUTABLE" "$BUILD_ARCH"
 validate_macho_arch "$HELPER_PATH" "$BUILD_ARCH"
+validate_macho_arch "$DECEPTION_RUNTIME_PATH" "$BUILD_ARCH"
+python3 "$REPO_ROOT/scripts/verify-guest-bundle.py" \
+    "$DECEPTION_GUEST_BUNDLE" --architecture "$BUILD_ARCH"
 
 info "App built: $APP_BUNDLE"
 
@@ -446,7 +452,9 @@ info "Building app.pkg..."
 APP_COMPONENT_PLIST="$BUILD_DIR/app-component.plist"
 pkgbuild --analyze --root "$APP_ROOT" "$APP_COMPONENT_PLIST"
 # Set BundleIsRelocatable to false for every bundle found
-/usr/libexec/PlistBuddy -c "Set :0:BundleIsRelocatable false" "$APP_COMPONENT_PLIST"
+# macOS 27 omits this key when analyzing a bundle. plutil inserts it when
+# absent and replaces it on older hosts, keeping relocation explicitly off.
+/usr/bin/plutil -replace 0.BundleIsRelocatable -bool false "$APP_COMPONENT_PLIST"
 
 pkgbuild \
     --root "$APP_ROOT" \

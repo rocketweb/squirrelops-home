@@ -47,6 +47,15 @@ public final class AppState {
     /// The active sensor client, set after connection. Views use this for actions.
     public var sensorClient: (any SensorClientProtocol)?
 
+    /// A persisted pairing can outlive readable Keychain credentials. Actions
+    /// must fail normally in that state, while the repair banner stays usable.
+    public func requireSensorClient() throws -> any SensorClientProtocol {
+        guard let sensorClient else {
+            throw SensorClientError.connectionFailed("Sensor is not connected. Check or repair pairing.")
+        }
+        return sensorClient
+    }
+
     public var silenceUntil: Date?
 
     private struct CriticalAlertRevision: Hashable {
@@ -170,7 +179,7 @@ public final class AppState {
             // isOperationalDeployment, not an inline status check. A degraded
             // mimic keeps its alias, so treating it as inactive would let a
             // fake host render as a real device in the user's inventory.
-            guard decoy.isVirtualMimic, decoy.isOperationalDeployment else {
+            guard decoy.isVirtualHostService, decoy.isOperationalDeployment else {
                 return nil
             }
             guard !["", "0.0.0.0", "127.0.0.1", "::"].contains(decoy.bindAddress) else {
@@ -260,6 +269,9 @@ public final class AppState {
                 readAt: AppState.iso8601.string(from: Date()),
                 actionedAt: old.actionedAt, createdAt: old.createdAt,
                 alertCount: old.alertCount,
+                connectionCount: old.connectionCount,
+                ports: old.ports,
+                serviceCounts: old.serviceCounts,
                 deviceCount: old.deviceCount, issueKey: old.issueKey
             )
         }
@@ -330,6 +342,18 @@ public final class AppState {
         updateSystemStatus(status)
     }
 
+    /// Explicit operator refresh: reload the list and its startup diagnostics.
+    /// Unlike background refresh, failure is surfaced while retaining old data.
+    public func refreshDecoyInventory() async throws {
+        guard let client = sensorClient else {
+            throw SensorClientError.connectionFailed("Sensor is not connected")
+        }
+        let response: DecoyListResponse = try await client.request(.decoys)
+        decoys = response.items
+        devices = Self.visibleDevices(devices, decoys: response.items)
+        try await refreshSystemStatus()
+    }
+
     public func refreshAlerts() async throws {
         guard let client = sensorClient else {
             throw SensorClientError.connectionFailed("Sensor is not connected")
@@ -380,7 +404,9 @@ public final class AppState {
                 decoyCount: status.decoyCount,
                 alertCount: 0,
                 version: status.version,
-                apiProtocolVersion: status.apiProtocolVersion
+                apiProtocolVersion: status.apiProtocolVersion,
+                eventSeq: status.eventSeq,
+                deepDecoy: status.deepDecoy
             )
         }
     }
@@ -395,7 +421,9 @@ public final class AppState {
                 decoyCount: status.decoyCount,
                 alertCount: status.alertCount,
                 version: status.version,
-                apiProtocolVersion: status.apiProtocolVersion
+                apiProtocolVersion: status.apiProtocolVersion,
+                eventSeq: status.eventSeq,
+                deepDecoy: status.deepDecoy
             )
         }
     }

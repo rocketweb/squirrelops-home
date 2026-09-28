@@ -66,9 +66,10 @@ class AnomalyDetector:
         cursor = await self._db.execute(
             """SELECT id FROM home_alerts
                WHERE alert_type = ? AND device_id = ?
-                 AND title LIKE ?
+                 AND (issue_key = ? OR (issue_key IS NULL AND title = ?))
                LIMIT 1""",
-            (AlertType.BEHAVIORAL_ANOMALY.value, device_id, f"%{target}%"),
+            (AlertType.BEHAVIORAL_ANOMALY.value, device_id,
+             f"destination:{target}", f"New connection destination: {target}"),
         )
         return await cursor.fetchone() is not None
 
@@ -118,6 +119,7 @@ class AnomalyDetector:
                     source_ip=source_ip,
                     source_mac=source_mac,
                     device_id=device_id,
+                    issue_key=f"destination:{dest_ip}:{dest_port}",
                 )
 
                 anomalies.append({

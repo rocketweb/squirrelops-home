@@ -235,6 +235,49 @@ struct WSEventProcessorTests {
         #expect(state.alerts[0].title == "New device detected")
     }
 
+    @Test("Folded decoy update replaces the visible activity summary")
+    func foldedDecoyUpdateReplacesActivitySummary() {
+        let state = AppState()
+        let first: [String: AnyCodableValue] = [
+            "id": .int(44),
+            "alert_type": .string("decoy.trip"),
+            "severity": .string("high"),
+            "title": .string("Decoy connection from 192.168.1.7 on port 445"),
+            "source_ip": .string("192.168.1.7"),
+            "created_at": .string("2026-09-03T05:11:01Z"),
+            "connection_count": .int(1),
+            "ports": .array([.int(445)]),
+            "service_counts": .object(["445": .int(1)]),
+        ]
+        let update: [String: AnyCodableValue] = [
+            "id": .int(44),
+            "alert_type": .string("decoy.trip"),
+            "severity": .string("high"),
+            "title": .string("Port scan detected from 192.168.1.7"),
+            "source_ip": .string("192.168.1.7"),
+            "created_at": .string("2026-09-03T05:11:01Z"),
+            "connection_count": .int(10),
+            "ports": .array([.int(22), .int(445)]),
+            "service_counts": .object(["22": .int(4), "445": .int(6)]),
+        ]
+
+        WSEventProcessor.process(
+            .event(seq: 8, eventType: "alert.new", payload: first),
+            into: state
+        )
+        WSEventProcessor.flushPendingUpdates(into: state)
+        WSEventProcessor.process(
+            .event(seq: 9, eventType: "alert.updated", payload: update),
+            into: state
+        )
+        WSEventProcessor.flushPendingUpdates(into: state)
+
+        #expect(state.alerts.count == 1)
+        #expect(state.alerts[0].connectionCount == 10)
+        #expect(state.alerts[0].ports == [22, 445])
+        #expect(state.alerts[0].decoyActivitySummary == "10 connections · SSH 4 · SMB 6")
+    }
+
     @Test("History clear drops queued alerts before they can flush")
     func historyClearDropsQueuedAlerts() {
         let state = AppState()

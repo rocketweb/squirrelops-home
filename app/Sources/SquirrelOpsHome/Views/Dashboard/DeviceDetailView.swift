@@ -212,7 +212,7 @@ struct DeviceDetailView: View {
                             Text("Scan Unknown")
                                 .font(Typography.caption)
                         }
-                        .foregroundStyle(Theme.accentDefault(colorScheme))
+                        .foregroundStyle(Theme.accentText(colorScheme))
                     }
                     .buttonStyle(.plain)
                     .disabled(isProbing)
@@ -280,7 +280,7 @@ struct DeviceDetailView: View {
         }
         .task {
             do {
-                let response: DeviceOpenPortsResponse = try await appState.sensorClient!.request(.devicePorts(id: device.id))
+                let response: DeviceOpenPortsResponse = try await appState.requireSensorClient().request(.devicePorts(id: device.id))
                 openPorts = response.items
             } catch {
                 openPorts = []
@@ -407,7 +407,7 @@ struct DeviceDetailView: View {
         }
         .task {
             do {
-                let response: PaginatedFingerprints = try await appState.sensorClient!.request(.deviceFingerprints(id: device.id))
+                let response: PaginatedFingerprints = try await appState.requireSensorClient().request(.deviceFingerprints(id: device.id))
                 fingerprint = response.items.first
             } catch {
                 fingerprint = nil

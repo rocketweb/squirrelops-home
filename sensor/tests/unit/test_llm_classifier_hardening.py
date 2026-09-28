@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -15,6 +16,27 @@ from squirrelops_home_sensor.fingerprint.composite import CompositeFingerprint
 
 def _fp(mdns_hostname: str | None = None) -> CompositeFingerprint:
     return CompositeFingerprint(mac_address="aa:bb:cc:dd:ee:ff", mdns_hostname=mdns_hostname)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("manufacturer", []), ("manufacturer", None), ("manufacturer", "x" * 129),
+    ("manufacturer", "  "), ("model", []), ("model", "x" * 129),
+    ("confidence", float("nan")), ("confidence", float("inf")),
+    ("confidence", -0.1), ("confidence", 1.1), ("confidence", True),
+])
+async def test_invalid_llm_fields_are_rejected(field, value):
+    clf = OpenAICompatibleClassifier(endpoint="http://127.0.0.1:1234", model="synthetic")
+    body = {"manufacturer": "Acme", "device_type": "printer", "model": "X1", "confidence": 0.8}
+    body[field] = value
+    response = MagicMock()
+    response.json.return_value = {"choices": [{"message": {"content": json.dumps(body)}}]}
+    clf._client.post = AsyncMock(return_value=response)
+    try:
+        with pytest.raises(ValueError):
+            await clf.classify(_fp())
+    finally:
+        await clf._client.aclose()
 
 
 def test_untrusted_hostname_is_sanitized_and_capped():

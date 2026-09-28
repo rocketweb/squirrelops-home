@@ -112,6 +112,10 @@ enum HelpGuideContent {
                     "Critical alert dialog",
                     "Critical and high alerts can also appear inside the dashboard. Review opens the full alert list without marking the batch read; Clear marks the displayed batch read."
                 ),
+                .init(
+                    "Understand repeated decoy trips",
+                    "Repeated connections from one source update one active alert instead of opening a dialog for every socket. The alert shows the total and the count for each service. Open its detail sheet for the recent connection timeline. Clear acknowledges that alert; a later connection then creates a new active alert."
+                ),
             ]
         ),
         .init(

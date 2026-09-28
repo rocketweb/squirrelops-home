@@ -8,13 +8,24 @@ credential values are guaranteed unique within a generator instance.
 
 from __future__ import annotations
 
-import base64
 import dataclasses
-import os
 import secrets
 import string
 
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
 _RNG = secrets.SystemRandom()
+
+
+def is_parseable_ssh_key(value: str) -> bool:
+    """Recognize usable PEM bait without accessing any real authorization store."""
+    try:
+        key = serialization.load_pem_private_key(value.encode("utf-8"), password=None)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return False
+    return isinstance(key, rsa.RSAPrivateKey)
 
 # Word lists for password generation (adjective + noun pattern)
 _ADJECTIVES = [
@@ -229,22 +240,17 @@ class CredentialGenerator:
     # -----------------------------------------------------------------
 
     def generate_ssh_key(self) -> GeneratedCredential:
-        """Generate a realistic fake RSA PEM private key.
+        """Generate parseable synthetic RSA PEM bait, authorized nowhere.
 
-        Produces a PEM-formatted block with random base64 body.
-        No canary hostname (SSH key use doesn't trigger DNS lookups
-        to canary domains).
+        Keep the unencrypted legacy PEM presentation. Generating a real key
+        does not install its public key on the host, guest, or any service.
         """
-        # Generate ~1600 bytes of random data (typical RSA 2048 key size)
-        raw = os.urandom(1200)
-        b64 = base64.b64encode(raw).decode("ascii")
-
-        # Split into 64-char lines (PEM standard)
-        lines = [b64[i : i + 64] for i in range(0, len(b64), 64)]
-        pem = "-----BEGIN RSA PRIVATE KEY-----\n"
-        pem += "\n".join(lines)
-        pem += "\n-----END RSA PRIVATE KEY-----"
-
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        ).decode("ascii").rstrip("\n")
         value = self._ensure_unique(pem)
         return GeneratedCredential(
             credential_type="ssh_key",

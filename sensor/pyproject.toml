@@ -1,6 +1,6 @@
 [project]
 name = "squirrelops-home-sensor"
-version = "2.0.3"
+version = "2.1.0"
 description = "SquirrelOps Home network security sensor"
 requires-python = ">=3.11"
 dependencies = [
@@ -33,6 +33,7 @@ dev = [
     "pytest-httpx>=0.35.0",
     "httpx>=0.28.0",
     "ruff>=0.9.0",
+    "smbprotocol==1.17.0",
     "pyright>=1.1.0",
     "pyyaml>=6.0.0",
 ]

@@ -3,6 +3,7 @@ import SwiftUI
 /// Grid of decoy cards showing status, connection counts, and actions.
 struct DecoyStatusView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let appState: AppState
 
     @State private var selectedDecoy: DecoySummary?
@@ -10,6 +11,8 @@ struct DecoyStatusView: View {
     @State private var editingMimicGroupID: String?
     @State private var hostnameDraft = ""
     @State private var isSavingHostname = false
+    @State private var refreshFeedback = DecoyRefreshFeedback()
+    @State private var refreshTask: Task<Void, Never>?
 
     private let columns = [GridItem(.adaptive(minimum: 280), spacing: Spacing.md)]
 
@@ -17,6 +20,19 @@ struct DecoyStatusView: View {
         VStack(spacing: 0) {
             toolbar
             Divider()
+            if let studio = appState.systemStatus?.deepDecoy, let note = studio.operationalNote {
+                HStack(alignment: .top) {
+                    Label(
+                        note,
+                        systemImage: studio.needsAttention ? "exclamationmark.triangle" : "info.circle"
+                    )
+                    Spacer()
+                }
+                .font(Typography.bodySmall)
+                .padding(Spacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.backgroundSecondary(colorScheme))
+            }
             if let actionError {
                 Label(actionError, systemImage: "exclamationmark.triangle.fill")
                     .font(Typography.bodySmall)
@@ -26,18 +42,70 @@ struct DecoyStatusView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.statusError(colorScheme).opacity(0.08))
             }
-            if operationalInventory.decoys.isEmpty {
-                emptyState
-            } else {
-                decoyGrid
+            GeometryReader { viewport in
+                PullToRefreshScrollView(
+                    isRefreshing: refreshFeedback.isRefreshing,
+                    showsRefreshConfirmation: refreshFeedback.confirmationID != nil,
+                    refresh: requestRefresh
+                ) {
+                    if operationalInventory.decoys.isEmpty {
+                        emptyState
+                            .frame(maxWidth: .infinity, minHeight: viewport.size.height)
+                    } else {
+                        decoyGrid
+                    }
+                }
             }
         }
         .background(Theme.background(colorScheme))
+        .focusedSceneValue(\.refreshDecoys, refreshFeedback.isRefreshing ? nil : requestRefresh)
         .sheet(item: $selectedDecoy) { decoy in
             DecoyDetailSheet(decoy: decoy, appState: appState)
         }
         .task {
             await appState.refreshDecoys()
+            try? await appState.refreshSystemStatus()
+        }
+        .task(id: refreshFeedback.confirmationID) {
+            guard let id = refreshFeedback.confirmationID else { return }
+            AccessibilityNotification.Announcement("Decoys updated").post()
+            do {
+                try await Task.sleep(for: DecoyRefreshFeedback.displayDuration)
+                try Task.checkCancellation()
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                    refreshFeedback.dismissConfirmation(id)
+                }
+            } catch { /* A newer refresh or navigation cancels this dismissal. */ }
+        }
+        .onDisappear {
+            refreshTask?.cancel()
+            refreshFeedback.clearConfirmation()
+        }
+        .task(id: appState.systemStatus?.deepDecoy?.status) {
+            guard appState.systemStatus?.deepDecoy?.status == "starting" else { return }
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(3))
+                    try await appState.refreshSystemStatus()
+                } catch { return }
+            }
+        }
+    }
+
+    private func requestRefresh() {
+        guard refreshTask == nil else { return }
+        refreshTask = Task { @MainActor in
+            defer { refreshTask = nil }
+            do {
+                try await refreshFeedback.refresh {
+                    try await appState.refreshDecoyInventory()
+                }
+                actionError = nil
+            } catch is CancellationError {
+                // Leaving the screen is not a failed refresh.
+            } catch {
+                actionError = "Could not refresh decoys: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -50,60 +118,49 @@ struct DecoyStatusView: View {
     }
 
     private var toolbar: some View {
-        HStack {
-            Text("Decoys")
-                .font(Typography.h3)
-                .tracking(Typography.h3Tracking)
-                .foregroundStyle(Theme.textPrimary(colorScheme))
-            Spacer()
+        PageHeader(title: "Decoys") {
             Text(deploymentSummary.breakdownLabel)
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
         }
-        .padding(Spacing.md)
     }
 
     private var decoyGrid: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.md) {
-                if !operationalInventory.hostListeners.isEmpty {
-                    Label(
-                        "Host listeners use this sensor Mac's LAN address and the shown port. "
-                        + "Only virtual-IP mimics have their own network address.",
-                        systemImage: "info.circle"
-                    )
-                    .font(Typography.bodySmall)
-                    .foregroundStyle(Theme.textSecondary(colorScheme))
-                    .padding(Spacing.s12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.backgroundSecondary(colorScheme))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Spacing.radiusMd)
-                            .stroke(Theme.borderSubtle(colorScheme), lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusMd))
-                }
-
-                if !operationalInventory.mimicGroups.isEmpty {
-                    mimicSection(
-                        title: "Fake hosts",
-                        description: "Services sharing a virtual IP belong to one fake host. Each port keeps its own behavior and evidence; lifecycle actions apply to the entire host.",
-                        groups: operationalInventory.mimicGroups
-                    )
-                }
-
-                if !operationalInventory.hostListeners.isEmpty {
-                    decoySection(
-                        title: "Host listeners",
-                        decoys: operationalInventory.hostListeners
-                    )
-                }
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            if !operationalInventory.hostListeners.isEmpty {
+                Label(
+                    "Host listeners use this sensor Mac's LAN address and the shown port. "
+                    + "Fake hosts use a separate virtual network address.",
+                    systemImage: "info.circle"
+                )
+                .font(Typography.bodySmall)
+                .foregroundStyle(Theme.textSecondary(colorScheme))
+                .padding(Spacing.s12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.backgroundSecondary(colorScheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Spacing.radiusMd)
+                        .stroke(Theme.borderSubtle(colorScheme), lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusMd))
             }
-            .padding(Spacing.lg)
+
+            if !operationalInventory.virtualHostGroups.isEmpty {
+                mimicSection(
+                    title: "Fake hosts",
+                    description: "Services sharing a virtual IP belong to one fake host. Each port keeps its own behavior and evidence; lifecycle actions apply to the entire host.",
+                    groups: operationalInventory.virtualHostGroups
+                )
+            }
+
+            if !operationalInventory.hostListeners.isEmpty {
+                decoySection(
+                    title: "Host listeners",
+                    decoys: operationalInventory.hostListeners
+                )
+            }
         }
-        .refreshable {
-            await appState.refreshDecoys()
-        }
+        .padding(Spacing.lg)
     }
 
     @ViewBuilder
@@ -160,7 +217,9 @@ struct DecoyStatusView: View {
     }
 
     private func mimicHostGroupCard(_ group: DecoyHostGroup) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
+        let isEditableMimic = group.services.allSatisfy(\.isVirtualMimic)
+        let isDeepHost = group.services.contains(where: \.isDeepDecoy)
+        return VStack(alignment: .leading, spacing: Spacing.md) {
             HStack(alignment: .top, spacing: Spacing.sm) {
                 Image(systemName: "network")
                     .font(.system(size: 20))
@@ -197,7 +256,7 @@ struct DecoyStatusView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(Theme.accentDefault(colorScheme))
+                            .foregroundStyle(Theme.accentText(colorScheme))
                             .disabled(
                                 isSavingHostname
                                 || hostnameDraft.trimmingCharacters(
@@ -209,19 +268,24 @@ struct DecoyStatusView: View {
                     } else {
                         HStack(spacing: Spacing.xs) {
                             Text(mimicHostTitle(group))
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .help(mimicHostTitle(group))
                                 .font(Typography.h4)
                                 .tracking(Typography.h4Tracking)
                                 .foregroundStyle(Theme.textPrimary(colorScheme))
 
-                            Button {
-                                beginEditingHostname(group)
-                            } label: {
-                                Image(systemName: "pencil")
-                                    .font(.system(size: 11))
+                            if isEditableMimic {
+                                Button {
+                                    beginEditingHostname(group)
+                                } label: {
+                                    Image(systemName: "pencil")
+                                        .font(.system(size: 11))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Theme.accentText(colorScheme))
+                                .help("Edit hostname for every service on this fake host")
                             }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Theme.accentDefault(colorScheme))
-                            .help("Edit hostname for every service on this fake host")
                         }
                     }
 
@@ -251,22 +315,28 @@ struct DecoyStatusView: View {
                         .tracking(Typography.captionTracking)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
 
-                    HStack {
-                        Text("Restart or remove this fake host in Scouts.")
-                            .font(Typography.bodySmall)
-                            .foregroundStyle(Theme.textSecondary(colorScheme))
-                        Spacer()
-                        Button("Open Scouts") {
-                            selectedDecoy = nil
-                            appState.selectedDashboardSection = .scouts
+                    if isDeepHost {
+                        DecoyToggle(decoy: representative, appState: appState) { message in
+                            actionError = message
                         }
-                        .buttonStyle(.plain)
-                        .font(Typography.bodySmall)
-                        .foregroundStyle(Theme.accentDefault(colorScheme))
-                        .help(
-                            "Open Scouts to manage every service on "
-                            + representative.bindAddress
-                        )
+                    } else {
+                        HStack {
+                            Text("Restart or remove this fake host in Scouts.")
+                                .font(Typography.bodySmall)
+                                .foregroundStyle(Theme.textSecondary(colorScheme))
+                            Spacer()
+                            Button("Open Scouts") {
+                                selectedDecoy = nil
+                                appState.selectedDashboardSection = .scouts
+                            }
+                            .buttonStyle(.plain)
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.accentText(colorScheme))
+                            .help(
+                                "Open Scouts to manage every service on "
+                                + representative.bindAddress
+                            )
+                        }
                     }
                 }
             }
@@ -307,20 +377,19 @@ struct DecoyStatusView: View {
                 )
             }
 
-            // Address and deployment scope
-            HStack(spacing: Spacing.sm) {
+            // Keep long endpoints readable at the minimum card width.
+            VStack(alignment: .leading, spacing: Spacing.xs) {
                 Text(decoy.endpointLabel)
                     .font(Typography.mono)
-                    .tracking(Typography.monoTracking)
                     .foregroundStyle(Theme.textSecondary(colorScheme))
-                Text(decoy.deploymentScopeLabel.uppercased())
+                    .textSelection(.enabled)
+                Text(decoy.deploymentScopeLabel)
                     .font(Typography.caption)
-                    .tracking(Typography.captionTracking)
                     .foregroundStyle(Theme.textTertiary(colorScheme))
             }
 
             // Shared-IP mimics have one lifecycle control on their host card.
-            if !decoy.isVirtualMimic {
+            if !decoy.isVirtualHostService {
                 DecoyToggle(decoy: decoy, appState: appState) { message in
                     actionError = message
                 }
@@ -354,8 +423,14 @@ struct DecoyStatusView: View {
                 }
             }
 
+            Button("View Details") {
+                selectedDecoy = decoy
+            }
+            .buttonStyle(.link)
+            .accessibilityLabel("View details for \(decoy.serviceLabel) at \(decoy.endpointLabel)")
+
             // Restart button for degraded
-            if decoy.status == "degraded" && !decoy.isVirtualMimic {
+            if decoy.status == "degraded" && !decoy.isVirtualHostService {
                 Button {
                     Task {
                         do {
@@ -395,6 +470,7 @@ struct DecoyStatusView: View {
         case "dev_server": return "chevron.left.forwardslash.chevron.right"
         case "home_assistant": return "house"
         case "file_share": return "folder"
+        case "deep": return "desktopcomputer"
         default: return "ant"
         }
     }
@@ -487,7 +563,7 @@ private struct DecoyToggle: View {
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
             Spacer()
-            Toggle("", isOn: Binding(
+            Toggle(decoy.enableControlLabel, isOn: Binding(
                 get: { isEnabled },
                 set: { newValue in
                     guard !isToggling else { return }
@@ -556,11 +632,11 @@ struct DecoyDetailSheet: View {
         .background(Theme.background(colorScheme))
         .task {
             do {
-                let d: DecoyDetail = try await appState.sensorClient!.request(.decoy(id: decoy.id))
+                let d: DecoyDetail = try await appState.requireSensorClient().request(.decoy(id: decoy.id))
                 detail = d
-                let creds: [DecoyCredentialEntry] = try await appState.sensorClient!.request(.decoyCredentials(id: decoy.id))
+                let creds: [DecoyCredentialEntry] = try await appState.requireSensorClient().request(.decoyCredentials(id: decoy.id))
                 credentials = creds
-                let c: PaginatedDecoyConnections = try await appState.sensorClient!.request(.decoyConnections(id: decoy.id))
+                let c: PaginatedDecoyConnections = try await appState.requireSensorClient().request(.decoyConnections(id: decoy.id))
                 connections = c.items
                 connectionTotal = c.total
             } catch {
@@ -607,7 +683,7 @@ struct DecoyDetailSheet: View {
                     .tint(Theme.accentDefault(colorScheme))
                     .disabled(isSaving)
                 } else {
-                    if detail != nil && !decoy.isVirtualMimic {
+                    if detail != nil && !decoy.isVirtualHostService {
                         Button("Edit Config") {
                             startEditing()
                         }
@@ -765,7 +841,7 @@ struct DecoyDetailSheet: View {
                 for (key, value) in editedConfig {
                     converted[key] = parseConfigValue(value)
                 }
-                let updated: DecoyDetail = try await appState.sensorClient!.request(
+                let updated: DecoyDetail = try await appState.requireSensorClient().request(
                     .updateDecoyConfig(id: decoy.id, config: converted)
                 )
                 detail = updated
@@ -968,6 +1044,7 @@ struct DecoyDetailSheet: View {
         case "dev_server": return "chevron.left.forwardslash.chevron.right"
         case "home_assistant": return "house"
         case "file_share": return "folder"
+        case "deep": return "desktopcomputer"
         default: return "ant"
         }
     }

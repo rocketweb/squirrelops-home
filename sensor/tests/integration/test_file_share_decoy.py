@@ -145,6 +145,14 @@ class TestSSHKeyDownload:
             resp = await client.get(f"{base_url}/.ssh/id_rsa")
             assert ssh_cred.credential_value in resp.text
 
+    @pytest.mark.asyncio
+    async def test_downloaded_bait_is_a_parseable_rsa_key(self, decoy, base_url):
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{base_url}/.ssh/id_rsa")
+        assert response.status_code == 200
+        assert load_pem_private_key(response.content, password=None).key_size == 2048
+
 
 # ---------------------------------------------------------------------------
 # Connection logging

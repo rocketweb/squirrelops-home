@@ -98,7 +98,7 @@ async def test_allocate_verified_excludes_fresh_arp_owner(db):
         ("192.168.1.200", "38:42:0b:48:51:07"),
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.allocate_verified(1) == ["192.168.1.201"]
     ops.arp_scan.assert_awaited_once_with("192.168.1.0/24")
@@ -120,7 +120,7 @@ async def test_allocate_verified_unions_database_and_fresh_arp_owners(db):
         ("192.168.1.201", "38:42:0b:48:51:07"),
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.allocate_verified(1) == ["192.168.1.202"]
 
@@ -148,7 +148,7 @@ async def test_allocate_verified_reserves_stopped_mimic_bind_address(db):
         ("192.168.1.1", "00:11:22:33:44:55"),
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.allocate_verified(1) == ["192.168.1.201"]
 
@@ -164,7 +164,7 @@ async def test_allocate_verified_reuses_supplied_fresh_arp_results(db):
     )
     ops = AsyncMock()
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     result = await manager.allocate_verified(
         1,
@@ -192,7 +192,7 @@ async def test_allocate_verified_shares_probe_across_deployment_burst(db):
         ("192.168.1.1", "00:11:22:33:44:55"),
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.allocate_verified(1) == ["192.168.1.200"]
     assert await manager.allocate_verified(1) == ["192.168.1.201"]
@@ -212,7 +212,7 @@ async def test_snapshot_real_ip_owners_forces_one_fresh_probe(db):
         ("192.168.1.200", "38:42:0b:48:51:07"),
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
     manager._owner_scan_cache = {"192.168.1.199": "66:55:44:33:22:11"}
 
     assert await manager.snapshot_real_ip_owners() == [
@@ -250,7 +250,7 @@ async def test_allocate_verified_fails_closed_when_probe_only_sees_local_aliases
         ("192.168.1.200", "aa:bb:cc:dd:ee:ff"),
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.allocate_verified(1) == []
 
@@ -289,7 +289,7 @@ async def test_ownership_checks_fail_closed_when_device_inventory_is_unavailable
         allocator=allocator,
         db=broken_db,
     )
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.allocate_verified(1) == []
     assert await manager.is_verified_free("192.168.1.200") is False
@@ -311,7 +311,7 @@ async def test_untracked_local_address_is_not_free_for_mimic_ownership(db):
         ("192.168.1.200", "aa:bb:cc:dd:ee:ff"),
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.allocate_verified(1) == []
     assert await manager.is_verified_free("192.168.1.200") is False
@@ -332,7 +332,7 @@ async def test_restore_verification_does_not_reuse_cached_ownership_snapshot(db)
         ("192.168.1.200", "38:42:0b:48:51:07"),
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
     manager._owner_scan_cache = {
         "192.168.1.1": "00:11:22:33:44:55",
     }
@@ -361,7 +361,7 @@ async def test_verify_batch_ownership_withdraws_only_new_aliases_for_one_probe(d
         {"192.168.1.199", "192.168.1.200", "192.168.1.201"}
     )
     manager._verified_published.update(manager._active)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     conflicts = await manager.verify_batch_ownership(
         {"192.168.1.200", "192.168.1.201"}
@@ -418,7 +418,7 @@ async def test_find_conflicts_ignores_proxy_arp_owned_by_this_host(db):
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.add("192.168.1.200")
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.find_conflicts() == {}
 
@@ -441,7 +441,7 @@ async def test_find_conflicts_canonicalizes_unpadded_macos_proxy_mac(db):
     ops = AsyncMock()
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.update({"192.168.1.200", "192.168.1.201"})
-    manager._local_interface_macs = lambda: {"1c:1d:d3:e0:7d:03"}
+    manager._local_interface_macs = AsyncMock(return_value={"1c:1d:d3:e0:7d:03"})
 
     conflicts = await manager.find_conflicts(
         arp_results=[
@@ -467,7 +467,7 @@ async def test_find_conflicts_ignores_malformed_mac_but_keeps_foreign_claim(db):
     ops = AsyncMock()
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.update({"192.168.1.200", "192.168.1.201"})
-    manager._local_interface_macs = lambda: {"1c:1d:d3:e0:7d:03"}
+    manager._local_interface_macs = AsyncMock(return_value={"1c:1d:d3:e0:7d:03"})
 
     conflicts = await manager.find_conflicts(
         arp_results=[
@@ -492,7 +492,7 @@ async def test_find_conflicts_preserves_alias_when_local_mac_inventory_fails(db)
     ops = AsyncMock()
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.add("192.168.1.200")
-    manager._local_interface_macs = lambda: set()
+    manager._local_interface_macs = AsyncMock(return_value=set())
 
     conflicts = await manager.find_conflicts(
         arp_results=[
@@ -517,6 +517,7 @@ async def test_allocate_verified_reserves_ip_with_malformed_mac_owner(db):
     )
     ops = AsyncMock()
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     allocated = await manager.allocate_verified(
         2,
@@ -542,7 +543,7 @@ async def test_find_conflicts_preserves_alias_when_probe_only_sees_local_aliases
     ]
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.add("192.168.1.200")
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.find_conflicts() == {}
     ops.remove_ip_alias.assert_not_awaited()
@@ -559,7 +560,7 @@ async def test_find_conflicts_accepts_completed_discovery_scan(db):
     ops = AsyncMock()
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.add("192.168.1.200")
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     conflicts = await manager.find_conflicts(
         arp_results=[
@@ -583,7 +584,7 @@ async def test_macos_routine_conflict_probe_does_not_withdraw_active_aliases(db)
     ops.requires_active_alias_withdrawal_probe = True
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.update({"192.168.1.200", "192.168.1.201"})
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     conflicts = await manager.find_conflicts(
         arp_results=[
@@ -638,7 +639,7 @@ async def test_post_allocation_conflict_is_detected_by_fresh_probe(db):
     ]
     ops.add_ip_alias.return_value = True
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
-    manager._local_interface_macs = lambda: {"aa:bb:cc:dd:ee:ff"}
+    manager._local_interface_macs = AsyncMock(return_value={"aa:bb:cc:dd:ee:ff"})
 
     assert await manager.allocate_verified(1) == ["192.168.1.200"]
     assert await manager.add_alias("192.168.1.200") is True

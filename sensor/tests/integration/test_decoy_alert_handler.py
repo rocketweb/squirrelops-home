@@ -86,6 +86,25 @@ class TestDecoyTrip:
     """A decoy.trip event should create a HIGH severity alert."""
 
     @pytest.mark.asyncio
+    async def test_rejected_and_relayed_attempts_keep_distinct_operator_evidence(self, handler, bus, db):
+        outcomes = ["capacity_rejected", "guest_connect_failed", "guest_connect_timeout", "guest_connected"]
+        for index, outcome in enumerate(outcomes):
+            await bus.deliver("decoy.trip", {
+                "source_ip": "192.0.2.44", "source_port": 53012 + index,
+                "dest_port": 22, "protocol": "tcp", "interaction_type": f"ssh.{outcome}",
+                "timestamp": f"2026-09-26T12:00:0{index}Z",
+            })
+        rows = await (await db.execute("SELECT detail FROM home_alerts")).fetchall()
+        assert len(rows) == 1
+        detail = json.loads(rows[0]["detail"])
+        assert detail["connection_count"] == 4
+        assert [e["interaction_type"] for e in detail["recent_connections"]] == [
+            f"ssh.{outcome}" for outcome in outcomes
+        ]
+        assert len(bus.events_of_type("alert.new")) == 1
+        assert len(bus.events_of_type("alert.updated")) == 3
+
+    @pytest.mark.asyncio
     async def test_creates_alert_row(self, handler, bus, db):
         await bus.deliver("decoy.trip", {
             "source_ip": "10.0.0.5",
@@ -119,6 +138,9 @@ class TestDecoyTrip:
         assert len(alert_new_events) == 1
         assert alert_new_events[0]["alert_type"] == AlertType.DECOY_TRIP.value
         assert alert_new_events[0]["severity"] == Severity.HIGH.value
+        assert alert_new_events[0]["connection_count"] == 1
+        assert alert_new_events[0]["ports"] == [8080]
+        assert alert_new_events[0]["service_counts"] == {"8080": 1}
 
     @pytest.mark.asyncio
     async def test_calls_incident_grouper(self, handler, bus, db, incident_grouper):
@@ -255,12 +277,21 @@ class TestScanConnection:
         detail = json.loads(rows[0]["detail"])
         assert detail["connection_count"] == 2
         assert detail["ports"] == [80, 443]
+        assert detail["service_counts"] == {"80": 1, "443": 1}
         assert detail["decoy_ids"] == [first_decoy, second_decoy]
         assert len(detail["endpoints"]) == 2
         assert detail["detection_method"] == "decoy_port_scan"
+        assert [item["dest_port"] for item in detail["recent_connections"]] == [
+            80,
+            443,
+        ]
         assert len(connections) == 2
         assert len(bus.events_of_type("alert.new")) == 1
         assert len(bus.events_of_type("alert.updated")) == 1
+        update = bus.events_of_type("alert.updated")[0]
+        assert update["connection_count"] == 2
+        assert update["ports"] == [80, 443]
+        assert update["service_counts"] == {"80": 1, "443": 1}
         incident_grouper.process_alert.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -316,6 +347,8 @@ class TestScanConnection:
         assert rows[0]["title"] == "Decoy connection from 10.0.0.7 on port 80"
         detail = json.loads(rows[0]["detail"])
         assert detail["connection_count"] == 2
+        assert detail["service_counts"] == {"80": 2}
+        assert len(detail["recent_connections"]) == 2
         assert len(detail["endpoints"]) == 1
 
     @pytest.mark.asyncio

@@ -51,46 +51,48 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.xl) {
-                Text("Settings")
-                    .font(Typography.h2)
-                    .foregroundStyle(Theme.textPrimary(colorScheme))
-
-                if let saveError {
-                    settingsNotice(
-                        saveError,
-                        icon: "exclamationmark.triangle.fill",
-                        color: Theme.statusError(colorScheme)
-                    )
-                }
-
-                appearanceSection
-                profileSection
-                alertMethodsSection
-                fingerprintSection
-                credentialSection
-                if selectedProfile == "standard" || selectedProfile == "full" {
-                    llmConfigSection
-                }
-                homeAssistantSection
-                sensorSection
-                updatesSection
-
-                Spacer()
+        VStack(spacing: 0) {
+            PageHeader(title: "Settings") { EmptyView() }
+            Divider()
+            ScrollView {
+                settingsContent
+                    .frame(maxWidth: 760)
+                    .padding(Spacing.lg)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(Spacing.lg)
         }
         .background(Theme.background(colorScheme))
-        .task {
-            await loadConfig()
-        }
+        .task { await loadConfig() }
         .overlay {
             if isLoading {
                 ProgressView("Loading settings...")
                     .padding()
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             }
+        }
+    }
+
+    private var settingsContent: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            if let saveError {
+                settingsNotice(
+                    saveError,
+                    icon: "exclamationmark.triangle.fill",
+                    color: Theme.statusError(colorScheme)
+                )
+            }
+
+            appearanceSection
+            profileSection
+            alertMethodsSection
+            fingerprintSection
+            credentialSection
+            if selectedProfile == "standard" || selectedProfile == "full" {
+                llmConfigSection
+            }
+            homeAssistantSection
+            sensorSection
+            updatesSection
         }
     }
 
@@ -107,6 +109,7 @@ struct SettingsView: View {
                 Text("Full").tag("full")
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
             .disabled(isLoading || isUpdatingProfile)
             .onChange(of: selectedProfile) { _, newValue in
                 guard !isLoading, !isUpdatingProfile else { return }
@@ -124,6 +127,7 @@ struct SettingsView: View {
                     .foregroundStyle(Theme.statusSuccess(colorScheme))
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -163,7 +167,9 @@ struct SettingsView: View {
                 Text("Dark").tag("dark")
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -283,6 +289,7 @@ struct SettingsView: View {
             }
 
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -379,6 +386,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -401,6 +409,7 @@ struct SettingsView: View {
                 Text("Strict (0.90)").tag("0.90")
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
             .disabled(isLoading)
             .onChange(of: autoApproveThreshold) { _, newValue in
                 guard !isLoading else { return }
@@ -419,6 +428,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -458,6 +468,7 @@ struct SettingsView: View {
                     }
                 }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -545,6 +556,7 @@ struct SettingsView: View {
                 .disabled(haURL.isEmpty || haToken.isEmpty || haTestStatus == .testing)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -578,6 +590,7 @@ struct SettingsView: View {
                 infoRow("Uptime", value: formatUptime(info.uptimeSeconds))
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -644,6 +657,7 @@ struct SettingsView: View {
                 EmptyView()
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Spacing.md)
         .background(Theme.backgroundSecondary(colorScheme))
         .cornerRadius(Spacing.radiusLg)
@@ -659,7 +673,10 @@ struct SettingsView: View {
                 .font(Typography.mono)
                 .tracking(Typography.monoTracking)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
-                .lineLimit(1)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .help(value)
         }
     }
 
@@ -690,6 +707,7 @@ struct SettingsView: View {
                 Text("Critical").tag("critical")
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
             .disabled(!enabled || isLoading)
             .onChange(of: selection.wrappedValue) { _, newValue in
                 guard !isLoading else { return }
@@ -897,7 +915,7 @@ struct SettingsView: View {
         haTestStatus = .testing
         Task {
             do {
-                let response: HAStatusResponse = try await appState.sensorClient!.request(.haStatus)
+                let response: HAStatusResponse = try await appState.requireSensorClient().request(.haStatus)
                 if response.connected {
                     haTestStatus = .success(deviceCount: response.deviceCount)
                 } else {

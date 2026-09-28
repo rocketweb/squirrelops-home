@@ -58,6 +58,12 @@ def mock_subsystems() -> dict[str, Any]:
     }
     mocks["load_config"] = mock_load_config
 
+    # Encrypted secret store
+    mock_secret_store = AsyncMock()
+    mock_create_secret_store = MagicMock(return_value=mock_secret_store)
+    mocks["secret_store"] = mock_secret_store
+    mocks["create_secret_store"] = mock_create_secret_store
+
     # Database
     mock_db = AsyncMock()
     mock_db.close = AsyncMock()
@@ -122,6 +128,17 @@ def mock_subsystems() -> dict[str, Any]:
     mock_mimic_orchestrator.stop_all = AsyncMock()
     mock_mimic_orchestrator.reconcile_ip_conflicts = AsyncMock()
     mocks["mimic_orchestrator"] = mock_mimic_orchestrator
+
+    mock_deep_orchestrator = AsyncMock()
+    mock_deep_orchestrator.start = AsyncMock(return_value=True)
+    mock_deep_orchestrator.stop_all = AsyncMock()
+    mock_deep_orchestrator.handle_ip_conflict = AsyncMock(return_value=True)
+    mock_deep_orchestrator.active_virtual_ip = "192.168.1.220"
+    mock_deep_orchestrator_cls = MagicMock(return_value=mock_deep_orchestrator)
+    mock_load_deep_secret = AsyncMock(return_value=b"d" * 32)
+    mocks["deep_orchestrator"] = mock_deep_orchestrator
+    mocks["deep_orchestrator_cls"] = mock_deep_orchestrator_cls
+    mocks["load_deep_secret"] = mock_load_deep_secret
 
     mock_ip_manager = AsyncMock()
     mock_ip_manager.load_from_db = AsyncMock(return_value=0)
@@ -201,10 +218,20 @@ def patched(mock_subsystems: dict[str, Any]):
     import contextlib
 
     with contextlib.ExitStack() as stack:
+        mocks_network = stack.enter_context(
+            patch("squirrelops_home_sensor.__main__.resolve_runtime_network", new_callable=AsyncMock)
+        )
+        mock_subsystems["resolve_runtime_network"] = mocks_network
         stack.enter_context(
             patch(
                 "squirrelops_home_sensor.__main__.load_config",
                 mock_subsystems["load_config"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "squirrelops_home_sensor.__main__.create_secret_store",
+                mock_subsystems["create_secret_store"],
             )
         )
         stack.enter_context(
@@ -283,6 +310,20 @@ def patched(mock_subsystems: dict[str, Any]):
             patch(
                 "squirrelops_home_sensor.api.local_enrollment.LocalEnrollmentServer",
                 mock_subsystems["local_enrollment_cls"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "squirrelops_home_sensor.decoys.deep.orchestrator."
+                "DeepDecoyOrchestrator",
+                mock_subsystems["deep_orchestrator_cls"],
+            )
+        )
+        stack.enter_context(
+            patch(
+                "squirrelops_home_sensor.decoys.deep.orchestrator."
+                "load_or_create_deployment_secret",
+                mock_subsystems["load_deep_secret"],
             )
         )
         yield
@@ -409,6 +450,20 @@ class TestEntryPointStartup:
 
         mock_subsystems["open_db"].assert_called_once()
         mock_subsystems["run_migrations"].assert_called_once_with(mock_subsystems["db"])
+        mock_subsystems["resolve_runtime_network"].assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lan_resolution_failure_precedes_database_and_network_start(
+        self, config_file: Path, mock_subsystems: dict[str, Any], patched: None,
+    ) -> None:
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["resolve_runtime_network"].side_effect = RuntimeError("LAN unavailable")
+        with pytest.raises(RuntimeError, match="LAN unavailable"):
+            await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+        mock_subsystems["open_db"].assert_not_called()
+        mock_subsystems["create_scan_loop"].assert_not_called()
+        mock_subsystems["create_scouts_subsystem"].assert_not_called()
 
     @pytest.mark.asyncio
     async def test_initializes_event_bus(
@@ -475,6 +530,146 @@ class TestEntryPointStartup:
         ].set_hostname_advisor_target.assert_called_once_with(
             mock_subsystems["mimic_orchestrator"]
         )
+
+    @pytest.mark.asyncio
+    async def test_darwin_starts_deep_decoy_with_encrypted_seed_and_private_state(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """Production wiring owns the seed and guest state outside sensor data."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+
+        with patch("squirrelops_home_sensor.__main__.sys.platform", "darwin"):
+            await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        mock_subsystems["load_deep_secret"].assert_awaited_once_with(
+            mock_subsystems["secret_store"]
+        )
+        deep_call = mock_subsystems["deep_orchestrator_cls"].call_args
+        assert deep_call is not None
+        assert deep_call.kwargs["deployment_secret"] == b"d" * 32
+        assert deep_call.kwargs["state_dir"] == Path("/tmp/run/deception-guest")
+        assert (
+            deep_call.kwargs["backend_bind_address_for"]
+            is mock_subsystems["scan_loop"].privileged_ops.listener_bind_address
+        )
+        mock_subsystems["deep_orchestrator"].start.assert_awaited_once()
+        mock_subsystems["deep_orchestrator"].stop_all.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("platform", "deep_enabled"),
+        [("linux", True), ("darwin", False)],
+    )
+    async def test_deep_decoy_is_not_constructed_outside_enabled_macos(
+        self,
+        platform: str,
+        deep_enabled: bool,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        mock_subsystems["load_config"].return_value["decoys"] = {
+            "deep_enabled": deep_enabled,
+        }
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+
+        with patch("squirrelops_home_sensor.__main__.sys.platform", platform):
+            await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        mock_subsystems["load_deep_secret"].assert_not_awaited()
+        mock_subsystems["deep_orchestrator_cls"].assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reclaims_deep_address_before_resuming_mimics(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """The deep reservation has no allocation gap during startup resume."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        calls: list[str] = []
+
+        def record(name: str, result: Any = None) -> Any:
+            calls.append(name)
+            return result
+
+        mock_subsystems["ip_manager"].load_from_db.side_effect = (
+            lambda **_kwargs: record("ip:load", 0)
+        )
+        mock_subsystems["mimic_orchestrator"].prepare_persisted_network.side_effect = (
+            lambda: record("mimic:prepare", 0)
+        )
+        mock_subsystems["deep_orchestrator"].start.side_effect = (
+            lambda: record("deep:start", True)
+        )
+        mock_subsystems["mimic_orchestrator"].resume_active.side_effect = (
+            lambda: record("mimic:resume", 0)
+        )
+        mock_subsystems["scout_scheduler"].start.side_effect = (
+            lambda: record("scouts:start")
+        )
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+
+        with patch("squirrelops_home_sensor.__main__.sys.platform", "darwin"):
+            await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        assert calls[:5] == [
+            "ip:load",
+            "mimic:prepare",
+            "deep:start",
+            "mimic:resume",
+            "scouts:start",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_conflict_hook_routes_deep_and_mimic_addresses(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        deep_ip = "192.168.1.220"
+        mimic_ip = "192.168.1.221"
+        raw_arp = [(deep_ip, "00:11:22:33:44:55")]
+        mock_subsystems["ip_manager"].find_conflicts.return_value = {
+            deep_ip: "00:11:22:33:44:55",
+            mimic_ip: "00:11:22:33:44:66",
+        }
+        mock_subsystems["mimic_orchestrator"].handle_ip_conflict = AsyncMock(
+            return_value=True
+        )
+        mock_subsystems["mimic_orchestrator"].evaluate_and_deploy = AsyncMock()
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+
+        with patch("squirrelops_home_sensor.__main__.sys.platform", "darwin"):
+            await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        conflict_handler = mock_subsystems[
+            "scan_loop"
+        ].set_ip_conflict_handler.call_args.args[0]
+        assert await conflict_handler(raw_arp) == 2
+        mock_subsystems["deep_orchestrator"].reconcile.assert_awaited_once()
+        mock_subsystems["ip_manager"].find_conflicts.assert_awaited_once_with(raw_arp)
+        mock_subsystems["deep_orchestrator"].handle_ip_conflict.assert_awaited_once_with(
+            deep_ip
+        )
+        mock_subsystems[
+            "mimic_orchestrator"
+        ].handle_ip_conflict.assert_awaited_once_with(mimic_ip)
+        mock_subsystems[
+            "mimic_orchestrator"
+        ].evaluate_and_deploy.assert_awaited_once_with(raw_arp)
 
     @pytest.mark.asyncio
     async def test_creates_fastapi_app_with_dependencies(
@@ -690,6 +885,47 @@ class TestEntryPointShutdown:
         mock_subsystems["port_fwd"].clear_all.assert_awaited_once()
         mock_subsystems["orchestrator"].stop.assert_awaited_once()
         mock_subsystems["db"].close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_deep_stops_before_shared_network_cleanup(
+        self,
+        config_file: Path,
+        mock_subsystems: dict[str, Any],
+        patched: None,
+    ) -> None:
+        """Guest listeners stop before aliases and packet-filter rules disappear."""
+        from squirrelops_home_sensor.__main__ import run_sensor
+
+        calls: list[str] = []
+
+        def record(name: str, result: Any = None) -> Any:
+            calls.append(name)
+            return result
+
+        mock_subsystems["deep_orchestrator"].stop_all.side_effect = (
+            lambda: record("deep:stop")
+        )
+        mock_subsystems["mimic_orchestrator"].stop_all.side_effect = (
+            lambda: record("mimic:stop")
+        )
+        mock_subsystems["mimic_mdns"].stop.side_effect = (
+            lambda: record("mimic-mdns:stop")
+        )
+        mock_subsystems["ip_manager"].remove_all.side_effect = (
+            lambda: record("aliases:remove", 0)
+        )
+        mock_subsystems["port_fwd"].clear_all.side_effect = (
+            lambda: record("pf:clear", True)
+        )
+        mock_subsystems["uvicorn_server"].serve.side_effect = asyncio.CancelledError
+
+        with patch("squirrelops_home_sensor.__main__.sys.platform", "darwin"):
+            await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
+
+        assert calls.index("deep:stop") < calls.index("mimic:stop")
+        assert calls.index("mimic:stop") < calls.index("mimic-mdns:stop")
+        assert calls.index("mimic-mdns:stop") < calls.index("aliases:remove")
+        assert calls.index("aliases:remove") < calls.index("pf:clear")
 
     @pytest.mark.asyncio
     async def test_cleanup_failure_does_not_skip_later_critical_cleanup(

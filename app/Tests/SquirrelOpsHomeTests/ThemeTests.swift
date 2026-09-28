@@ -61,12 +61,12 @@ struct ThemeTests {
         #expect(Theme.textPrimary(.dark) != Theme.textPrimary(.light))
     }
 
-    @Test("Status colors are the same in both modes")
-    func statusColorsSameBothModes() {
-        #expect(Theme.statusSuccess(.dark) == Theme.statusSuccess(.light))
-        #expect(Theme.statusWarning(.dark) == Theme.statusWarning(.light))
-        #expect(Theme.statusError(.dark) == Theme.statusError(.light))
-        #expect(Theme.statusInfo(.dark) == Theme.statusInfo(.light))
+    @Test("Status text adapts to light and dark backgrounds")
+    func statusColorsAdaptToAppearance() {
+        #expect(Theme.statusSuccess(.dark) != Theme.statusSuccess(.light))
+        #expect(Theme.statusWarning(.dark) != Theme.statusWarning(.light))
+        #expect(Theme.statusError(.dark) != Theme.statusError(.light))
+        #expect(Theme.statusInfo(.dark) != Theme.statusInfo(.light))
     }
 
     // MARK: - Spacing Tests

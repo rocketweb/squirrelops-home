@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import sys
 import time
 from datetime import UTC, datetime
 from enum import Enum
@@ -13,7 +14,10 @@ from pydantic import BaseModel
 
 from squirrelops_home_sensor import __version__
 from squirrelops_home_sensor.api.deps import get_config, get_db, verify_client_cert
-from squirrelops_home_sensor.api.routes_decoys import get_decoy_orchestrator
+from squirrelops_home_sensor.api.routes_decoys import (
+    get_decoy_orchestrator,
+    get_deep_decoy_orchestrator,
+)
 from squirrelops_home_sensor.api.routes_scouts import (
     get_mimic_orchestrator,
     get_scout_scheduler,
@@ -54,6 +58,11 @@ class HealthResponse(BaseModel):
     uptime_seconds: float
 
 
+class DeepDecoyStatus(BaseModel):
+    status: str
+    reason: str | None = None
+
+
 class StatusResponse(BaseModel):
     version: str
     api_protocol_version: int
@@ -63,6 +72,7 @@ class StatusResponse(BaseModel):
     decoy_count: int
     alert_count: int
     event_seq: int
+    deep_decoy: DeepDecoyStatus | None = None
 
 
 class ProfileResponse(BaseModel):
@@ -97,6 +107,7 @@ async def status(
     db: aiosqlite.Connection = Depends(get_db),
     config: dict = Depends(get_config),
     mimic_orchestrator=Depends(get_mimic_orchestrator),
+    deep_orchestrator=Depends(get_deep_decoy_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """System status with counts. Requires authentication."""
@@ -109,15 +120,29 @@ async def status(
     if row:
         device_count = row[0]
 
-    decoy_query = "SELECT COUNT(*) FROM decoys WHERE status = 'active'"
+    decoy_query = (
+        "SELECT COUNT(*) FROM decoys WHERE status = 'active' "
+        "AND (host_id IS NULL OR is_primary = 1)"
+    )
     if mimic_orchestrator is not None:
         decoy_query += " AND decoy_type != 'mimic'"
+    if deep_orchestrator is not None:
+        decoy_query += " AND decoy_type != 'deep'"
     cursor = await db.execute(decoy_query)
     row = await cursor.fetchone()
     if row:
         decoy_count = row[0]
     if mimic_orchestrator is not None:
         decoy_count += mimic_orchestrator.active_count
+    deep_status = None
+    if deep_orchestrator is not None:
+        decoy_count += deep_orchestrator.active_count
+        deep_status = DeepDecoyStatus(**deep_orchestrator.diagnostics)
+    elif sys.platform == "darwin":
+        if not config.get("decoys", {}).get("deep_enabled", True):
+            deep_status = DeepDecoyStatus(status="disabled", reason="Disabled in sensor configuration.")
+        else:
+            deep_status = DeepDecoyStatus(status="unavailable", reason="Studio startup is unavailable. Check that Squirrel Scouts and the packaged local sensor are enabled.")
 
     cursor = await db.execute("SELECT COUNT(*) FROM home_alerts")
     row = await cursor.fetchone()
@@ -141,6 +166,7 @@ async def status(
         decoy_count=decoy_count,
         alert_count=alert_count,
         event_seq=event_seq,
+        deep_decoy=deep_status,
     )
 
 

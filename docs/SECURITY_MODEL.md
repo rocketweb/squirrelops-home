@@ -28,6 +28,17 @@ are ignored, and plaintext development authentication is restricted to a
 literal loopback peer. mDNS is discovery only and is not an authorization
 boundary.
 
+Control WebSocket frames must be JSON objects. Malformed authentication is
+rejected; malformed messages after authentication close the connection with a
+protocol error. Replay cursors must be nonnegative signed-64-bit integers, not
+booleans or coerced strings. These checks apply to the management API, not to
+decoy protocols.
+
+Remote pairing and local enrollment use the same nonempty, trimmed client name
+with a 128-character maximum and no ASCII control characters. The app aborts
+remote pairing if secure nonce generation fails, before sending a proof or
+storing credentials.
+
 ## Automatic local enrollment
 
 The signed macOS package installs the app, unprivileged sensor, and root helper
@@ -101,6 +112,77 @@ fingerprinting requests. Targets are restricted to private LAN addresses,
 SSDP description requests are pinned to the UDP responder address, redirects
 and environment proxies are disabled, and response sizes and deadlines are
 bounded. Probe results are untrusted observations, never authentication input.
+
+## Deep-decoy guest boundary
+
+### macOS virtual-IP forwarding
+
+The helper renders redirects without an unconditional `rdr pass`. Each redirect
+sets a private PF tag. A separate TCP filter rule requires that tag, the exact
+destination, the selected ingress interface, and the kernel-observed socket
+owner UID. The helper resolves `_squirrelops` itself; an RPC caller cannot
+choose the allowed UID. Missing, root, or unknown UIDs cannot authorize TCP
+publication. Untagged backend-port probes and other traffic still reach the
+virtual IP's default-deny rule. ICMP echo behavior is unchanged.
+
+The pre-load and post-load exact listener checks remain. The kernel rule adds
+a UID boundary, not process-ID pinning. If a post-load check fails, the helper
+attempts block-only quarantine and connection-state cleanup independently.
+Failure on one endpoint does not skip cleanup of later endpoints. Incomplete
+recovery returns an error, retains cleanup work for retry, and cannot authorize
+a new alias publication from the cached state.
+
+Existing PF states can bypass new filter evaluation. Endpoint and allowed-UID
+changes therefore require state cleanup; a guarded rule is not proof that all
+old states are gone. Rule-generation tests, injected recovery failures, and the
+macOS syntax parser cover the source change. Live listener replacement, state
+reuse, upgrade from older rules, and second-machine LAN acceptance remain
+release gates. See the [PF safety development record](testing/2026-09-26-pf-safety-development.md).
+
+### Disposable guest
+
+The 2.1 Studio Build Mac runs real OpenSSH and Samba inside a disposable
+Virtualization.framework guest, not inside the sensor or privileged helper.
+The separately signed guest runtime is unprivileged. Its virtual machine has
+no network device, persistent disk, shared directory, clipboard, USB, camera,
+microphone, audio, graphics, or input device. A fixed Virtio socket device is
+its only application data path.
+
+The sensor generates one bounded persona archive in memory and writes it to
+the runtime's anonymous standard-input pipe. The runtime transfers it once to
+the guest. The guest cannot read the sensor's filesystem or initiate a LAN or
+internet connection. SSH and SMB listeners are opaque byte relays to two fixed
+guest socket ports, under the same connection ceiling as the VM. Neither the
+sensor nor runtime parses attacker-controlled SSH or SMB messages.
+
+The shared host ceiling remains 16 connections. A guest socket must connect
+within 10 seconds; a missed callback invalidates that VM's connector and stops
+the runtime rather than accumulating uncancellable Virtio requests. Late
+callbacks close their sockets. Active relays expire after five minutes without
+byte progress, or 30 seconds without progress after either direction reaches
+EOF. Progress renews the applicable deadline; active transfers have no absolute
+session-duration limit. Cancellation interrupts I/O but retains descriptor
+ownership and admission until both workers finish. Nonblocking I/O and bounded
+polls let workers observe cancellation even if socket shutdown misses a wakeup.
+
+Guest sshd exempts `127.0.0.1/32` from per-source penalties because every Virtio
+relay appears at that address. Its `MaxStartups 16` matches the host ceiling.
+This prevents one visitor's scan from penalizing all later SSH visitors.
+Connection evidence distinguishes guest-connected, capacity-rejected,
+guest-connect-failed, and guest-connect-timeout outcomes. Rejected attempts
+remain decoy hits; a connected guest channel is not proof of authentication.
+
+The guest kernel, initramfs, containment declaration, resources, services, and
+SHA-256 digests are validated before packaging and again before launch. Release
+artifacts must be root-owned and non-writable by other accounts. A linked,
+writable, oversized, wrong-architecture, missing, or malformed artifact leaves
+the host degraded with packet-filter deny rules in place.
+
+Ollama, OpenAI-compatible, and MCP presentations run as bounded unprivileged
+sensor listeners on private backend ports. They accept limited request sizes
+and deadlines, return only synthetic data, and persist only source address,
+classified intent, narrative stage, and decoy evidence. They do not invoke a
+model, tool, repository, command, or external service.
 
 ## Secrets and executable integrity
 

@@ -21,6 +21,7 @@ struct StatusBadge: View {
 
     var body: some View {
         Text(label.uppercased())
+            .fixedSize(horizontal: true, vertical: false)
             .font(.system(size: 11, weight: .semibold))
             .tracking(0.5)
             .foregroundStyle(style.textColor(colorScheme))

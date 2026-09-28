@@ -24,8 +24,11 @@ caller-selected forwarding destinations, arbitrary commands, oversized
 requests, and aliases it does not own. The sensor mounts the socket volume
 read-only and cannot access the Docker socket.
 
-`.github/release-policy.json` keeps `linux_release.mode` set to `blocked`, and
-the remote-control checker enforces that sentinel before any release build.
+`.github/release-policy.json` keeps `linux_release.mode` set to `blocked`. The
+`Release Sensor` workflow invokes the Linux boundary checker before publishing
+Linux artifacts. The separate Home workflow does not publish Linux artifacts
+or invoke that checker; it still requires the protected component tags and all
+remote release controls. A component-only sensor tag is not Linux publication.
 The implementation is present but has not yet received the required independent
 boundary review. Do not change the policy merely to make the workflow pass.
 Unblocking requires one of these independently reviewed decisions:
@@ -45,6 +48,19 @@ path fails closed.
 ## Required GitHub settings
 
 Keep these settings in place for every release:
+
+The Home 2.1 package also has an indivisible guest-artifact boundary. Release
+automation builds ARM64 and x86_64 Studio Mini guests from the reviewed Alpine
+image digest. The complete installed Alpine package inventory is also pinned in
+`guest/studio-mini/packages.lock`, and either architecture build fails if the
+repository produces a different version set. The macOS job downloads that
+private artifact, selects the exact package architecture, and rejects any
+unexpected file, symlink, writable file, digest mismatch, architecture
+mismatch, changed resource ceiling, changed containment declaration, or changed
+socket/service map. The guest runtime is signed separately with only the
+virtualization entitlement before the outer app signature is applied. Do not
+substitute a locally cached guest, floating container tag, or pre-existing
+release asset.
 
 1. Enable **release immutability**. The workflow checks the repository setting
    before building and again immediately before publication. A published
@@ -123,9 +139,11 @@ environment ID, name, and release-reviewer User actor ID. Record the
 non-null GitHub Actions App source ID for the required supply-chain check as
 `main_ruleset.required_check_integration_id`. The live repository check source
 is the GitHub-owned GitHub Actions App, integration ID `15368`; that exact ID is
-pinned in policy. The remaining checked-in zero/null sentinels intentionally
-block releases until the repository controls are reviewed and recorded. A
-reviewer substitution or any pinned control change blocks publication.
+pinned in policy. The current policy records nonzero control IDs and reviewed
+timestamps. Those checked-in pins are not evidence that the remote controls
+still match; the checker must verify them for each release. The separate Linux
+review timestamp remains null while Linux publication is blocked. A reviewer
+substitution or any pinned control change blocks publication.
 
 The read-only App cannot see `bypass_actors`. That is deliberate. An
 administrator independently reviews the exact bypass list, then pins the
@@ -205,6 +223,9 @@ tag is component identity only. Release the signed macOS distribution with
 - every build checks out the verified commit SHA;
 - signing and notarization credentials are available only after environment
   approval;
+- both architecture-specific deep-decoy guests are rebuilt from the pinned
+  image digest and complete package inventory, and the package contains the
+  validated matching guest;
 - the multi-platform container is built into a private OCI archive with no
   public staging tag;
 - the Linux installer is rendered with the attested multi-platform container

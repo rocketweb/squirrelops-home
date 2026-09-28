@@ -428,6 +428,19 @@ def test_helper_arp_scan_is_observed_and_scoped_before_execution() -> None:
     assert "readARPTable(interface: interface)" in scanner_source
 
 
+def test_helper_pf_records_live_rules_before_post_load_owner_check() -> None:
+    source = (REPO_ROOT / "app/Sources/SquirrelOpsHelper/RPCMethods.swift").read_text(
+        encoding="utf-8"
+    )
+    setup = source[
+        source.index('// Loading a complete anchor ruleset is atomic.'):
+        source.index('router.handlers["clearPortForwards"]')
+    ]
+    assert setup.index("recordSuccessfulLiveMutation(") < setup.index(
+        "requireSensorOwnedListener("
+    )
+
+
 def test_helper_pf_mutations_require_owned_vips_and_sensor_listeners() -> None:
     source = (
         REPO_ROOT / "app/Sources/SquirrelOpsHelper/RPCMethods.swift"
@@ -479,7 +492,7 @@ def test_helper_pf_mutations_require_owned_vips_and_sensor_listeners() -> None:
     assert "$0.uid == serviceUID && $0.endpoint == expectedEndpoint" in source
     assert "quarantinePortForwardingAfterListenerRace(" in setup
     assert "requireNoLocalIPv4AddressConflicts(" in source
-    assert "cleanupPFStates(for: cleanupIPs" in source
+    assert "cleanupPFStates(for: [ip]" in source
     assert 'phase: "after listener-race quarantine"' in source
 
     ownership_check = clear.index(
