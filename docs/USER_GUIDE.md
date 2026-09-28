@@ -978,7 +978,12 @@ When a returning device's fingerprint confidence falls between 0.50 and the thre
 
 ### Credential Decoys
 
-Set the filename for the planted credential file served by decoy file shares. Default is `passwords.txt`. Change this if you want the credential artifact to look more natural for your network (e.g., `credentials.env`, `secrets.txt`).
+Set the credential filename for new **HTTP File Share** decoys. The default is
+`passwords.txt`; examples include `credentials.env` and `secrets.txt`. The sensor
+reads this setting at startup, so a saved change applies to newly created HTTP
+File Share decoys after a sensor restart. Existing decoys retain their stored
+filenames. This setting does not change Studio Build Mac's real SMB shares or
+SSH files, which use their own persona content and synthetic credentials.
 
 Synthetic credentials are exposed on supported HTTP decoy routes. When an
 intruder requests a planted endpoint such as `/.env` or `/passwords.txt`, a
@@ -1012,6 +1017,41 @@ Cloud keys are sent only to the selected provider's canonical HTTPS endpoint.
 Changing providers clears the previous provider's saved key before the new
 configuration is activated. Provider changes take effect immediately without
 restarting the sensor.
+
+To check the connection:
+
+1. Choose the provider and enter its endpoint and API key, if required. Changes
+   save automatically. The checks wait for the current save to finish.
+2. Click **Connect and load models**. Choose a model from the searchable
+   **Choose model** list, or enter its ID manually. **Refresh models** reloads
+   the catalog without generating text. A successful catalog request does not
+   prove that the key has generation permission, credits, or access to a model.
+3. Click **Test model**. The sensor sends two small synthetic requests using
+   the same classification and naming prompts and response parsers used during
+   normal operation. The result reports success, elapsed time, or a specific
+   connection, authentication, quota, model, or response-format problem.
+
+These checks run on the **sensor**, not the dashboard Mac. `localhost` therefore
+means the sensor's computer. Tests never use real device data or create decoys.
+Cloud providers may charge for the two generation requests; local providers may
+load the selected model into memory. Opening Settings does not run either check.
+Each test request caps output at 512 tokens, and the whole check has a 50-second
+deadline. A slow model load or a reasoning model that exhausts that budget can
+fail this bounded test even if a longer request could succeed.
+
+LM Studio, Ollama, OpenRouter, and compatible custom servers use their models
+endpoint. LM Studio's catalog depends on its just-in-time loading setting.
+Fireworks uses its account-scoped catalog: the account in an entered
+`accounts/account/models/model` ID, or `fireworks` if none is provided. A listed
+Fireworks model may still require a deployment; enter a deployment-specific ID
+manually when needed. Unsupported discovery does not prevent manual entry or
+testing. Known non-text model types are excluded when the provider identifies
+them; unknown capabilities remain selectable and require testing.
+
+Changing the provider, endpoint, key, or model clears the previous test result.
+Results are temporary and describe only the configuration tested at that time.
+Both the app and sensor must include the AI setup controls; an older sensor
+cannot serve the new checks.
 
 The sensor uses AI device classification only when the local signature database
 cannot fully classify a newly discovered device. It waits until the scan's port

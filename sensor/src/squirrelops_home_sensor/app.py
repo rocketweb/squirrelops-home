@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 
 from squirrelops_home_sensor import __version__
+from squirrelops_home_sensor.api.ai_diagnostics import router as ai_router
 from squirrelops_home_sensor.api.deps import verify_client_cert
 from squirrelops_home_sensor.api.routes_alerts import router as alerts_router
 from squirrelops_home_sensor.api.routes_config import router as config_router
@@ -67,6 +68,7 @@ def create_app(config: dict, ca_key=None, ca_cert=None) -> FastAPI:
     app.include_router(alerts_router, dependencies=protected)
     app.include_router(decoys_router, dependencies=protected)
     app.include_router(config_router, dependencies=protected)
+    app.include_router(ai_router, dependencies=protected)
     app.include_router(pairing_router)
     app.include_router(ports_router, dependencies=protected)
     app.include_router(scouts_router, dependencies=protected)

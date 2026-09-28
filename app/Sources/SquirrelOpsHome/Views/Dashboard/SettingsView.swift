@@ -36,6 +36,10 @@ struct SettingsView: View {
     @State private var llmModel: String = ""
     @State private var llmApiKey: String = ""
     @State private var llmSaveCoordinator = LLMConfigSaveCoordinator()
+    @State private var aiConnection = AIConnectionState()
+    @State private var aiProbeTask: Task<Void, Never>?
+    @State private var llmSaveError: String?
+    @State private var llmSaveRevision = UUID()
     @State private var autoApproveThreshold: String = "0.75"
     @State private var slackIncludeDeviceInfo = false
     @State private var credentialFilename: String = "passwords.txt"
@@ -63,6 +67,8 @@ struct SettingsView: View {
         }
         .background(Theme.background(colorScheme))
         .task { await loadConfig() }
+        .onDisappear { invalidateAIConnection() }
+        .onChange(of: appState.connectionState) { _, _ in invalidateAIConnection() }
         .overlay {
             if isLoading {
                 ProgressView("Loading settings...")
@@ -350,17 +356,18 @@ struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: Spacing.sm) {
-                    Text("Model")
+                    Text("Model ID (choose below or enter manually)")
                         .font(Typography.bodySmall)
                         .foregroundStyle(Theme.textSecondary(colorScheme))
 
                     TextField(llmModelPlaceholder, text: $llmModel)
                         .textFieldStyle(.roundedBorder)
                         .font(Typography.mono)
+                        .accessibilityLabel("AI model ID, manual entry")
                         .disabled(isLoading)
                         .onChange(of: llmModel) { _, _ in
                             guard !isLoading else { return }
-                            scheduleLLMConfigSave()
+                            scheduleLLMConfigSave(clearModels: false)
                         }
                 }
 
@@ -384,6 +391,12 @@ struct SettingsView: View {
                         .font(Typography.bodySmall)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
                 }
+                AIConnectionControls(
+                    state: aiConnection,
+                    model: $llmModel,
+                    disabled: isLoading || appState.sensorClient == nil || !appState.connectionState.isUsable,
+                    run: runAIProbe
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -441,7 +454,7 @@ struct SettingsView: View {
                 .tracking(Typography.captionTracking)
                 .foregroundStyle(Theme.textTertiary(colorScheme))
 
-            Text("Filename for the planted credential file served by decoy file shares.")
+            Text("Filename for new HTTP File Share decoys after the sensor restarts. Existing decoys keep their filenames. This does not change Studio Build Mac’s SMB or SSH files.")
                 .font(Typography.bodySmall)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
 
@@ -927,9 +940,45 @@ struct SettingsView: View {
         }
     }
 
-    private func scheduleLLMConfigSave() {
+    private func invalidateAIConnection(clearModels: Bool = true) {
+        aiProbeTask?.cancel()
+        aiConnection.invalidate(clearModels: clearModels)
+    }
+
+    private func runAIProbe(discovery: Bool) {
+        guard let client = appState.sensorClient, let token = aiConnection.begin() else { return }
+        aiProbeTask = Task { @MainActor in
+            await llmSaveCoordinator.waitForIdle()
+            guard !Task.isCancelled, token == aiConnection.revision else { return }
+            if let llmSaveError {
+                aiConnection.fail(llmSaveError, token: token)
+                return
+            }
+            do {
+                let result: AIProbeResponse = try await client.request(discovery ? .aiModels : .aiTest)
+                guard !Task.isCancelled else { return }
+                aiConnection.finish(result, token: token, discovery: discovery)
+            } catch {
+                guard !Task.isCancelled else { return }
+                let message: String
+                if case SensorClientError.badResponse(statusCode: 404, detail: _) = error {
+                    message = "AI checks require the updated 2.1 sensor as well as the app."
+                } else {
+                    message = "Could not check AI: \(error.localizedDescription)"
+                }
+                aiConnection.fail(message, token: token)
+            }
+        }
+    }
+
+    private func scheduleLLMConfigSave(clearModels: Bool = true) {
+        invalidateAIConnection(clearModels: clearModels)
+        llmSaveError = nil
+        llmSaveRevision = UUID()
+        let revision = llmSaveRevision
         saveError = nil
         guard let client = appState.sensorClient else {
+            llmSaveError = "Sensor is not connected. Save the AI settings after reconnecting."
             saveError = "Sensor is not connected."
             return
         }
@@ -956,6 +1005,8 @@ struct SettingsView: View {
                 try? await appState.refreshSystemStatus()
             } catch {
                 guard !Task.isCancelled else { return }
+                guard revision == llmSaveRevision else { return }
+                llmSaveError = "Save the AI settings successfully before testing: \(error.localizedDescription)"
                 saveError = "Failed to save AI configuration: \(error.localizedDescription)"
             }
         }

@@ -119,6 +119,15 @@ uv run pytest tests/unit/test_mimic_server.py -q
 uv run pytest tests/unit/test_scout_engine.py::TestGetMimicCandidates -q
 ```
 
+AI setup checks are covered by
+`sensor/tests/integration/test_ai_diagnostics.py` and
+`app/Tests/SquirrelOpsHomeTests/AIConnectionStateTests.swift`. The sensor tests
+use provider fixtures and a disposable loopback HTTP server, never configured
+cloud credentials. They exercise the production prompts and response parsers,
+catalog formats, authentication, response bounds, cancellation, and stale settings.
+Set `SQUIRRELOPS_AI_UI_OUTPUT` to an absolute output directory when running the
+compiled app tests to save the six light/dark AI control renderings.
+
 ---
 
 ## Architecture: Privileged Helper

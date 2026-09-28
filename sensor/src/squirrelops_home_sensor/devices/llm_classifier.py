@@ -264,6 +264,7 @@ class OpenAICompatibleClassifier(LLMClassifier):
         model: str,
         api_key: str | None = None,
         timeout: float = 60.0,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         base = endpoint.rstrip("/")
         # Ensure /v1 suffix for OpenAI-compatible APIs
@@ -272,7 +273,7 @@ class OpenAICompatibleClassifier(LLMClassifier):
         self._endpoint = base
         self._model = model
         self._api_key = api_key
-        self._client = httpx.AsyncClient(
+        self._client = client if client is not None else httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=False,
             trust_env=False,
