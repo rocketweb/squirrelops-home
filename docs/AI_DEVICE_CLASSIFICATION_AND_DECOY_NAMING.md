@@ -67,6 +67,16 @@ fields are persisted so the classification survives a sensor restart.
 
 ## Failure Behavior
 
+Settings separates catalog discovery from validation. **Connect and load models**
+fills a searchable native picker; manual model IDs remain available. **Test model**
+runs the production classifier and naming parser against synthetic fixtures from
+the sensor. It makes at most two generation requests and reports latency and
+actionable failures. No real device data is used and no decoy is created.
+Cloud tests may incur a small charge; local tests may load a model into memory.
+Model discovery does not prove inference access or model suitability. A saved
+configuration change invalidates prior test results. See the [setup steps and
+provider limitations](USER_GUIDE.md#optional-ai-device-classification-and-decoy-naming).
+
 AI is never required for deployment. Timeouts, malformed responses, rejected
 names, or an unavailable provider are logged and produce the deterministic
 fallback. They do not stop scanning, alerting, or decoy deployment.

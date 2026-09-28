@@ -186,6 +186,26 @@ model, tool, repository, command, or external service.
 
 ## Secrets and executable integrity
 
+### AI setup diagnostics
+
+The paired-client-only `POST /config/ai/models` and `POST /config/ai/test` routes
+use a snapshot of the sensor's saved AI configuration and credentials. They
+accept no caller-supplied prompt, device data, or destination. Cloud provider
+origins stay fixed; custom destinations must be explicitly configured. Redirects
+and environment proxies are disabled, TLS verification stays enabled, and URLs
+with embedded credentials, query strings, or fragments are rejected.
+
+Discovery is bounded to five catalog pages, 1,000 models, and 2 MiB per response.
+Generation tests use synthetic fixtures, two requests of at most 512 output
+tokens each, and the production prompts/parsers. Each diagnostic has a
+50-second overall deadline. One diagnostic can run at a time, with at most six
+starts per minute per sensor. These limits apply only to the management API.
+No decoy protocol is changed. Upstream error bodies and exception strings are
+not returned to the app. Configuration changes during a request invalidate its
+result; the UI separately rejects completions from an older settings revision.
+
+### Stored secrets
+
 TLS keys and configuration credentials are stored in the encrypted secret
 store. Runtime YAML contains non-secret configuration only. Legacy plaintext
 configuration credentials are migrated and scrubbed at startup.

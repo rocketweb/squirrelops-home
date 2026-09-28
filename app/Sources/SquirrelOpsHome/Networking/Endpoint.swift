@@ -103,6 +103,8 @@ public enum Endpoint: Sendable {
     case alertMethods
     case updateAlertMethods(body: [String: AnyCodableValue])
     case haStatus
+    case aiModels
+    case aiTest
 
     // Pairing
     case pairingChallenge
@@ -193,6 +195,10 @@ public enum Endpoint: Sendable {
             return "/config/alert-methods"
         case .haStatus:
             return "/config/ha-status"
+        case .aiModels:
+            return "/config/ai/models"
+        case .aiTest:
+            return "/config/ai/test"
         case .pairingChallenge:
             return "/pairing/code/challenge"
         case .pairingVerify:
@@ -238,7 +244,7 @@ public enum Endpoint: Sendable {
              .restartDecoy, .enableDecoy, .disableDecoy,
              .probePorts,
              .pairingVerify, .pairingComplete, .confirmLocalEnrollment,
-             .runScout, .deployMimics, .restartMimic:
+             .runScout, .deployMimics, .restartMimic, .aiModels, .aiTest:
             return "POST"
         case .updateProfile, .updateDevice, .readAlert, .actionAlert,
              .readIncident,
