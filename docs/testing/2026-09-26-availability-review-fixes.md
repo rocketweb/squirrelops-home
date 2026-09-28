@@ -5,6 +5,10 @@ Scope approved by Matt: implement M2/N1 and qualified N2, fix App/Sensor CI,
 test, rebuild a local installer, and commit/push for Chrissy's re-review.
 No installation, PF mutation, merge, tag, release dispatch, or publication.
 
+Update 2026-09-27: the [exact packaged-runtime live test](2026-09-27-packaged-runtime-acceptance.md)
+passed after Matt approved temporary ownership of the disposable guest copy.
+Ownership was restored; installer bytes are unchanged.
+
 ## Changes and deception review
 
 - **M2:** a monotonic watchdog cancels a relay after 300 seconds without byte
@@ -156,19 +160,19 @@ dependency inventory was changed to make a build pass.
 
 ## Explicit limits and approval boundary
 
-The exact extracted release-mode VM runtime has not been exercised against the
-new guest: it correctly requires root-owned guest artifacts. Auto-review denied
-the attempted administrator request to make a disposable copy root-owned because
-that specific privileged mutation was not explicitly authorized. No ownership
-change or installation occurred. The rebuilt guest passed with the debug
-runtime; that is not substituted for release-mode acceptance.
+At the September 26 checkpoint, auto-review denied creating a temporary
+root-owned guest copy without explicit approval. Matt approved that exact
+operation on September 27. The unchanged extracted release-mode runtime then
+passed the live test in 60.78 seconds using packaged sensor code and root-owned
+copies of the three extracted guest artifacts.
 
-The pending operation affects only a new `guest` directory and its three files
-(`manifest.json`, `vmlinuz`, `studio-mini.initramfs`) beneath
-`/private/tmp/squirrelops-availability-release.1SiEhD`. Originals remain intact.
-Approval would permit copying those artifacts and changing only these four
-targets to root:wheel for the release-mode test. Reversing ownership to the
-original user/group would restore user management of the disposable copy.
+Only `guest`, `guest/manifest.json`, `guest/vmlinuz`, and
+`guest/studio-mini.initramfs` beneath
+`/private/tmp/squirrelops-availability-release.1SiEhD` changed ownership.
+All four were restored to UID 501, GID 0 afterward. Original files, installer
+bytes, and installed services were untouched. The same release executable
+subsequently rejected the restored user-owned copy before boot. See the
+[follow-up report](2026-09-27-packaged-runtime-acceptance.md) for exact evidence.
 
 A5 live PF acceptance, installed upgrade, second-machine virtual-IP ingress,
 Intel execution, independent review, Developer ID signing/notarization, and

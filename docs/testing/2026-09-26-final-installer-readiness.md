@@ -4,8 +4,9 @@ Date: 2026-09-26. Decision: **not yet ready to call an installer final**.
 
 Current source status: the [availability follow-up](2026-09-26-availability-review-fixes.md)
 postdates the relay/control fixes and has a rebuilt local-test installer.
-Its exact extracted release-mode VM acceptance needs approval for temporary
-root-owned guest copies; debug-runtime real-guest acceptance passed.
+Its [exact extracted release-mode VM acceptance](2026-09-27-packaged-runtime-acceptance.md)
+passed on September 27 after approval for temporary root-owned guest copies;
+original ownership was restored afterward.
 That installer has not been installed and is not a notarized public release.
 The [GitHub preparation checklist](2026-09-26-github-release-preparation.md)
 records the baseline and approved independent-reviewer change.
