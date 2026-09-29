@@ -238,7 +238,9 @@ async def test_unallocated_studio_is_explained_and_retried_after_cooldown(tmp_pa
         orchestrator._ip_manager.allocate_verified = allocate
         assert await orchestrator.start() is False
         assert orchestrator.diagnostics["status"] == "degraded"
-        assert "verified virtual IP" in orchestrator.diagnostics["reason"]
+        reason = orchestrator.diagnostics["reason"]
+        assert isinstance(reason, str)
+        assert "verified virtual IP" in reason
         assert await orchestrator.reconcile() is False
         assert allocate.await_count == 1
         orchestrator._next_retry_at = 0

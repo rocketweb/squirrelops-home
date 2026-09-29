@@ -128,6 +128,19 @@ catalog formats, authentication, response bounds, cancellation, and stale settin
 Set `SQUIRRELOPS_AI_UI_OUTPUT` to an absolute output directory when running the
 compiled app tests to save the six light/dark AI control renderings.
 
+Shutdown regressions in `sensor/tests/unit/test_runtime_shutdown.py` use real
+SIGTERM and SIGINT in disposable child processes. The managed server cleans up
+the sensor runtime inside Uvicorn's signal-capture scope, before signal replay
+can terminate the process or interrupt asynchronous teardown. Keep these tests
+when updating Uvicorn; mocking signal replay hides the failure.
+
+To repeat the signal checks against an extracted installer's isolated Python,
+set `SQUIRRELOPS_TEST_SENSOR_PYTHON` to its absolute `python/bin/python3` path and
+run `pytest tests/unit/test_runtime_shutdown.py -k server_signal -q` from
+`sensor/`. The child uses Python isolated mode and the test verifies that its
+sensor module belongs to the selected runtime. These checks do not start the
+installed sensor, guest VM, helper, or packet filter.
+
 ---
 
 ## Architecture: Privileged Helper

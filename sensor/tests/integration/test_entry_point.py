@@ -284,7 +284,7 @@ def patched(mock_subsystems: dict[str, Any]):
         )
         stack.enter_context(
             patch(
-                "squirrelops_home_sensor.__main__.uvicorn.Server",
+                "squirrelops_home_sensor.__main__._RuntimeManagedServer",
                 mock_subsystems["uvicorn_server_cls"],
             )
         )
