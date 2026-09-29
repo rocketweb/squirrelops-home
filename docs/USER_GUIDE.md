@@ -453,6 +453,17 @@ reload that evidence; refreshing does not bypass startup checks or restart the g
 host whose startup failed is retried on a later network scan, no more often
 than once per minute. An intentionally stopped host stays stopped.
 
+Restarting or upgrading the sensor preserves the Studio host's saved state.
+Its five services do not count against the separate classic host-listener
+limit. Changing that limit must not stop Studio or turn its SSH/SMB services
+into HTTP listeners.
+
+An earlier 2.1 test build could incorrectly mark Studio services stopped during
+startup. The ownership fix prevents this but does not automatically enable
+previously stopped hosts. If your test installation was affected, keep it
+stopped until its saved state and backup have been reviewed. Do not bulk-enable
+stopped rows or change firewall rules to work around this issue.
+
 OpenAI-compatible chat supports `stream: true` with SSE. Ollama chat streams
 NDJSON by default; use `stream: false` for one JSON response. Streaming and
 non-streaming replies describe the same synthetic workspace, and one request

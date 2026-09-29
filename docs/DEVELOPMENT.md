@@ -308,6 +308,34 @@ separate operator action; these tests did not accept it.
 
 ### Studio Mini guest
 
+Classic lifecycle ownership is an explicit allowlist: `file_share`,
+`dev_server`, and `home_assistant`. Resume, profile changes, deferred recovery,
+capacity checks, and manual controls must leave `deep`, `mimic`, and unknown
+families untouched. Unknown types must not fall back to the HTTP file-share
+factory. The API still lists all decoy families.
+
+Run the persisted-state regression before accepting a restart or upgrade fix:
+
+```bash
+cd sensor
+uv run pytest tests/integration/test_classic_decoy_ownership.py \
+  tests/integration/test_deep_decoy_orchestrator.py \
+  tests/unit/test_packaged_decoy_restart.py -q
+```
+
+The deep lifecycle test closes and reopens a real SQLite database, optionally
+replays migrations, then runs classic startup before deep startup. Guest,
+alias, and forwarding operations are fakes. It checks that enabled Studio
+services resume, stopped hosts remain stopped, and planted credentials persist.
+This is not evidence of a successful macOS installer upgrade or LAN reachability.
+
+After expanding the exact candidate installer with `pkgutil --expand-full`,
+set `SQUIRRELOPS_TEST_SENSOR_PYTHON` to its
+`sensor.pkg/Payload/Library/SquirrelOps/sensor/python/bin/python3.12` and run
+`tests/unit/test_packaged_decoy_restart.py` again. The test launches that
+interpreter with `-I` and verifies the imported module is inside the extracted
+runtime, preventing the checkout from masking a stale package.
+
 The deep-decoy guest is an architecture-specific release input. Build it with
 Docker Buildx, then pass the exact directory to the app builder:
 

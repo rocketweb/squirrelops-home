@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import aiosqlite
 import pytest
@@ -16,6 +17,7 @@ from squirrelops_home_sensor.decoys.deep.orchestrator import (
     DeepDecoyOrchestrator,
     load_or_create_deployment_secret,
 )
+from squirrelops_home_sensor.decoys.orchestrator import DBProtocol, DecoyOrchestrator
 
 
 class _SecretStore:
@@ -224,6 +226,57 @@ async def test_repeated_start_does_not_leak_a_second_guest(tmp_path):
         assert await orchestrator.start()
         assert calls.count("guest:start") == 1
         await orchestrator.stop_all()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upgrade", [False, True], ids=["restart", "upgrade-migrations"])
+@pytest.mark.parametrize("intentionally_stopped", [False, True], ids=["active", "user-stopped"])
+async def test_classic_startup_preserves_persisted_deep_host(
+    tmp_path, upgrade, intentionally_stopped,
+):
+    """Exercise daemon startup order against a reopened, fully migrated DB.
+
+    Guest/network boundaries are fakes; both lifecycle managers, credential
+    persistence and migrations are real. Never bind native SSH/SMB ports.
+    """
+    database = tmp_path / "persisted-deep.db"
+    calls = []
+    async with aiosqlite.connect(database) as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        first, _ = await _orchestrator(db, calls)
+        assert await first.start()
+        if intentionally_stopped:
+            assert first._active is not None
+            assert await first.disable(first._active.primary_id)
+        await first.stop_all()
+        before = [tuple(row) for row in await (await db.execute("SELECT * FROM decoys ORDER BY id")).fetchall()]
+        credentials = [tuple(row) for row in await (await db.execute("SELECT * FROM planted_credentials ORDER BY id")).fetchall()]
+
+    async with aiosqlite.connect(database) as db:
+        db.row_factory = aiosqlite.Row
+        if upgrade:
+            await apply_migrations(db)
+        classic_manager = DecoyOrchestrator(
+            # aiosqlite returns awaitable context managers, not native coroutines.
+            db=cast(DBProtocol, db), event_bus=AsyncMock(), max_decoys=3,
+            bind_address="192.0.2.115",
+        )
+        # Simulate native port conflicts if the old bug tries to adopt a guest
+        # service. No listener is opened, even on the failing version.
+        classic_manager.deploy_decoy = AsyncMock(side_effect=OSError("native port occupied"))
+        assert await classic_manager.resume_active() == 0
+        rows = [tuple(row) for row in await (await db.execute("SELECT * FROM decoys ORDER BY id")).fetchall()]
+        assert rows == before
+        classic_manager.deploy_decoy.assert_not_awaited()
+        second, _ = await _orchestrator(db, calls)
+        try:
+            assert await second.start() is not intentionally_stopped
+            assert calls.count("guest:start") == (1 if intentionally_stopped else 2)
+            after_credentials = [tuple(row) for row in await (await db.execute("SELECT * FROM planted_credentials ORDER BY id")).fetchall()]
+            assert after_credentials == credentials
+        finally:
+            await second.stop_all()
 
 
 @pytest.mark.asyncio
