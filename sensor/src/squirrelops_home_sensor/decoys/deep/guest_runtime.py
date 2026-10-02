@@ -7,6 +7,7 @@ import ipaddress
 import json
 import logging
 import os
+import secrets
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,6 +30,14 @@ _STOP_TIMEOUT_SECONDS = 8.0
 _MAX_READY_LINE_BYTES = 16 * 1024
 _MAX_EVENT_LINE_BYTES = 16 * 1024
 _MAX_STDERR_TAIL_BYTES = 16 * 1024
+_MAX_DIAGNOSTIC_RECORDS = 513  # 512 checkpoints plus a truncation marker per VM.
+_DIAGNOSTIC_STAGES = frozenset({
+    "listener_activated", "listener_readable", "accept_failed", "client_setup_failed",
+    "accepted", "main_actor_entered", "capacity_rejected", "guest_connect_started",
+    "guest_connected", "guest_connect_failed", "guest_connect_timeout", "relay_started",
+    "first_read", "read_eof", "read_failed", "write_failed", "poll_failed",
+    "nonblocking_failed", "relay_timed_out", "relay_closed", "diagnostics_truncated",
+})
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +123,8 @@ class GuestRuntimeController:
         self._watch_task: asyncio.Task[None] | None = None
         self._stopping = False
         self._stderr_tail = bytearray()
+        self._diagnostic_count = 0
+        self._diagnostic_nonce = secrets.token_hex(16)
 
     @property
     def backend_ports(self) -> dict[int, int]:
@@ -204,13 +215,38 @@ class GuestRuntimeController:
         self._stopping = False
 
     async def _drain_stderr(self, stream: asyncio.StreamReader) -> None:
+        prefix = f"SQUIRRELOPS_RELAY_DIAGNOSTIC {self._diagnostic_nonce} ".encode()
+        pending = bytearray()
+        discarding = False
         while True:
             chunk = await stream.read(4096)
             if not chunk:
                 return
             self._stderr_tail.extend(chunk)
+            self._stderr_tail[:] = self._stderr_tail.replace(
+                self._diagnostic_nonce.encode(), b"[diagnostic-marker]",
+            )
             if len(self._stderr_tail) > _MAX_STDERR_TAIL_BYTES:
                 del self._stderr_tail[:-_MAX_STDERR_TAIL_BYTES]
+            # Bounded newline framing across read() chunks. Raw guest stderr
+            # must never become a structured checkpoint without our host-only
+            # per-start nonce; neither raw text nor that nonce enters the log.
+            parts = chunk.split(b"\n")
+            for index, part in enumerate(parts):
+                if not discarding:
+                    pending.extend(part)
+                    if len(pending) > _MAX_EVENT_LINE_BYTES:
+                        pending.clear()
+                        discarding = True
+                if index < len(parts) - 1:
+                    if not discarding and pending.startswith(prefix):
+                        try:
+                            if not self._consume_diagnostic(bytes(pending[len(prefix):])):
+                                raise ValueError("not a diagnostic record")
+                        except ValueError:
+                            logger.warning("Deep-decoy runtime emitted invalid diagnostic")
+                    pending.clear()
+                    discarding = False
 
     @staticmethod
     def _parse_connection_event(line: bytes) -> GuestConnectionTelemetry:
@@ -275,6 +311,36 @@ class GuestRuntimeController:
             timestamp=timestamp.astimezone(UTC),
         )
 
+    def _consume_diagnostic(self, line: bytes) -> bool:
+        """Strict internal log records, never decoy hits or raw subprocess output."""
+        if not line or len(line) > _MAX_EVENT_LINE_BYTES:
+            raise ValueError("runtime event line is outside the reviewed limit")
+        payload = json.loads(line)
+        if not isinstance(payload, dict) or payload.get("event") != "runtime_diagnostic":
+            return False
+        if set(payload) != {
+            "event", "stage", "service_port", "connection_id", "sequence", "errno", "direction",
+        }:
+            raise ValueError("invalid diagnostic fields")
+        if (not isinstance(payload["stage"], str) or payload["stage"] not in _DIAGNOSTIC_STAGES
+                or not isinstance(payload["direction"], str)
+                or payload["direction"] not in {"none", "client_to_guest", "guest_to_client"}):
+            raise ValueError("invalid diagnostic vocabulary")
+        for key, low, high in (("service_port", 22, 445), ("connection_id", 0, 2**31 - 1),
+                               ("sequence", 1, _MAX_DIAGNOSTIC_RECORDS), ("errno", 0, 4096)):
+            if type(payload[key]) is not int or not low <= payload[key] <= high:
+                raise ValueError("invalid diagnostic number")
+        if payload["service_port"] not in (22, 445):
+            raise ValueError("invalid diagnostic service")
+        if self._diagnostic_count < _MAX_DIAGNOSTIC_RECORDS:
+            self._diagnostic_count += 1
+            logger.info(
+                "Guest relay checkpoint stage=%s service=%d connection=%d sequence=%d errno=%d direction=%s",
+                payload["stage"], payload["service_port"], payload["connection_id"],
+                payload["sequence"], payload["errno"], payload["direction"],
+            )
+        return True
+
     async def _drain_output(self, stream: asyncio.StreamReader) -> None:
         discarding = False
         while True:
@@ -298,6 +364,8 @@ class GuestRuntimeController:
                 discarding = False
                 continue
             try:
+                if self._consume_diagnostic(line):
+                    continue
                 event = self._parse_connection_event(line)
             except ValueError:
                 logger.warning("Deep-decoy runtime emitted invalid telemetry")
@@ -348,9 +416,11 @@ class GuestRuntimeController:
         if bind_address.is_unspecified or bind_address.is_multicast:
             raise GuestRuntimeError("Guest runtime bind address is unsafe")
 
+        self._diagnostic_nonce = secrets.token_hex(16)
         environment = {
             "PATH": "/usr/bin:/bin",
             "TMPDIR": str(self._state_dir),
+            "SQUIRRELOPS_RELAY_DIAGNOSTIC_NONCE": self._diagnostic_nonce,
         }
         try:
             process = await asyncio.create_subprocess_exec(
@@ -377,6 +447,7 @@ class GuestRuntimeController:
         assert process.stdin is not None
         assert process.stderr is not None
         self._stderr_tail.clear()
+        self._diagnostic_count = 0
         self._stderr_task = asyncio.create_task(
             self._drain_stderr(process.stderr),
             name="deep-decoy-runtime-stderr",

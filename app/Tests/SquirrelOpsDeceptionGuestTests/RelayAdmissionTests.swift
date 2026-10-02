@@ -99,7 +99,8 @@ struct RelayAdmissionTests {
             "Sources/SquirrelOpsDeceptionGuest/VirtualMachineRuntime.swift"), encoding: .utf8)
         #expect(!source.contains("guard limiter.acquire(), let socketDevice"))
         #expect(source.contains("let handler = guestConnectionHandler("))
-        #expect(source.contains("TCPListener(bindAddress: bindAddress, handler: handler)"))
+        #expect(source.contains("TCPListener(bindAddress: bindAddress,"))
+        #expect(source.contains("diagnostic: diagnostics.service(service.advertisedPort), handler: handler)"))
     }
 }
 

@@ -30,13 +30,19 @@ SquirrelOps Home is a local-first home network security platform. It passively m
 
 ### macOS Native Sensor
 
+- Apple Silicon (ARM64) Mac
 - macOS 14 (Sonoma) or later
 - Local network access permission
 
 ### macOS App (control plane)
 
+- Apple Silicon (ARM64) Mac
 - macOS 14 (Sonoma) or later
 - Download from [GitHub Releases](https://github.com/rocketweb/squirrelops-home/releases)
+
+Intel Macs are not supported. This applies to both the app and the native
+sensor, including Home 2.1. Linux x86_64 requirements above are separate from
+macOS support; Linux publication remains on hold.
 
 ---
 
@@ -452,6 +458,17 @@ and disabled states stay quiet. Pull down on the list or press **Command-R** to
 reload that evidence; refreshing does not bypass startup checks or restart the guest. An enabled
 host whose startup failed is retried on a later network scan, no more often
 than once per minute. An intentionally stopped host stays stopped.
+
+Restarting or upgrading the sensor preserves the Studio host's saved state.
+Its five services do not count against the separate classic host-listener
+limit. Changing that limit must not stop Studio or turn its SSH/SMB services
+into HTTP listeners.
+
+An earlier 2.1 test build could incorrectly mark Studio services stopped during
+startup. The ownership fix prevents this but does not automatically enable
+previously stopped hosts. If your test installation was affected, keep it
+stopped until its saved state and backup have been reviewed. Do not bulk-enable
+stopped rows or change firewall rules to work around this issue.
 
 OpenAI-compatible chat supports `stream: true` with SSE. Ollama chat streams
 NDJSON by default; use `stream: false` for one JSON response. Streaming and

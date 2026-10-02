@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import stat
 import subprocess
 import sys
-from pathlib import Path
+import zlib
+from pathlib import Path, PurePosixPath
+from typing import NoReturn
 
 EXPECTED_FILES = {"manifest.json", "vmlinuz", "studio-mini.initramfs"}
 EXPECTED_SERVICES = (
@@ -18,9 +21,16 @@ EXPECTED_SERVICES = (
 )
 MAX_KERNEL_BYTES = 128 * 1024 * 1024
 MAX_INITRAMFS_BYTES = 384 * 1024 * 1024
+MAX_UNPACKED_BYTES = 1024 * 1024 * 1024
+NETWORK_IDENTITY = {
+    "etc/hosts": b"127.0.0.1 studio-mini.local studio-mini localhost\n"
+                 b"::1 localhost ip6-localhost ip6-loopback\n",
+    "etc/hostname": b"studio-mini\n",
+    "etc/resolv.conf": b"nameserver 127.0.0.1\noptions timeout:1 attempts:1\n",
+}
 
 
-def fail(message: str) -> "NoReturn":
+def fail(message: str) -> NoReturn:
     raise SystemExit(f"Invalid Studio Mini guest bundle: {message}")
 
 
@@ -43,6 +53,73 @@ def _regular_file(path: Path, maximum: int) -> None:
         fail(f"{path.name} has an invalid size")
     if metadata.st_mode & 0o022:
         fail(f"{path.name} must not be group- or world-writable")
+
+
+def validate_network_identity(path: Path) -> None:
+    """Inspect bounded gzip/newc content without extracting or following links."""
+    seen: set[str] = set()
+    total = 0
+    try:
+        with gzip.open(path, "rb") as archive:
+            def read(size: int) -> bytes:
+                nonlocal total
+                total += size
+                if total > MAX_UNPACKED_BYTES:
+                    fail("network identity archive exceeds unpacked budget")
+                data = archive.read(size)
+                if len(data) != size:
+                    fail("network identity archive is truncated")
+                return data
+
+            for _ in range(100_000):
+                header = read(110)
+                if header[:6] != b"070701":
+                    fail("network identity archive must use newc format")
+                if any(byte not in b"0123456789abcdefABCDEF" for byte in header[6:]):
+                    fail("network identity archive fields must be hexadecimal")
+                fields = [int(header[i:i + 8], 16) for i in range(6, 110, 8)]
+                mode, uid, gid, links, size, name_size = (
+                    fields[1], fields[2], fields[3], fields[4], fields[6], fields[11]
+                )
+                if not 1 <= name_size <= 4096 or size > MAX_UNPACKED_BYTES:
+                    fail("network identity archive entry exceeds budget")
+                raw_name = read(name_size)
+                if raw_name[-1:] != b"\0" or b"\0" in raw_name[:-1]:
+                    fail("network identity archive filename is invalid")
+                name = raw_name[:-1].decode("utf-8")
+                read(-(110 + name_size) % 4)
+                if name == "TRAILER!!!":
+                    if size or seen != NETWORK_IDENTITY.keys():
+                        fail("network identity files are missing")
+                    # Consume padding and the gzip trailer, checking its CRC.
+                    padding = archive.read(513)
+                    if len(padding) > 512 or any(padding):
+                        fail("network identity archive has trailing content")
+                    return
+                parts = PurePosixPath(name)
+                if parts.is_absolute() or ".." in parts.parts:
+                    fail("network identity archive path escapes root")
+                normalized = str(parts)
+                if normalized == "etc" and not stat.S_ISDIR(mode):
+                    fail("network identity etc must be a directory")
+                if normalized in NETWORK_IDENTITY:
+                    if normalized in seen or not stat.S_ISREG(mode) or links != 1:
+                        fail("network identity file is duplicated or linked")
+                    if uid or gid or mode & 0o022 or size > 4096:
+                        fail("network identity file has unsafe metadata")
+                    if read(size) != NETWORK_IDENTITY[normalized]:
+                        fail(f"network identity mismatch in {normalized}")
+                    seen.add(normalized)
+                else:
+                    remaining = size
+                    while remaining:
+                        chunk = min(remaining, 1024 * 1024)
+                        read(chunk)
+                        remaining -= chunk
+                read(-size % 4)
+            fail("network identity archive has too many entries")
+    except (OSError, EOFError, ValueError, UnicodeError, zlib.error) as exc:
+        fail(f"network identity archive is unreadable: {exc}")
 
 
 def validate(bundle: Path, architecture: str) -> None:
@@ -124,6 +201,8 @@ def validate(bundle: Path, architecture: str) -> None:
             fail(f"{key} record is malformed")
         if entry["path"] != expected_name or entry["sha256"] != _sha256(path):
             fail(f"{key} digest does not match")
+
+    validate_network_identity(initramfs_path)
 
     description = subprocess.run(
         ["/usr/bin/file", "-b", str(kernel_path)],

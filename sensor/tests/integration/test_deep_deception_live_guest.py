@@ -244,9 +244,11 @@ async def _capacity_and_guest_eof(ports, telemetry) -> None:
 @pytest.mark.asyncio
 async def test_live_guest_serves_file_operations_and_isolates_host(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     runtime = _required_path("SQUIRRELOPS_DECEPTION_RUNTIME")
     guest_bundle = _required_path("SQUIRRELOPS_GUEST_BUNDLE")
+    caplog.set_level("INFO", logger="squirrelops_home_sensor.decoys.deep.guest_runtime")
     persona = build_studio_mini_persona(
         b"live-guest-acceptance-secret!!".ljust(32, b"!"),
         datetime(2026, 8, 31, 16, 30, tzinfo=UTC),
@@ -348,3 +350,11 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
     assert {event.interaction_type for event in telemetry} >= {
         "ssh.guest_connected", "smb.guest_connected", "ssh.capacity_rejected",
     }
+    checkpoints = [record.getMessage() for record in caplog.records
+                   if record.getMessage().startswith("Guest relay checkpoint ")]
+    assert 0 < len(checkpoints) <= 513
+    for port in (22, 445):
+        for stage in ("listener_activated", "accepted", "guest_connect_started", "guest_connected"):
+            assert any(f"stage={stage} service={port} " in message for message in checkpoints)
+    assert all(controller._diagnostic_nonce not in message for message in checkpoints)
+    assert all(persona.login_password not in message for message in checkpoints)

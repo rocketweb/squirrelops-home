@@ -14,6 +14,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.guest_archive import NETWORK_FILES, initramfs
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -515,7 +517,7 @@ def test_guest_bundle_verifier_accepts_exact_contract_and_rejects_tampering(
     kernel = bytearray(64)
     kernel[56:60] = b"ARMd"
     (bundle / "vmlinuz").write_bytes(kernel)
-    (bundle / "studio-mini.initramfs").write_bytes(b"synthetic-initramfs")
+    (bundle / "studio-mini.initramfs").write_bytes(initramfs())
 
     def digest(name: str) -> str:
         return hashlib.sha256((bundle / name).read_bytes()).hexdigest()
@@ -558,6 +560,21 @@ def test_guest_bundle_verifier_accepts_exact_contract_and_rejects_tampering(
         text=True,
     )
     assert valid.returncode == 0, valid.stderr
+
+    polluted = NETWORK_FILES | {"etc/resolv.conf": b"nameserver 192.168.65.7\n"}
+    (bundle / "studio-mini.initramfs").write_bytes(initramfs([
+        (name, content, 0o100644, 1) for name, content in polluted.items()
+    ]))
+    manifest["boot"]["initial_ramdisk"]["sha256"] = digest("studio-mini.initramfs")
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    leaked_dns = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False, capture_output=True, text=True,
+    )
+    assert leaked_dns.returncode != 0, "Matching hashes must not authorize builder DNS"
+    assert "network identity" in leaked_dns.stderr
+    (bundle / "studio-mini.initramfs").write_bytes(initramfs())
+    manifest["boot"]["initial_ramdisk"]["sha256"] = digest("studio-mini.initramfs")
 
     manifest["services"] = list(reversed(manifest["services"]))
     (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -2094,6 +2111,37 @@ def test_release_verifier_rejects_legacy_and_malformed_tags(
         )
         assert result.returncode != 0
         assert "Release tag must be home-vX.Y.Z" in result.stderr
+
+
+def test_macos_support_docs_distinguish_release_support_from_build_coverage() -> None:
+    for relative_path in (
+        "README.md",
+        "docs/USER_GUIDE.md",
+        "docs/DEVELOPMENT.md",
+        "docs/RELEASE_SECURITY.md",
+        "docs/releases/2.1.0.md",
+        "guest/studio-mini/README.md",
+        "site/public/index.html",
+    ):
+        content = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        normalized = " ".join(content.split())
+        assert "Apple Silicon (ARM64)" in normalized, relative_path
+        assert "Intel Macs are not supported." in normalized, relative_path
+        assert "Apple Silicon or Intel" not in normalized, relative_path
+        assert "Apple silicon and Intel" not in normalized, relative_path
+
+    # Linux x86_64 requirements and dual-architecture guest build coverage
+    # must not be removed when correcting the macOS support statement.
+    guide = (REPO_ROOT / "docs/USER_GUIDE.md").read_text(encoding="utf-8")
+    assert "Linux ARM64 (Raspberry Pi 3/4/5) or x86_64 (NAS, general Linux)" in guide
+    for relative_path in (
+        "docs/DEVELOPMENT.md",
+        "docs/RELEASE_SECURITY.md",
+        "guest/studio-mini/README.md",
+    ):
+        content = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "x86_64" in content, relative_path
+        assert "build coverage" in content, relative_path
 
 
 def test_release_docs_require_remote_trust_controls_and_reviewed_promotion() -> None:

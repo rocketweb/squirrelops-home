@@ -23,6 +23,7 @@ import asyncio
 import inspect
 import logging
 import os
+import socket
 import ssl
 import sys
 import uuid
@@ -1080,6 +1081,29 @@ async def _cleanup_runtime(runtime: _RuntimeResources) -> list[BaseException]:
     return errors
 
 
+class _RuntimeManagedServer(uvicorn.Server):
+    """HTTP server bound to the sensor's resource lifetime."""
+
+    def __init__(self, config: uvicorn.Config, *, runtime: _RuntimeResources) -> None:
+        super().__init__(config)
+        self._runtime = runtime
+
+    async def _serve(self, sockets: list[socket.socket] | None = None) -> None:
+        # Uvicorn's serve() replays captured signals after _serve() returns.
+        # SIGTERM can terminate the process immediately, while SIGINT can cancel
+        # async cleanup. Keep resource teardown inside that signal boundary.
+        # Real-process regression tests protect this pinned Uvicorn contract.
+        try:
+            await super()._serve(sockets)
+        finally:
+            startup_or_run_failed = sys.exc_info()[0] is not None
+            cleanup_errors = await _cleanup_runtime(self._runtime)
+            if cleanup_errors and not startup_or_run_failed:
+                raise RuntimeError(
+                    "Sensor shutdown did not complete cleanly"
+                ) from cleanup_errors[0]
+
+
 async def run_sensor(
     config_path: str | None = None,
     port: int | None = None,
@@ -1473,7 +1497,7 @@ async def run_sensor(
             proxy_headers=False,
             **uvicorn_kwargs,
         )
-        server = uvicorn.Server(uvicorn_config)
+        server = _RuntimeManagedServer(uvicorn_config, runtime=runtime)
 
         # 10. Start mDNS advertisement
         mdns = create_mdns_advertiser(config, port)

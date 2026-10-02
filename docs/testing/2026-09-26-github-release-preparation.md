@@ -150,6 +150,15 @@ local results.
 
 ## Gates before tags or release dispatch
 
+Current status is consolidated in the
+[October 1 publication-readiness record](2026-10-01-publication-readiness.md).
+The numbered list below is the historical gate definition, not a claim that
+the subsequently completed Mini upgrade/protocol run is still pending.
+
+Platform scope corrected September 30, 2026: Home 2.1 supports Apple Silicon
+only. Intel execution is not a release gate. See
+[macOS release support](../RELEASE_SECURITY.md#macos-release-support).
+
 1. Complete the [A5 live PF acceptance](2026-09-26-pf-safety-development.md#live-acceptance-gate-not-executed), including different-UID listener replacement,
    established state, failed quarantine/state cleanup, and scoped restoration.
    This remains explicitly release-blocking. Choose an isolated Mac or obtain
@@ -163,10 +172,11 @@ local results.
 4. Obtain current PR CI and independent approval for the exact final source and
    policy; merge only after separately authorized. Dependency review must run
    against the real PR diff, not be inferred from local tests.
-5. Confirm Intel and release-signed containment acceptance; build guests for
+5. Confirm ARM64 release-signed containment acceptance; build guests for
    both architectures from the pinned image and package inventory through the
-   release workflow. Do not upload the ad-hoc local-test installer as a public
-   release artifact.
+   release workflow for build coverage. The supported macOS package must
+   contain the ARM64 guest. Do not upload the ad-hoc local-test installer as a
+   public release artifact.
 
 ## Eventual release sequence
 

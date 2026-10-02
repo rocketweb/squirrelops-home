@@ -4,6 +4,27 @@ import Virtualization
 
 final class RuntimeOutput: @unchecked Sendable {
     private let lock = NSLock()
+    private let diagnosticNonce: String?
+    private let telemetryHandle: FileHandle
+    private let diagnosticHandle: FileHandle
+
+    init(diagnosticNonce: String? = ProcessInfo.processInfo.environment["SQUIRRELOPS_RELAY_DIAGNOSTIC_NONCE"],
+         telemetryHandle: FileHandle = .standardOutput, diagnosticHandle: FileHandle = .standardError) {
+        self.telemetryHandle = telemetryHandle
+        self.diagnosticHandle = diagnosticHandle
+        self.diagnosticNonce = diagnosticNonce.flatMap {
+            $0.utf8.count == 32 && $0.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) } ? $0 : nil
+        }
+    }
+
+    func writeDiagnostic(_ record: RelayDiagnostic) {
+        guard let diagnosticNonce,
+              let data = try? JSONSerialization.data(withJSONObject: record.payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        // A separate pipe and queue: diagnostic backpressure cannot take the
+        // stdout telemetry lock. The nonce is not transferred into the guest.
+        diagnosticHandle.write(Data("SQUIRRELOPS_RELAY_DIAGNOSTIC \(diagnosticNonce) \(json)\n".utf8))
+    }
 
     func write(_ value: [String: Any]) {
         guard JSONSerialization.isValidJSONObject(value),
@@ -12,7 +33,7 @@ final class RuntimeOutput: @unchecked Sendable {
         else { return }
         line.append("\n")
         lock.lock()
-        FileHandle.standardOutput.write(Data(line.utf8))
+        telemetryHandle.write(Data(line.utf8))
         lock.unlock()
     }
 }
@@ -23,6 +44,7 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
     private let bindAddress: String
     private let personaArchive: PersonaArchive
     private let output: RuntimeOutput
+    private let diagnostics: RuntimeDiagnostics
     private let limiter: ConnectionLimiter
     private let virtualMachine: VZVirtualMachine
     private var socketDevice: VZVirtioSocketDevice?
@@ -51,6 +73,7 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
         self.bindAddress = bindAddress
         self.personaArchive = personaArchive
         self.output = output
+        diagnostics = RuntimeDiagnostics { [output] in output.writeDiagnostic($0) }
         limiter = ConnectionLimiter(maximum: manifest.manifest.resources.maxConnections)
         virtualMachine = VZVirtualMachine(configuration: configuration)
         super.init()
@@ -76,6 +99,7 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
         for service in manifest.manifest.services {
             let handler = guestConnectionHandler(
                 limiter: limiter,
+                diagnostic: diagnostics.service(service.advertisedPort),
                 onConnection: { [output] peer, outcome in
                     output.write([
                         "event": "connection",
@@ -95,7 +119,8 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
                     )
                 }
             )
-            let listener = try TCPListener(bindAddress: bindAddress, handler: handler)
+            let listener = try TCPListener(bindAddress: bindAddress,
+                                           diagnostic: diagnostics.service(service.advertisedPort), handler: handler)
             listeners[service.advertisedPort] = listener
             ports[service.advertisedPort] = listener.localPort
         }
@@ -182,12 +207,17 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
         service: GuestManifest.Service
     ) async -> RelayOutcome {
         // The connection owns its fd and allowance even if this guard fails.
-        guard !stopped, !stopping, let socketDevice else { return .guestConnectFailed }
+        guard !stopped, !stopping, let socketDevice else {
+            connection.diagnostic?.record(.guestConnectFailed)
+            return .guestConnectFailed
+        }
+        connection.diagnostic?.record(.guestConnectStarted)
         do {
             let guestConnection = try await connect(
                 device: socketDevice,
                 port: service.guestVSOCKPort
             )
+            connection.diagnostic?.record(.guestConnected)
             SocketRelay(
                 client: connection,
                 guestConnection: guestConnection
@@ -196,12 +226,14 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
         } catch {
             connection.close()
             if case GuestConnectFailure.timedOut = error {
+                connection.diagnostic?.record(.guestConnectTimeout)
                 output.write(["event": "guest_error", "message": "Guest socket connection timed out"])
                 // Emit the outcome before process shutdown. The connector already
                 // refuses new VZ requests and closes every late callback.
                 Task { @MainActor [weak self] in await self?.stop() }
                 return .guestConnectTimeout
             }
+            connection.diagnostic?.record(.guestConnectFailed)
             return .guestConnectFailed
         }
     }

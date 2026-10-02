@@ -118,6 +118,10 @@ macOS-only. See [Release security](docs/RELEASE_SECURITY.md).
 
 ### macOS App and Sensor
 
+Requires macOS 14 (Sonoma) or later on Apple Silicon (ARM64). Intel Macs are
+not supported. This applies to both the macOS app and the native sensor,
+including the Home 2.1 release.
+
 Use the signed and notarized `.pkg`. It contains the app, sensor, locked Python
 dependencies, and privileged helper. Do not use the old standalone
 `install-macos.sh` release asset. That script could fall back to an unpinned
@@ -156,7 +160,8 @@ cd app && bash build-app.sh
 open .build/arm64-apple-macosx/debug/SquirrelOpsHome.app
 ```
 
-Requires Swift 6.0 and macOS 14+ (Sonoma).
+For the supported Apple Silicon (ARM64) build, use Swift 6.0 and macOS 14+
+(Sonoma). The source build options do not extend the supported Mac hardware.
 
 ## Pairing
 

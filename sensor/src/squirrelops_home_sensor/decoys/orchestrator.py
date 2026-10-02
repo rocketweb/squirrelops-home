@@ -1,6 +1,6 @@
 """Decoy orchestrator — selection, deployment, health monitoring, and event handling.
 
-The orchestrator is the central manager for all active decoys. It:
+The orchestrator manages classic host listeners, not mimic or deep hosts. It:
 - Selects which decoy types to deploy based on discovered network services
 - Auto-deploys decoys after the first scan if none exist
 - Resumes previously active decoys from the database at startup
@@ -55,6 +55,16 @@ _DECOY_NAMES = {
     "dev_server": "Dev Server",
     "home_assistant": "Smart Home",
 }
+
+# Positive ownership, shared by SQL selection and instance admission. A new
+# decoy family must never be adopted merely because it is not a mimic.
+_CLASSIC_TYPES = tuple(_DECOY_NAMES)
+_CLASSIC_TYPE_FILTER = "decoy_type IN (" + ", ".join("?" for _ in _CLASSIC_TYPES) + ")"
+
+
+def _require_classic_type(decoy_type: str) -> None:
+    if decoy_type not in _CLASSIC_TYPES:
+        raise ValueError(f"Unsupported classic decoy type: {decoy_type!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +272,7 @@ def _create_decoy_instance(
     config: dict | None = None,
 ) -> BaseDecoy:
     """Factory for creating BaseDecoy subclass instances."""
+    _require_classic_type(decoy_type)
     from squirrelops_home_sensor.decoys.types.dev_server import DevServerDecoy
     from squirrelops_home_sensor.decoys.types.file_share import FileShareDecoy
     from squirrelops_home_sensor.decoys.types.home_assistant import HomeAssistantDecoy
@@ -289,7 +300,7 @@ def _create_decoy_instance(
 # ---------------------------------------------------------------------------
 
 class DecoyOrchestrator:
-    """Central manager for decoy lifecycle and health.
+    """Manager for classic host-listener lifecycle and health.
 
     Args:
         event_bus: Event bus for publishing decoy events.
@@ -406,11 +417,12 @@ class DecoyOrchestrator:
         self.set_max_decoys(max_decoys)
         try:
             cursor = await self._db.execute(
-                """SELECT id
+                f"""SELECT id
                    FROM decoys
                    WHERE status IN ('active', 'degraded')
-                     AND decoy_type != 'mimic'
-                   ORDER BY id"""
+                     AND {_CLASSIC_TYPE_FILTER}
+                   ORDER BY id""",
+                _CLASSIC_TYPES,
             )
             rows = await cursor.fetchall()
             excess_ids = [row["id"] for row in rows[max_decoys:]]
@@ -506,11 +518,12 @@ class DecoyOrchestrator:
         was stopped. Returns the number of decoys resumed.
         """
         cursor = await self._db.execute(
-            """SELECT *
+            f"""SELECT *
                FROM decoys
                WHERE status IN ('active', 'degraded')
-                 AND decoy_type != 'mimic'
-               ORDER BY id"""
+                 AND {_CLASSIC_TYPE_FILTER}
+               ORDER BY id""",
+            _CLASSIC_TYPES,
         )
         rows = await cursor.fetchall()
         if not rows:
@@ -596,17 +609,19 @@ class DecoyOrchestrator:
         """
         recovered = 0
         cursor = await self._db.execute(
-            """SELECT id
+            f"""SELECT id
                FROM decoys
-               WHERE status = 'degraded' AND decoy_type != 'mimic'
-               ORDER BY id"""
+               WHERE status = 'degraded' AND {_CLASSIC_TYPE_FILTER}
+               ORDER BY id""",
+            _CLASSIC_TYPES,
         )
         for row in await cursor.fetchall():
             if await self.enable_decoy(row["id"]):
                 recovered += 1
 
         cursor = await self._db.execute(
-            "SELECT decoy_type, status FROM decoys WHERE decoy_type != 'mimic'"
+            f"SELECT decoy_type, status FROM decoys WHERE {_CLASSIC_TYPE_FILTER}",
+            _CLASSIC_TYPES,
         )
         existing_rows = await cursor.fetchall()
         existing_types = {row["decoy_type"] for row in existing_rows}
@@ -681,7 +696,8 @@ class DecoyOrchestrator:
 
         Returns (decoy_instance, created_at_iso_string).
         """
-        name = _DECOY_NAMES.get(decoy_type, decoy_type.replace("_", " ").title())
+        _require_classic_type(decoy_type)
+        name = _DECOY_NAMES[decoy_type]
         now = datetime.now(UTC).isoformat()
         bind_address = await self._get_bind_address()
         creds = _generate_credentials(
@@ -796,6 +812,7 @@ class DecoyOrchestrator:
         Args:
             decoy: The BaseDecoy instance to deploy.
         """
+        _require_classic_type(decoy.decoy_type)
         # Capture the running loop so threaded decoy callbacks can reach it.
         self._loop = asyncio.get_running_loop()
 
@@ -1007,8 +1024,8 @@ class DecoyOrchestrator:
     async def enable_decoy(self, decoy_id: int) -> bool:
         """Start a classic decoy from its persisted row."""
         cursor = await self._db.execute(
-            "SELECT * FROM decoys WHERE id = ? AND decoy_type != 'mimic'",
-            (decoy_id,),
+            f"SELECT * FROM decoys WHERE id = ? AND {_CLASSIC_TYPE_FILTER}",
+            (decoy_id, *_CLASSIC_TYPES),
         )
         row = await cursor.fetchone()
         if row is None:
@@ -1023,10 +1040,10 @@ class DecoyOrchestrator:
             return True
 
         cursor = await self._db.execute(
-            """SELECT COUNT(*)
+            f"""SELECT COUNT(*)
                FROM decoys
-               WHERE status = 'active' AND decoy_type != 'mimic' AND id != ?""",
-            (decoy_id,),
+               WHERE status = 'active' AND {_CLASSIC_TYPE_FILTER} AND id != ?""",
+            (*_CLASSIC_TYPES, decoy_id),
         )
         active_count = (await cursor.fetchone())[0]
         if active_count >= self._max_decoys:
@@ -1083,8 +1100,8 @@ class DecoyOrchestrator:
     async def disable_decoy(self, decoy_id: int) -> bool:
         """Stop a classic decoy listener and preserve it for later enable."""
         cursor = await self._db.execute(
-            "SELECT id FROM decoys WHERE id = ? AND decoy_type != 'mimic'",
-            (decoy_id,),
+            f"SELECT id FROM decoys WHERE id = ? AND {_CLASSIC_TYPE_FILTER}",
+            (decoy_id, *_CLASSIC_TYPES),
         )
         if await cursor.fetchone() is None:
             return False

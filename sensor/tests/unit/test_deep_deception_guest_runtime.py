@@ -110,6 +110,141 @@ def _persona():
     )
 
 
+def _diagnostic(**changes):
+    return {
+        "event": "runtime_diagnostic", "stage": "accepted", "service_port": 22,
+        "connection_id": 1, "sequence": 1, "errno": 0, "direction": "none",
+        **changes,
+    }
+
+
+@pytest.mark.asyncio
+async def test_internal_diagnostics_are_logged_without_decoy_hits(tmp_path, caplog):
+    received = []
+    controller = GuestRuntimeController(
+        executable=tmp_path / "unused", bundle_root=tmp_path, state_dir=tmp_path,
+        bind_address="127.0.0.1", persona=_persona(), on_connection=received.append,
+    )
+    stream = asyncio.StreamReader()
+    stream.feed_data(json.dumps(_diagnostic()).encode() + b"\n")
+    stream.feed_eof()
+    with caplog.at_level("INFO"):
+        await controller._drain_output(stream)
+    assert "Guest relay checkpoint stage=accepted service=22 connection=1 sequence=1 errno=0 direction=none" in caplog.text
+    assert "invalid telemetry" not in caplog.text
+    assert not received
+
+
+@pytest.mark.parametrize("changes", [
+    {"stage": "password=private-secret"}, {"direction": "private-secret"},
+    {"stage": []}, {"direction": {}}, {"service_port": 23}, {"service_port": True},
+    {"connection_id": -1}, {"sequence": 514}, {"errno": "private-secret"},
+    {"errno": -1}, {"errno": 4097}, {"extra": "private-secret"},
+])
+@pytest.mark.asyncio
+async def test_malformed_diagnostic_never_logs_untrusted_content(tmp_path, caplog, changes):
+    controller = GuestRuntimeController(
+        executable=tmp_path / "unused", bundle_root=tmp_path, state_dir=tmp_path,
+        bind_address="127.0.0.1", persona=_persona(),
+    )
+    stream = asyncio.StreamReader()
+    stream.feed_data(json.dumps(_diagnostic(**changes)).encode() + b"\n")
+    stream.feed_eof()
+    with caplog.at_level("INFO"):
+        await controller._drain_output(stream)
+    assert "invalid telemetry" in caplog.text
+    assert "Guest relay checkpoint" not in caplog.text
+    assert "private-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_budget_does_not_consume_connection_events(tmp_path, caplog):
+    received = []
+    controller = GuestRuntimeController(
+        executable=tmp_path / "unused", bundle_root=tmp_path, state_dir=tmp_path,
+        bind_address="127.0.0.1", persona=_persona(), on_connection=received.append,
+    )
+    stream = asyncio.StreamReader()
+    stream.feed_data((json.dumps(_diagnostic()).encode() + b"\n") * 600)
+    stream.feed_data(json.dumps({
+        "event": "connection", "source_ip": "192.0.2.44", "source_port": 53012,
+        "dest_port": 22, "protocol": "tcp", "interaction_type": "ssh.guest_connected",
+        "timestamp": "2026-08-31T16:01:02Z",
+    }).encode() + b"\n")
+    stream.feed_eof()
+    with caplog.at_level("INFO"):
+        await controller._drain_output(stream)
+    assert caplog.text.count("Guest relay checkpoint") == 513
+    assert len(received) == 1
+    assert received[0].interaction_type == "ssh.guest_connected"
+
+
+def test_swift_python_diagnostic_vocabulary_matches():
+    import re
+
+    from squirrelops_home_sensor.decoys.deep.guest_runtime import _DIAGNOSTIC_STAGES
+
+    source = (Path(__file__).resolve().parents[3] /
+              "app/Sources/SquirrelOpsDeceptionGuest/RuntimeDiagnostics.swift").read_text()
+    enum = source.split("enum RelayCheckpoint:", 1)[1].split("\n}", 1)[0]
+    assert set(re.findall(r'case \w+ = "([a-z_]+)"', enum)) == _DIAGNOSTIC_STAGES
+
+
+@pytest.mark.asyncio
+async def test_stderr_diagnostics_reassemble_chunks_without_logging_raw_stderr(tmp_path, caplog):
+    controller = GuestRuntimeController(
+        executable=tmp_path / "unused", bundle_root=tmp_path, state_dir=tmp_path,
+        bind_address="127.0.0.1", persona=_persona(),
+    )
+    prefix = f"SQUIRRELOPS_RELAY_DIAGNOSTIC {controller._diagnostic_nonce} ".encode()
+    line = prefix + json.dumps(_diagnostic()).encode() + b"\n"
+    stream = asyncio.StreamReader()
+    task = asyncio.create_task(controller._drain_stderr(stream))
+    with caplog.at_level("INFO"):
+        stream.feed_data(b"private-secret raw guest stderr\n" + line[:11])
+        await asyncio.sleep(0)
+        stream.feed_data(line[11:])
+        stream.feed_data(b"x" * 20000 + line)  # oversized line tail is not a record
+        stream.feed_data(line)
+        stream.feed_eof()
+        await task
+    assert caplog.text.count("Guest relay checkpoint stage=accepted") == 2
+    assert "private-secret" not in caplog.text
+    assert controller._diagnostic_nonce not in controller.diagnostic_tail
+    assert controller._diagnostic_nonce not in caplog.text
+    assert len(controller.diagnostic_tail.encode()) <= 16384
+
+
+@pytest.mark.asyncio
+async def test_malformed_stderr_diagnostic_withholds_raw_content(tmp_path, caplog):
+    controller = GuestRuntimeController(
+        executable=tmp_path / "unused", bundle_root=tmp_path, state_dir=tmp_path,
+        bind_address="127.0.0.1", persona=_persona(),
+    )
+    stream = asyncio.StreamReader()
+    prefix = f"SQUIRRELOPS_RELAY_DIAGNOSTIC {controller._diagnostic_nonce} ".encode()
+    stream.feed_data(prefix + b'{"private-secret":true}\n')
+    stream.feed_eof()
+    with caplog.at_level("INFO"):
+        await controller._drain_stderr(stream)
+    assert "invalid diagnostic" in caplog.text
+    assert "private-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_guest_console_cannot_spoof_host_checkpoint_without_nonce(tmp_path, caplog):
+    controller = GuestRuntimeController(
+        executable=tmp_path / "unused", bundle_root=tmp_path, state_dir=tmp_path,
+        bind_address="127.0.0.1", persona=_persona(),
+    )
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"SQUIRRELOPS_RELAY_DIAGNOSTIC " + b"0" * 32 + b" " + json.dumps(_diagnostic()).encode() + b"\n")
+    stream.feed_eof()
+    with caplog.at_level("INFO"):
+        await controller._drain_stderr(stream)
+    assert "Guest relay checkpoint" not in caplog.text
+
+
 @pytest.mark.parametrize("service,port", [("ssh", 22), ("smb", 445)])
 @pytest.mark.parametrize("outcome", [
     "guest_connected", "capacity_rejected", "guest_connect_failed", "guest_connect_timeout",
@@ -151,8 +286,10 @@ async def test_runtime_reports_only_ssh_and_smb_backend_ports(tmp_path: Path) ->
         persona=_persona(),
     )
 
+    controller._diagnostic_count = 513
     ports = await controller.start()
     try:
+        assert controller._diagnostic_count == 0
         assert ports == {22: 49122, 445: 49445}
         assert controller.is_running is True
     finally:
