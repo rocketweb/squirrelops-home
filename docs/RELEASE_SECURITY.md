@@ -45,6 +45,20 @@ capability and entry-point controls. An unknown mode, missing timestamp, direct
 sensor privilege, incomplete helper boundary, or lingering Linux publication
 path fails closed.
 
+## macOS release support
+
+The macOS app and native sensor support Apple Silicon (ARM64) on macOS 14
+(Sonoma) or later. Intel Macs are not supported. Home 2.1 has no supported
+Intel or universal macOS installer.
+
+Validate the final macOS installer, app, native runtime, and embedded guest as
+ARM64. Installed upgrade, restart, LAN/PF, containment, and signed/notarized
+artifact acceptance apply to this supported architecture. Intel execution is
+not a Home 2.1 release gate. Source builders retain x86_64 options and the
+workflow builds both guest architectures for build coverage; neither establishes
+Intel Mac support. Linux architecture support and its publication block are
+separate.
+
 ## Required GitHub settings
 
 Keep these settings in place for every release:
@@ -57,7 +71,10 @@ repository produces a different version set. The macOS job downloads that
 private artifact, selects the exact package architecture, and rejects any
 unexpected file, symlink, writable file, digest mismatch, architecture
 mismatch, changed resource ceiling, changed containment declaration, or changed
-socket/service map. The guest runtime is signed separately with only the
+socket/service map. The build-time verifier also streams the initramfs and
+requires reviewed hostname, hosts and resolver files; matching hashes do not
+authorize Docker builder DNS or hostname leakage. No external DNS access or
+guest network device is added. The guest runtime is signed separately with only the
 virtualization entitlement before the outer app signature is applied. Do not
 substitute a locally cached guest, floating container tag, or pre-existing
 release asset.
@@ -224,8 +241,8 @@ tag is component identity only. Release the signed macOS distribution with
 - signing and notarization credentials are available only after environment
   approval;
 - both architecture-specific deep-decoy guests are rebuilt from the pinned
-  image digest and complete package inventory, and the package contains the
-  validated matching guest;
+  image digest and complete package inventory for build coverage, and the
+  supported ARM64 macOS package contains the validated ARM64 guest;
 - the multi-platform container is built into a private OCI archive with no
   public staging tag;
 - the Linux installer is rendered with the attested multi-platform container

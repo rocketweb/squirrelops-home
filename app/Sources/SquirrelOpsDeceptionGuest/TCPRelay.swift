@@ -39,9 +39,10 @@ final class TCPListener: @unchecked Sendable {
     private let fileDescriptor: Int32
     private let queue: DispatchQueue
     private let handler: Handler
+    private let diagnostic: RelayDiagnosticContext?
     private var source: DispatchSourceRead?
 
-    init(bindAddress: String, handler: @escaping Handler) throws {
+    init(bindAddress: String, diagnostic: RelayDiagnosticContext? = nil, handler: @escaping Handler) throws {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else {
             throw GuestRuntimeFailure.listenerFailure("socket")
@@ -97,6 +98,7 @@ final class TCPListener: @unchecked Sendable {
         localPort = UInt16(bigEndian: boundAddress.sin_port)
         queue = DispatchQueue(label: "com.squirrelops.deception.listener.\(localPort)")
         self.handler = handler
+        self.diagnostic = diagnostic
     }
 
     func start() {
@@ -106,12 +108,14 @@ final class TCPListener: @unchecked Sendable {
             queue: queue
         )
         readSource.setEventHandler { [weak self] in
+            self?.diagnostic?.record(.listenerReadable)
             self?.acceptAvailableConnections()
         }
         readSource.setCancelHandler { [fileDescriptor] in
             close(fileDescriptor)
         }
         source = readSource
+        diagnostic?.record(.listenerActivated)
         readSource.activate()
     }
 
@@ -132,10 +136,12 @@ final class TCPListener: @unchecked Sendable {
             if client < 0 {
                 if errno == EAGAIN || errno == EWOULDBLOCK { return }
                 if errno == EINTR { continue }
+                diagnostic?.record(.acceptFailed, errno: errno)
                 return
             }
             let flags = fcntl(client, F_GETFL)
             if flags < 0 || fcntl(client, F_SETFL, flags & ~O_NONBLOCK) != 0 {
+                diagnostic?.record(.clientSetupFailed, errno: errno)
                 close(client)
                 continue
             }
@@ -144,6 +150,7 @@ final class TCPListener: @unchecked Sendable {
                 inet_ntop(AF_INET, pointer, &buffer, socklen_t(INET_ADDRSTRLEN))
             }
             guard address != nil else {
+                diagnostic?.record(.clientSetupFailed, errno: errno)
                 close(client)
                 continue
             }
@@ -204,6 +211,7 @@ final class SocketRelay: @unchecked Sendable {
         guard started, !closed, !aborting else { return false }
         let limit = halfClosed ? timeoutPolicy.halfClosedIdle : timeoutPolicy.idle
         guard now() - lastProgress >= limit else { return false }
+        client.diagnostic?.record(.relayTimedOut)
         cancelLocked()
         return true
     }
@@ -225,12 +233,14 @@ final class SocketRelay: @unchecked Sendable {
         for descriptor in [client.descriptor, guestConnection.fileDescriptor] {
             let flags = fcntl(descriptor, F_GETFL)
             guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                client.diagnostic?.record(.nonblockingFailed, errno: errno)
                 cancelLocked()
                 lock.unlock()
                 return
             }
         }
         started = true
+        client.diagnostic?.record(.relayStarted)
         lastProgress = now()
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
         timer.schedule(deadline: .now() + timeoutPolicy.pollInterval,
@@ -242,20 +252,22 @@ final class SocketRelay: @unchecked Sendable {
         let clientDescriptor = client.descriptor
         let guestDescriptor = guestConnection.fileDescriptor
         schedule { [self] in
-            pump(from: clientDescriptor, to: guestDescriptor)
+            pump(from: clientDescriptor, to: guestDescriptor, direction: .clientToGuest)
             finish()
         }
         schedule { [self] in
-            pump(from: guestDescriptor, to: clientDescriptor)
+            pump(from: guestDescriptor, to: clientDescriptor, direction: .guestToClient)
             finish()
         }
     }
 
-    private func pump(from source: Int32, to destination: Int32) {
+    private func pump(from source: Int32, to destination: Int32, direction: RelayDirection) {
         var buffer = [UInt8](repeating: 0, count: 32 * 1024)
-        while waitForIO(source, event: Int16(POLLIN)) {
+        var firstRead = true
+        while waitForIO(source, event: Int16(POLLIN), direction: direction) {
             let count = Darwin.read(source, &buffer, buffer.count)
             if count == 0 {
+                client.diagnostic?.record(.readEOF, direction: direction)
                 // EOF closes only this direction. The peer may still be preparing
                 // a response, and both descriptors remain owned until both pumps exit.
                 lock.lock()
@@ -269,13 +281,18 @@ final class SocketRelay: @unchecked Sendable {
             }
             if count < 0 {
                 if errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK { continue }
+                client.diagnostic?.record(.readFailed, errno: errno, direction: direction)
                 cancel()
                 return
+            }
+            if firstRead {
+                client.diagnostic?.record(.firstRead, direction: direction)
+                firstRead = false
             }
             madeProgress()
             var written = 0
             while written < count {
-                guard waitForIO(destination, event: Int16(POLLOUT)) else { return }
+                guard waitForIO(destination, event: Int16(POLLOUT), direction: direction) else { return }
                 let result = buffer.withUnsafeBytes { bytes in
                     Darwin.write(
                         destination,
@@ -285,6 +302,7 @@ final class SocketRelay: @unchecked Sendable {
                 }
                 if result <= 0 {
                     if result < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) { continue }
+                    client.diagnostic?.record(.writeFailed, errno: result < 0 ? errno : 0, direction: direction)
                     cancel()
                     return
                 }
@@ -294,12 +312,13 @@ final class SocketRelay: @unchecked Sendable {
         }
     }
 
-    private func waitForIO(_ descriptor: Int32, event: Int16) -> Bool {
+    private func waitForIO(_ descriptor: Int32, event: Int16, direction: RelayDirection) -> Bool {
         while !lock.withLock({ aborting }) {
             var request = pollfd(fd: descriptor, events: event, revents: 0)
             let result = poll(&request, 1, 100)
             if result > 0 { return !lock.withLock { aborting } }
             if result < 0 && errno != EINTR {
+                client.diagnostic?.record(.pollFailed, errno: errno, direction: direction)
                 cancel()
                 return false
             }
@@ -336,6 +355,7 @@ final class SocketRelay: @unchecked Sendable {
         // Neither worker can make another syscall after its completion report.
         // Only now may these descriptor numbers and the admission slot be reused.
         closed = true
+        client.diagnostic?.record(.relayClosed)
         watchdog?.cancel()
         watchdog = nil
         client.close()

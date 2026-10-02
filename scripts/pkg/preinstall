@@ -45,6 +45,11 @@ stop_service_and_verify() {
     local label="$1"
     local description="$2"
     local attempts=0
+    local max_attempts=10
+    # Match the sensor's 60s ExitTimeOut, with 10s for launchd removal.
+    if [ "$label" = "com.squirrelops.sensor" ]; then
+        max_attempts=70
+    fi
 
     if ! service_is_loaded "$label"; then
         return 0
@@ -59,7 +64,7 @@ stop_service_and_verify() {
     fi
 
     while service_is_loaded "$label"; do
-        if [ "$attempts" -ge 10 ]; then
+        if [ "$attempts" -ge "$max_attempts" ]; then
             echo "[preinstall] ${description} shutdown could not be verified; aborting upgrade." >&2
             return 1
         fi

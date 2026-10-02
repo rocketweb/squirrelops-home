@@ -68,4 +68,6 @@ printf '%s\n' \
     '}' > "$OUTPUT_DIR/manifest.json"
 chmod 0644 "$OUTPUT_DIR/manifest.json"
 
+python3 "$REPO_ROOT/scripts/verify-guest-bundle.py" "$OUTPUT_DIR" \
+    --architecture "$TARGET_ARCH"
 echo "Built Studio Mini guest bundle: $OUTPUT_DIR"

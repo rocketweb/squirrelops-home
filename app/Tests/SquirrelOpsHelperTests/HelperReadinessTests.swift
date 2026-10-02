@@ -114,13 +114,21 @@ struct HelperReadinessTests {
     @Test("Closed RPC peers cannot terminate the helper with SIGPIPE")
     func closedPeerDoesNotRaiseSIGPIPE() throws {
         var sockets = [Int32](repeating: -1, count: 2)
-        #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)
         defer {
             if sockets[0] >= 0 { close(sockets[0]) }
             if sockets[1] >= 0 { close(sockets[1]) }
         }
 
-        #expect(configureNoSigPipe(fd: sockets[0]))
+        try #require(configureNoSigPipe(fd: sockets[0]))
+        // Model a peer descriptor retained by a concurrently spawned child.
+        // Closing only this process's descriptor does not disconnect that peer.
+        let retainedPeer = dup(sockets[1])
+        try #require(retainedPeer >= 0)
+        defer { close(retainedPeer) }
+        // Establish a disconnected endpoint even if a child retains a copy.
+        // The fixture must not mistake an open peer for a sendAll failure.
+        try #require(shutdown(sockets[1], SHUT_RDWR) == 0)
         close(sockets[1])
         sockets[1] = -1
 

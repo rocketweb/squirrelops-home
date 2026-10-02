@@ -5,6 +5,52 @@ import Testing
 
 @Suite("Socket relay lifetime", .serialized)
 struct SocketRelayTests {
+    @Test("Instrumented relay preserves both directions and records EOF and closure")
+    func diagnosticByteParity() throws {
+        let records = DiagnosticRecords()
+        let diagnostics = RuntimeDiagnostics { records.append($0) }
+        let fixture = try RelayFixture(diagnostic: diagnostics.service(445).connection())
+        fixture.relay.start()
+        defer { fixture.relay.cancel() }
+        let request = Array("synthetic request".utf8)
+        let response = Array("synthetic response".utf8)
+        try writeAll(request, to: fixture.clientPeer)
+        shutdown(fixture.clientPeer, SHUT_WR)
+        #expect(try readThroughEOF(fixture.guestPeer) == request)
+        try writeAll(response, to: fixture.guestPeer)
+        shutdown(fixture.guestPeer, SHUT_WR)
+        #expect(try readThroughEOF(fixture.clientPeer) == response)
+        for _ in 0..<100 where fixture.guest.closeCount == 0 { Thread.sleep(forTimeInterval: 0.005) }
+        diagnostics.flushForTesting()
+        #expect(records.values.first?.stage == .relayStarted)
+        #expect(records.values.last?.stage == .relayClosed)
+        for direction in [RelayDirection.clientToGuest, .guestToClient] {
+            #expect(records.values.contains { $0.stage == .firstRead && $0.direction == direction })
+            #expect(records.values.contains { $0.stage == .readEOF && $0.direction == direction })
+        }
+        #expect(fixture.guest.closeCount == 1)
+    }
+
+    @Test("Failed relay setup records errno without leaking the connection allowance")
+    func diagnosticSetupFailure() throws {
+        let records = DiagnosticRecords()
+        let diagnostics = RuntimeDiagnostics { records.append($0) }
+        let limiter = ConnectionLimiter(maximum: 1)
+        let client = try #require(RelayConnection(descriptor: -1, limiter: limiter,
+                                                 diagnostic: diagnostics.service(22).connection()))
+        var pair = [Int32](repeating: -1, count: 2)
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0)
+        defer { Darwin.close(pair[1]) }
+        let guest = TestGuestConnection(pair[0])
+        SocketRelay(client: client, guestConnection: guest).start()
+        diagnostics.flushForTesting()
+        #expect(records.values.first?.stage == .nonblockingFailed)
+        #expect(records.values.first?.errorNumber == EBADF)
+        #expect(guest.closeCount == 1)
+        #expect(limiter.acquire())
+        limiter.release()
+    }
+
     @Test("Automatic half-close watchdog preserves progressing responses then cleans up a silent tail")
     func progressingHalfClose() throws {
         let fixture = try RelayFixture(policy: RelayTimeoutPolicy(idle: 0.3, halfClosedIdle: 0.3, pollInterval: 0.01))
@@ -268,7 +314,7 @@ private final class RelayFixture {
     private(set) var guestPeer: Int32
     let relay: SocketRelay
 
-    init(policy: RelayTimeoutPolicy = RelayTimeoutPolicy(),
+    init(diagnostic: RelayDiagnosticContext? = nil, policy: RelayTimeoutPolicy = RelayTimeoutPolicy(),
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         var first = [Int32](repeating: -1, count: 2)
         try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &first) == 0)
@@ -283,7 +329,7 @@ private final class RelayFixture {
             setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &deadline, socklen_t(MemoryLayout<timeval>.size))
             setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &deadline, socklen_t(MemoryLayout<timeval>.size))
         }
-        client = try #require(RelayConnection(descriptor: first[0], limiter: limiter))
+        client = try #require(RelayConnection(descriptor: first[0], limiter: limiter, diagnostic: diagnostic))
         guest = TestGuestConnection(second[0])
         clientPeer = first[1]
         guestPeer = second[1]

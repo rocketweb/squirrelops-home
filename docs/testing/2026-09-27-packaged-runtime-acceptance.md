@@ -92,9 +92,13 @@ Raw logs remain in ignored local build artifacts:
 
 ## Remaining release gates
 
+Platform scope corrected September 30, 2026: Home 2.1 supports Apple Silicon
+only. Intel execution is not a release gate. See
+[macOS release support](../RELEASE_SECURITY.md#macos-release-support).
+
 Installed upgrade, second-machine virtual-IP ingress, live PF acceptance,
-Intel execution, remaining review findings, independent approval, and Developer
-ID signing/notarization remain separate. No new installer build is needed for
+remaining review findings, independent approval, and Developer ID
+signing/notarization remain separate. No new installer build is needed for
 this documentation-only follow-up; the tested bytes are unchanged. Matt
 authorized committing and pushing this report with the release-candidate
 documentation on September 28. That authorization does not include merging or

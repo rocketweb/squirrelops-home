@@ -13,6 +13,10 @@ Local development setup for working on the sensor, macOS app, and privileged hel
 | Python | 3.11+ | `brew install python@3.11` |
 | uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 
+The supported macOS app and native sensor require Apple Silicon (ARM64).
+Intel Macs are not supported. This includes the Home 2.1 release; the source
+builders' architecture options are not a broader hardware-support commitment.
+
 ---
 
 ## Repository Structure
@@ -140,6 +144,28 @@ run `pytest tests/unit/test_runtime_shutdown.py -k server_signal -q` from
 `sensor/`. The child uses Python isolated mode and the test verifies that its
 sensor module belongs to the selected runtime. These checks do not start the
 installed sensor, guest VM, helper, or packet filter.
+
+The sensor launchd template sets a finite `ExitTimeOut` of 60 seconds. The
+system-defined default can be only five seconds, shorter than mDNS goodbye
+and the scan loop's ten-second drain alone. Both package preinstall scripts
+and the uninstaller wait up to 70 seconds for sensor job removal; the helper
+keeps its ten-second check. These are separate from installer startup checks.
+An expired wait still fails closed and does not authorize releasing protection
+around a surviving guest.
+
+On macOS, run the opt-in launchd regression as the console user, not root:
+
+```bash
+cd sensor
+SQUIRRELOPS_TEST_LAUNCHD=1 uv run pytest tests/unit/test_launchd_shutdown.py -q
+```
+
+This creates and removes one uniquely named user-domain job. It exercises the
+real managed server signal handler and scan drain, with fake mDNS, guest, and
+database resources and no network listeners. `SQUIRRELOPS_TEST_SENSOR_PYTHON`
+also selects an extracted package runtime for this test. A passing disposable
+job is not real-VM restart or upgrade acceptance; repeat those separately on
+the attended test machine before release.
 
 ---
 
@@ -302,11 +328,35 @@ running it: `build-pkg.sh` cleans `build/pkg`.
 The local release app bundle was built successfully with these options. That
 does not establish signed-installer or upgrade acceptance. Do not substitute a
 stale app from another directory or disable package checks. See the
-[2.1 readiness report](testing/2026-09-26-final-installer-readiness.md) for current
+[2.1 publication readiness](testing/2026-10-01-publication-readiness.md) for current
 test evidence and remaining acceptance gates. Xcode license acceptance is a
 separate operator action; these tests did not accept it.
 
 ### Studio Mini guest
+
+The guest runtime records bounded internal relay checkpoints for listener
+activation/readability, TCP acceptance before the MainActor handoff, guest
+connection setup, first reads, EOF and I/O failures. The sensor writes validated
+records to its existing private rotating log as `Guest relay checkpoint ...`.
+These are diagnostics, not decoy hits, authentication evidence or proof that
+the client received a response.
+
+Diagnostics use a separate asynchronous stderr channel, capped at 512 records
+plus a truncation marker per guest process. Exhaustion never limits connections
+or suppresses ordinary hit telemetry. A fresh host-only marker distinguishes
+runtime checkpoints from guest console text; it is not sent into the persona
+or guest and is redacted from the retained stderr tail. Records contain fixed
+stage/direction labels, service port, per-process connection ID, sequence and
+numeric errno only. No peer names, file contents, credentials or exception
+descriptions are logged. Correlate sequence/connection IDs within one process,
+not across a restart. Asynchronous records are best effort near process exit.
+
+`RuntimeDiagnosticsTests` exercises real loopback `TCPListener` sockets,
+pre-MainActor checkpoints and blocked diagnostic sinks. `SocketRelayTests`
+checks instrumented byte parity and setup-failure cleanup.
+`test_deep_deception_guest_runtime.py` covers validation, log redaction, chunk
+framing, guest-console spoof rejection, log budgets and restart reset. These
+local tests do not establish the Mini's PF/content-filter/VSOCK LAN behavior.
 
 Classic lifecycle ownership is an explicit allowlist: `file_share`,
 `dev_server`, and `home_assistant`. Resume, profile changes, deferred recovery,
@@ -356,6 +406,27 @@ and rebuilding both architectures from the same image digest. The Home release
 workflow builds both ARM64 and x86_64 guest bundles on Linux, downloads them
 into the macOS job, selects the package architecture, and validates the copied
 app resource before signing.
+
+The x86_64 guest build is build coverage, not Intel Mac release support.
+The supported Home 2.1 macOS package contains the ARM64 app, native runtime,
+and guest. Perform macOS runtime and installed-package acceptance on Apple
+Silicon; Intel execution is not a release gate for this ARM64-only release.
+
+The guest builder stages the root filesystem outside Docker's injected `/etc`
+mounts, then installs the reviewed `guest/studio-mini/network/` files. Bundle
+verification checks the actual gzip/newc contents for persona-consistent local
+hostname resolution and loopback-only DNS. Do not replace this check with a
+manifest hash check: a correctly hashed archive can still contain builder DNS.
+The guest keeps zero network devices and no external resolver.
+
+`sensor/tests/unit/test_guest_network_packaging.py` covers identity consistency,
+builder leakage, duplicates, links and malformed archives. The opt-in
+`sensor/tests/integration/test_guest_resolver_live.py` uses the same runtime and
+bundle environment as the live test below. It measures fresh Samba negotiation
+and synthetic authentication before any SMB warmup, checks DNS identity fields,
+and requires completion within five seconds. It also verifies guest-local name
+resolution and an SMB file roundtrip. This is local loopback evidence, not a
+Mini LAN, PF, filter or installed-upgrade acceptance result.
 
 For a local live acceptance, build the guest and the debug app as shown above,
 then run the opt-in test. The debug app builder ad-hoc signs the nested runtime

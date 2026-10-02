@@ -4,16 +4,18 @@ import Foundation
 /// Owns one accepted descriptor and its existing guest connection allowance.
 final class RelayConnection: @unchecked Sendable {
     let descriptor: Int32
+    let diagnostic: RelayDiagnosticContext?
     private let limiter: ConnectionLimiter
     private let lock = NSLock()
     private var closed = false
 
-    init?(descriptor: Int32, limiter: ConnectionLimiter) {
+    init?(descriptor: Int32, limiter: ConnectionLimiter, diagnostic: RelayDiagnosticContext? = nil) {
         guard limiter.acquire() else {
             Darwin.close(descriptor)
             return nil
         }
         self.descriptor = descriptor
+        self.diagnostic = diagnostic
         self.limiter = limiter
     }
 
@@ -39,18 +41,23 @@ enum RelayOutcome: String, Sendable {
 
 func guestConnectionHandler(
     limiter: ConnectionLimiter,
+    diagnostic: RelayDiagnosticContext? = nil,
     onConnection: @escaping @Sendable (PeerEndpoint, RelayOutcome) -> Void,
     onAccepted: @escaping @MainActor @Sendable (RelayConnection, PeerEndpoint) async -> RelayOutcome
 ) -> TCPListener.Handler {
     { descriptor, peer in
+        let connectionDiagnostic = diagnostic?.connection()
+        connectionDiagnostic?.record(.accepted)
         // Reserve on the listener queue, before another MainActor task or fd can
         // accumulate. The existing ceiling includes queued and connected peers.
-        let connection = RelayConnection(descriptor: descriptor, limiter: limiter)
+        let connection = RelayConnection(descriptor: descriptor, limiter: limiter, diagnostic: connectionDiagnostic)
         guard let connection else {
+            connectionDiagnostic?.record(.capacityRejected)
             onConnection(peer, .capacityRejected)
             return
         }
         Task { @MainActor in
+            connectionDiagnostic?.record(.mainActorEntered)
             let outcome = await onAccepted(connection, peer)
             onConnection(peer, outcome)
         }

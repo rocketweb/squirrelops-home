@@ -174,8 +174,12 @@ bytes, and installed services were untouched. The same release executable
 subsequently rejected the restored user-owned copy before boot. See the
 [follow-up report](2026-09-27-packaged-runtime-acceptance.md) for exact evidence.
 
+Platform scope corrected September 30, 2026: Home 2.1 supports Apple Silicon
+only. Intel execution is not a release gate. See
+[macOS release support](../RELEASE_SECURITY.md#macos-release-support).
+
 A5 live PF acceptance, installed upgrade, second-machine virtual-IP ingress,
-Intel execution, independent review, Developer ID signing/notarization, and
-other outstanding review findings remain separate release gates. Source review
+independent review, Developer ID signing/notarization, and other outstanding
+review findings remain separate release gates. Source review
 and local testing do not authorize bypassing them. Exact-candidate remote CI
 must be checked after the authorized push; no success is assumed here.

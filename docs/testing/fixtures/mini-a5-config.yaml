@@ -1,0 +1,24 @@
+# Proposed Mac mini acceptance configuration. Not installed.
+profile: standard
+
+sensor:
+  name: SquirrelOps Mini Acceptance
+  data_dir: /Library/SquirrelOps/sensor/data
+  port: 8443
+
+network:
+  interface: en0
+  subnet: 192.168.1.0/24
+
+decoys:
+  deep_enabled: true
+
+scouts:
+  enabled: true
+  virtual_ip_range_start: 240
+  virtual_ip_range_end: 241
+  max_virtual_ips: 2
+
+pairing:
+  socket_path: /Library/SquirrelOps/sensor/run/pairing.sock
+  local_enrollment_enabled: true

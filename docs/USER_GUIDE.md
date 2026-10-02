@@ -30,13 +30,19 @@ SquirrelOps Home is a local-first home network security platform. It passively m
 
 ### macOS Native Sensor
 
+- Apple Silicon (ARM64) Mac
 - macOS 14 (Sonoma) or later
 - Local network access permission
 
 ### macOS App (control plane)
 
+- Apple Silicon (ARM64) Mac
 - macOS 14 (Sonoma) or later
 - Download from [GitHub Releases](https://github.com/rocketweb/squirrelops-home/releases)
+
+Intel Macs are not supported. This applies to both the app and the native
+sensor, including Home 2.1. Linux x86_64 requirements above are separate from
+macOS support; Linux publication remains on hold.
 
 ---
 
