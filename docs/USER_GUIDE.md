@@ -20,10 +20,12 @@ pairing keys in macOS Keychain. Core operation requires no cloud service.
 Cloud AI, Slack, and manually configured APNs relay delivery are optional;
 update checks contact GitHub when requested.
 
-This guide describes the 2.1 development source. It does not establish that
-2.1 has been published or that its signed installer has passed acceptance.
-See [publication readiness](testing/2026-10-01-publication-readiness.md) and
-the [documentation claim verification](testing/2026-10-02-documentation-claims.md).
+This guide describes [Home 2.1.1](https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.1.1),
+published on October 3, 2026, with macOS app 2.1.0 and sensor 2.1.1. Use the
+attested release document for package verification and installation. The
+[publication-readiness record](testing/2026-10-01-publication-readiness.md) and
+[documentation claim audit](testing/2026-10-02-documentation-claims.md) retain
+their dated evidence and test limits; they are not current publication status.
 
 ---
 
@@ -101,7 +103,7 @@ open SquirrelOpsHome-X.Y.Z.pkg
 
 For current immutable Home releases, first download and attest
 `RELEASE-VERIFICATION.md`, then use the commands in that canonical asset. The
-README includes a [verified Home 2.0.3 example](../README.md#macos-app-and-sensor).
+README includes a [verified Home 2.1.1 example](../README.md#macos-app-and-sensor).
 GitHub's release description is editable and is only a pointer. The legacy
 standalone `install-macos.sh` release asset is not supported because a
 standalone copy cannot carry the locked source project it installs.

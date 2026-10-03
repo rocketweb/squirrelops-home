@@ -2,9 +2,11 @@
 
 **Local-first home network security with high-signal deception.**
 
-This README describes the Home 2.1.0 source merged into `main`. The latest published Home
-release verified on October 3, 2026 is [2.0.3](https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.0.3).
-The 2.1 guest and UI features below are not included in that released package.
+This README describes [Home 2.1.1](https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.1.1),
+published on October 3, 2026. The package includes macOS app 2.1.0 and sensor
+2.1.1, including the Studio Build Mac guest and the 2.1 UI features below.
+Release notes and verification commands are in the attested
+[release document](https://github.com/rocketweb/squirrelops-home/releases/download/home-v2.1.1/RELEASE-VERIFICATION.md).
 
 - **Network-aware honeypots:** automatically selects HTTP file-directory, development-server, and Home Assistant-style decoys from discovered service ports, with a file-directory fallback
 - **Squirrel Scouts:** probes discovered services and builds fake hosts with one service decoy per observed port, sharing a virtual IP and hostname. HTTP samples and protocol banners provide partial service emulation.
@@ -149,22 +151,22 @@ dependencies, and privileged helper. Do not use the old standalone
 package index when it was separated from the source tree.
 
 ```bash
-RELEASE_TAG=home-v2.0.3
+RELEASE_TAG=home-v2.1.1
 base="https://github.com/rocketweb/squirrelops-home/releases/download/${RELEASE_TAG}"
 curl -fsSLO "${base}/RELEASE-VERIFICATION.md"
 gh release verify "$RELEASE_TAG" --repo rocketweb/squirrelops-home
 gh attestation verify RELEASE-VERIFICATION.md \
   --repo rocketweb/squirrelops-home \
   --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
-  --signer-digest eb2d87af5e24d924204afb4f2c0bcbd7403ac559 \
-  --source-digest eb2d87af5e24d924204afb4f2c0bcbd7403ac559 \
+  --signer-digest bec92c599fb793c09fbefd737e4c49659401b58b \
+  --source-digest bec92c599fb793c09fbefd737e4c49659401b58b \
   --source-ref refs/heads/main
 ```
 
 Then follow the verified document to download the package and checksum, verify
 the package attestation, Developer ID signature and notarization, and install.
-The published 2.0.3 metadata and GitHub asset digest agree on package SHA-256
-`252bd6bd559b4dbf578410aa959611675d3b627163ee885f404857cb67ab23f8`.
+The published 2.1.1 metadata and GitHub asset digest agree on package SHA-256
+`e34ee602d3187ee99f2781f4c7478ad60038b9e0d5332463c5b2006861523eab`.
 GitHub's release description is editable and is only a convenience pointer.
 
 The source-checkout-only `scripts/install-macos.sh` remains available for
