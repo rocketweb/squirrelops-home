@@ -93,7 +93,17 @@ The failed Home 2.1.0 build showed why an inventory lock alone is insufficient:
 the pinned base image still resolved newer dependencies from a live repository.
 Its mismatch check correctly stopped publication. Home 2.1.1 adds retained
 package bytes rather than bypassing that check. Existing 2.1.0 tags remain
-unchanged. App and sensor versions remain 2.1.0 because their source is unchanged.
+unchanged. The app remains 2.1.0. The sensor advances to 2.1.1 for the macOS
+dependency marker and license metadata correction; its new component tag needs
+independent review before the Home workflow can run.
+
+Home packaging also verifies source coverage against the actual guest and
+Python payload inventories. The final Home release must include
+`THIRD-PARTY-SOURCES.tar`, `THIRD-PARTY-INVENTORY.json` and
+`THIRD-PARTY-NOTICES.txt`, covered by checksums and attestations. Missing or
+changed companion inputs stop packaging/publication. See
+[third-party distribution notes](THIRD_PARTY.md). This does not authorize
+Linux publication, alter the product license or change the immutable APK archive.
 
 Package refresh is a separate maintainer action, never part of a normal release
 build. Review inventory changes and deception behavior, run both offline builds
@@ -354,7 +364,7 @@ Download `RELEASE-VERIFICATION.md` first. Treat that attested asset as the
 canonical notes and command source; GitHub's release title and description can
 still be edited after publication. These commands apply only to an immutable
 Home release. Use the exact version and independently reviewed tag commit,
-not a local test package. In a fresh directory, download all six Home assets
+not a local test package. In a fresh directory, download all nine Home assets
 from that pinned release and verify provenance, bytes and the macOS signature
 before opening the installer:
 
@@ -371,10 +381,14 @@ gh release download "$RELEASE_TAG" --repo rocketweb/squirrelops-home \
   --pattern SquirrelOpsHome-X.Y.Z.pkg.sha256 \
   --pattern squirrelops-home.rb \
   --pattern release-metadata.json \
-  --pattern SHA256SUMS
+  --pattern SHA256SUMS \
+  --pattern THIRD-PARTY-SOURCES.tar \
+  --pattern THIRD-PARTY-INVENTORY.json \
+  --pattern THIRD-PARTY-NOTICES.txt
 for ASSET in RELEASE-VERIFICATION.md SquirrelOpsHome-X.Y.Z.pkg \
   SquirrelOpsHome-X.Y.Z.pkg.sha256 squirrelops-home.rb \
-  release-metadata.json SHA256SUMS; do
+  release-metadata.json SHA256SUMS THIRD-PARTY-SOURCES.tar \
+  THIRD-PARTY-INVENTORY.json THIRD-PARTY-NOTICES.txt; do
   gh attestation verify "$ASSET" \
     --repo rocketweb/squirrelops-home \
     --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \

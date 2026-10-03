@@ -391,7 +391,11 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: macos-pkg
-          path: build/pkg/output/SquirrelOpsHome-*.pkg
+          path: |
+            build/pkg/output/SquirrelOpsHome-*.pkg
+            build/pkg/output/THIRD-PARTY-SOURCES.tar
+            build/pkg/output/THIRD-PARTY-INVENTORY.json
+            build/pkg/output/THIRD-PARTY-NOTICES.txt
           if-no-files-found: error
           retention-days: 1
 
@@ -453,6 +457,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1
           python3 scripts/prepare-release-assets.py \
             --package "release-input/SquirrelOpsHome-${RELEASE_VERSION}.pkg" \
+            --third-party release-input \
             --tag "$RELEASE_TAG" \
             --commit "$RELEASE_COMMIT" \
             --repository "$GITHUB_REPOSITORY" \
@@ -485,6 +490,9 @@ jobs:
             release-assets/SHA256SUMS
             release-assets/release-metadata.json
             release-assets/RELEASE-VERIFICATION.md
+            release-assets/THIRD-PARTY-SOURCES.tar
+            release-assets/THIRD-PARTY-INVENTORY.json
+            release-assets/THIRD-PARTY-NOTICES.txt
 
       - name: Verify draft
         run: |

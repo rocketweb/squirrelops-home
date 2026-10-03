@@ -27,6 +27,7 @@ def sha256(path: Path) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path, required=True)
+    parser.add_argument("--third-party", type=Path, required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--repository", required=True)
@@ -146,6 +147,16 @@ stapled ticket. Linux sensor releases are published independently under
 published automatically. Install it only after it lands through a separately
 reviewed Homebrew tap or `homebrew-cask` pull request.
 
+### Third-party sources and notices
+
+Download `THIRD-PARTY-SOURCES.tar`, `THIRD-PARTY-INVENTORY.json` and
+`THIRD-PARTY-NOTICES.txt` from this same release. Verify each with
+`gh attestation verify` using the workflow, commit and source-ref arguments
+above, then check their hashes with `shasum -a 256 -c SHA256SUMS`.
+The inventory binds the source archive and notices. Extract the source
+companion with `tar -xf THIRD-PARTY-SOURCES.tar` in a new directory.
+Instructions and original terms are in `build-instructions/docs/THIRD_PARTY.md`.
+
 ### What this proves
 
 The checksum detects changed bytes. The attestations bind the artifacts to the
@@ -205,6 +216,21 @@ def main() -> None:
         "Repository must use the owner/name form.",
     )
     require(args.package.is_file(), f"Package does not exist: {args.package}")
+    companion_names = (
+        "THIRD-PARTY-SOURCES.tar", "THIRD-PARTY-INVENTORY.json", "THIRD-PARTY-NOTICES.txt"
+    )
+    for name in companion_names:
+        file = args.third_party / name
+        require(file.is_file() and not file.is_symlink(), f"Missing regular companion: {name}")
+    inventory = json.loads((args.third_party / "THIRD-PARTY-INVENTORY.json").read_text())
+    require(inventory.get("schema_version") == 1, "Unknown third-party inventory schema.")
+    require(inventory.get("distribution_version") == distribution_version, "Stale third-party inventory.")
+    source = args.third_party / "THIRD-PARTY-SOURCES.tar"
+    require(inventory.get("source_archive") == {
+        "name": source.name, "size": source.stat().st_size, "sha256": sha256(source)
+    }, "Third-party source archive checksum mismatch.")
+    require(inventory.get("notices_sha256") == sha256(args.third_party / "THIRD-PARTY-NOTICES.txt"),
+            "Third-party notices checksum mismatch.")
 
     expected_package_name = f"SquirrelOpsHome-{distribution_version}.pkg"
     require(
@@ -232,6 +258,8 @@ def main() -> None:
     verification_output = output / RELEASE_VERIFICATION_NAME
 
     shutil.copyfile(args.package, package_output)
+    for name in companion_names:
+        shutil.copyfile(args.third_party / name, output / name)
 
     package_sha256 = sha256(package_output)
     release_base = (
@@ -289,6 +317,10 @@ def main() -> None:
             "url": package_url,
             "sha256": package_sha256,
         },
+        "third_party": {
+            name: {"sha256": sha256(output / name), "url": f"{release_base}/{name}"}
+            for name in companion_names
+        },
     }
     metadata_output.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
@@ -300,6 +332,7 @@ def main() -> None:
         cask_output,
         verification_output,
         metadata_output,
+        *(output / name for name in companion_names),
     ]
     checksums = "".join(f"{sha256(path)}  {path.name}\n" for path in subjects)
     (output / "SHA256SUMS").write_text(checksums, encoding="utf-8")
