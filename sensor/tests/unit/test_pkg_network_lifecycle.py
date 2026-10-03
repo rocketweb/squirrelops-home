@@ -1431,6 +1431,119 @@ deprovisioning_records_match_id 309
             assert check(mode).returncode != 0, (relative_path, mode)
 
 
+@pytest.mark.parametrize("relative_path", [
+    "scripts/pkg/app-scripts/preinstall",
+    "scripts/pkg/postinstall",
+    "scripts/pkg/uninstall.sh",
+])
+@pytest.mark.parametrize("display_name", ["SquirrelOps Sensor", "_squirrelops"])
+def test_account_teardown_accepts_existing_service_display_names(
+    relative_path: str, display_name: str,
+) -> None:
+    """Run the real DS text parsers, not a mock that approves every attribute."""
+    script = (REPO_ROOT / relative_path).read_text()
+    functions = "\n".join(_shell_function(script, name) for name in (
+        "directory_service_value", "directory_service_text_value",
+        "record_value_matches_or_is_missing", "record_attribute_is_empty_or_missing",
+        "deprovisioning_records_match_id",
+    )).replace("/usr/bin/dscl", "mock_dscl")
+    harness = r'''
+set -euo pipefail
+SENSOR_USER="_squirrelops"
+SENSOR_GROUP="_squirrelops"
+DISPLAY_NAME="$1"
+MODE="$2"
+mock_dscl() {
+    case "$2:$3" in
+        -read:/Users/_squirrelops)
+            case "${4:-}" in
+                "") return 0 ;;
+                RealName) printf 'RealName: %s\n' "$DISPLAY_NAME" ;;
+                UserShell)
+                    if [ "$MODE" = "login-shell" ]; then
+                        printf 'UserShell: /bin/zsh\n'
+                    else
+                        printf 'UserShell: /usr/bin/false\n'
+                    fi ;;
+                UniqueID) printf 'UniqueID: 309\n' ;;
+                PrimaryGroupID) printf 'PrimaryGroupID: 309\n' ;;
+                NFSHomeDirectory) printf 'NFSHomeDirectory: /var/empty\n' ;;
+                IsHidden) printf 'dsAttrTypeNative:IsHidden: 1\n' ;;
+                *) return 1 ;;
+            esac ;;
+        -read:/Groups/_squirrelops)
+            case "${4:-}" in
+                "") return 0 ;;
+                PrimaryGroupID) printf 'PrimaryGroupID: 309\n' ;;
+                GroupMembership)
+                    if [ "$MODE" = "has-member" ]; then
+                        printf 'GroupMembership: matt\n'
+                    else
+                        printf 'No such key: GroupMembership\n' >&2
+                    fi ;;
+                GroupMembers) printf 'No such key: GroupMembers\n' >&2 ;;
+                *) return 1 ;;
+            esac ;;
+        -list:/Users)
+            printf '_squirrelops 309\n'
+            if [ "$MODE" = "duplicate-uid" ]; then printf 'other 309\n'; fi ;;
+        -list:/Groups) printf '_squirrelops 309\n' ;;
+        *) return 1 ;;
+    esac
+}
+'''
+    harness += functions + '\ndeprovisioning_records_match_id 309\n'
+    for name, mode, expected in (
+        (display_name, "valid", 0),
+        (display_name, "login-shell", 1),
+        (display_name, "has-member", 1),
+        (display_name, "duplicate-uid", 1),
+        ("Someone Else", "valid", 1),
+        ("_squirrelops_other", "valid", 1),
+    ):
+        result = subprocess.run(
+            ["/bin/bash", "-c", harness, "account-display-name", name, mode],
+            capture_output=True, text=True, check=False,
+        )
+        assert (result.returncode == 0) == (expected == 0), (
+            relative_path, name, mode, result.stdout, result.stderr,
+        )
+
+
+@pytest.mark.parametrize("relative_path", [
+    "scripts/pkg/app-scripts/preinstall", "scripts/pkg/postinstall", "scripts/pkg/uninstall.sh",
+])
+def test_empty_membership_recognizes_exact_macos_missing_key_response(relative_path: str) -> None:
+    function = _shell_function((REPO_ROOT / relative_path).read_text(),
+                               "record_attribute_is_empty_or_missing").replace('/usr/bin/dscl', 'mock_dscl')
+    harness = r'''
+MODE="$1"
+mock_dscl() {
+    if [ "$#" -eq 3 ]; then
+        [ "$MODE" != "record-gone" ]
+        return
+    fi
+    case "$MODE" in
+        missing|record-gone) printf 'No such key: GroupMembers\n' >&2 ;;
+        missing-nonzero) printf 'No such key: GroupMembers\n' >&2; return 1 ;;
+        failure) printf 'Permission denied\n' >&2; return 1 ;;
+        nonempty) printf 'GroupMembers: some-user-guid\n' ;;
+        empty) printf 'GroupMembers:\n' ;;
+        silent) return 0 ;;
+        wrong-key) printf 'No such key: GroupMembership\n' >&2 ;;
+        mixed) printf 'GroupMembers: some-user-guid\n'; printf 'No such key: GroupMembers\n' >&2 ;;
+        *) return 1 ;;
+    esac
+}
+'''
+    harness += function + '\nrecord_attribute_is_empty_or_missing /Groups/_squirrelops GroupMembers\n'
+    for mode in ('missing', 'missing-nonzero', 'record-gone', 'nonempty', 'empty',
+                 'silent', 'wrong-key', 'mixed', 'failure'):
+        result = subprocess.run(['/bin/bash', '-c', harness, 'missing-field', mode],
+                                text=True, capture_output=True, check=False)
+        assert (result.returncode == 0) == (mode in ('missing', 'missing-nonzero', 'empty')), (relative_path, mode)
+
+
 def test_staged_account_recovery_accepts_marker_authorized_missing_ids() -> None:
     for relative_path in (
         "scripts/pkg/postinstall",

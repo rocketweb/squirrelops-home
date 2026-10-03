@@ -4,6 +4,11 @@ Date: October 2, 2026. Scope: **macOS only, Apple Silicon**.
 Linux publication remains blocked in `.github/release-policy.json`. No Linux
 workflow, OCI image or installer is part of this release.
 
+Latest: Matt authorized continuing through publication. The
+[publication follow-up](2026-10-02-publication-followup.md) records fresh tests,
+the exact source-review scope and the remaining acceptance/approval boundaries.
+Authorization to proceed does not mark those boundaries complete.
+
 ## Verified source and CI
 
 PR [#52](https://github.com/rocketweb/squirrelops-home/pull/52) was independently
@@ -63,12 +68,80 @@ probe, installed service, rule, alias, route, configuration or database was
 changed. Root PF inventory and address availability still need a fresh check
 immediately before a newly approved test window.
 
+The approved [Mini A5 experiment](2026-10-02-mini-a5-preparation.md) completed
+all eight planned phases after two fixture issues were corrected. The
+[eight-phase result](2026-10-02-mini-a5-eight-phase-result.md) records successful
+listener handoff, real retained closing-state probes, packet-correlated denial
+observations, recovery and scoped cleanup. No new Little Snitch prompt appeared.
+Filter attribution remains qualified; established/half-open replacement,
+simultaneous ambiguity, old-package upgrade and exact signed-installer acceptance
+are not covered. The [earlier partial result](2026-10-02-mini-a5-partial-results.md)
+preserves the previous bind failure and the 38-test fixture verification.
+
+The [counter review](2026-10-02-mini-a5-counter-review.md) now records positive
+PF blocking and zero wrong-UID LAN accepts from a checksum-verified read-only
+export. Its unknown-line/comparability limitation remains explicit. The
+[remaining test plan](2026-10-02-mini-a5-remaining-plan.md) now has Matt's
+separate approval for the narrow temporary laptop RST-filter scope. The
+[combined edge-run bundle](2026-10-02-mini-a5-edge-preparation.md) subsequently
+completed its [five live phases](2026-10-02-mini-a5-edge-result.md) with verified
+cleanup on both machines. Four simultaneous exact/wildcard listeners were
+rejected by the production guard. Darwin refused cross-UID binding while
+accepted sockets remained, and closing half-open listeners changed their
+states before replacement. Those are qualified observations, not successful
+retained-state replacement tests. The fixture suite again passed all 65 tests.
+
 ## Remaining boundary
 
-1. Complete A5 on an approved isolated scope. Listener replacement and retained
-   PF states must be tested against real packet delivery, not inferred from
-   unit tests or normal SSH/SMB success. The old-rule package migration case
-   must preserve the current database rather than downgrade it.
+Matt has superseded the [macOS VM proposal](2026-10-02-macos-upgrade-vm-preflight.md)
+with explicit permission to wipe the Mini's SquirrelOps installation and data,
+install official 2.0.3, and test an in-place upgrade. The
+[native clean-baseline preparation](2026-10-02-mini-clean-upgrade-preparation.md)
+records the exact removal scope, verified recovery copy, official signed old
+installer and local fixture checks. No VM storage choice is needed. The Mini
+reset subsequently reached a verified seven-path archive and partial removal,
+then stopped at service-account teardown. Two reproduced compatibility defects
+in display-name and missing-group-attribute handling are fixed locally with
+regressions and a passing read-only check against the Mini. The attended resume
+then completed the corrected cleanup but failed installing official 2.0.3.
+Its exact private installer failure is not yet diagnosed; the Mini upgrade did
+not run. Matt paused that path. The recovery archive is retained and the
+wrapper reported both product jobs stopped/disabled.
+
+Read-only SSH checks confirmed an existing, healthy 2.0.3 installation on
+Matt's MacBook at 192.168.1.97, macOS 26.6.1 build 25G76, ARM64. Matt separately
+approved backup and an in-place upgrade there, explicitly without uninstalling
+or wiping it. The [MacBook preparation](2026-10-02-macbook-upgrade-preparation.md)
+records the newly rebuilt local-test package, embedded script parity, fresh
+package tests, and attended upgrade procedure. The subsequent
+[MacBook result](2026-10-02-macbook-upgrade-result.md) records a successful live
+2.0.3-to-2.1.0 upgrade and Matt's accepted UI check. All 60 devices, 59 trust
+records, 22 existing decoys, nine alerts and 26 planted credentials passed the
+defined preservation comparisons; configuration content was unchanged. Five
+additional decoys and credentials appeared. The product anchor changed from
+15 unconditional `rdr pass` rules to 20 translations with none unconditional.
+The [completed saved-evidence review](2026-10-02-saved-release-evidence-result.md)
+confirms .203 is present again, identifies the five new decoys as Studio on .214,
+and confirms that both saved PF state inventories were empty. It also resolves
+the Mini's unknown counter-format and child-event omissions. Upgrade with
+existing state remains untested; this was not final signed-artifact or LAN
+protocol acceptance. The Mini, other
+apps, native services and unrelated filter policy stayed outside the operation.
+
+1. Complete the remaining A5 cases on an approved isolated scope, using the
+   eight-phase result rather than repeating completed controls without cause.
+   Established/half-open replacement now has documented kernel constraints
+   requiring review disposition; simultaneous listener ambiguity is covered.
+   Filter-attribution qualifications remain explicit. The MacBook now covers
+   actual old-package upgrade, saved-record preservation and old-rule replacement;
+   it does not prove retained-state invalidation because both saved state lists
+   were empty. All original aliases are present in the later read-only check;
+   the cause of .203's temporary absence is not established. The former
+   Mini database remains archived, never opened by the older runtime as a downgrade.
+   The [retained-evidence review](2026-10-02-saved-release-evidence-preparation.md)
+   is complete on both hosts. No further root export is needed for its
+   counter-format or child-event questions, and no live probe or service change
+   was made by that review.
 2. Review and merge the documentation and map follow-up and any changes required
    by live acceptance. Keep the exact final source tied to CI and artifact identity.
 3. Use the approved Home publication path to create signed component/Home tags
