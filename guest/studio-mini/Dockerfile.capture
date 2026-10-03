@@ -1,0 +1,12 @@
+# Maintainer-only refresh. Never used by the release workflow.
+ARG ALPINE_IMAGE=alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM ${ALPINE_IMAGE} AS capture
+RUN mkdir -p /snapshot/packages \
+    && apk --cache-dir /snapshot/packages --cache-packages --update-cache add \
+        acl attr cpio file git grep iproute2 jq linux-virt openssh-server \
+        openssh-sftp-server samba-common-tools samba-server socat tar zsh \
+    && apk verify /snapshot/packages/*.apk \
+    && apk info -vv | sort > /snapshot/packages.lock \
+    && cp /etc/apk/world /snapshot/packages.world
+FROM scratch
+COPY --from=capture /snapshot/ /

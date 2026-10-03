@@ -665,11 +665,14 @@ def test_guest_build_fails_when_the_reviewed_package_inventory_drifts() -> None:
         assert any(line.startswith(required) for line in package_lock)
 
     assert "COPY packages.lock /tmp/squirrelops-packages.lock" in dockerfile
-    assert "apk info -vv | sort > /etc/squirrelops-guest-packages.txt" in dockerfile
+    installer = (REPO_ROOT / "guest/studio-mini/install-packages.sh").read_text()
+    assert "sh /tmp/install-packages.sh" in dockerfile
+    assert "RUN --network=none" in dockerfile
+    assert "apk info -vv | sort > /etc/squirrelops-guest-packages.txt" in installer
     assert (
         "diff -u /tmp/squirrelops-packages.lock "
         "/etc/squirrelops-guest-packages.txt"
-    ) in dockerfile
+    ) in installer
 
 
 def test_release_workflow_requires_credentials_and_verifies_before_upload() -> None:
