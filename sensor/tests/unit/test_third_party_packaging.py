@@ -113,3 +113,15 @@ def test_system_zlib_stale_notice_does_not_allow_missing_bundled_notice(sources)
     extension["links"] = [{"name": "z", "path_static": "build/libz.a"}]
     with pytest.raises(ValueError, match="Missing Python build notice"):
         sources.python_build_notices(metadata, available)
+
+
+def test_source_builder_rejects_unsupported_target_before_downloads():
+    import subprocess
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/prepare-third-party.py"), "--architecture", "x86_64"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "invalid choice: 'x86_64'" in result.stderr
+    assert '--architecture "$BUILD_ARCH"' in (ROOT / "scripts/build-pkg.sh").read_text()

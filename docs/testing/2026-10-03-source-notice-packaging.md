@@ -39,7 +39,7 @@ Commands ran in the isolated `home-2.1.1-source-notices` worktree.
 
 | Check | Result |
 | --- | --- |
-| `cd sensor && uv run pytest tests/ -q` | 2,502 passed, 6 skipped, 3 upstream deprecation warnings |
+| `cd sensor && uv run pytest tests/ -q` | 2,503 passed, 6 skipped, 3 upstream deprecation warnings |
 | Clean Mac test environment before adding development-only Scapy | Same 2,502 tests passed with Scapy absent |
 | `cd sensor && uv run ruff check .` | Passed |
 | Ruff on the three changed/new packaging Python scripts | Passed |
@@ -62,7 +62,8 @@ part of packaging, but its full test suite was not rerun in this pass.
 The Scapy regression failed before the marker change. New checks cover missing
 base source inputs, cache corruption and symlinks, unsafe archive paths,
 runtime Scapy detection, the guest database reader, missing/changed release
-companions, and the narrow Python metadata exception below. An old source
+companions, explicit rejection of unsupported Intel source-companion builds,
+and the narrow Python metadata exception below. An old source
 package allowlist test initially rejected `LICENSE`; it now explicitly permits
 that file and checks it against the unchanged root license.
 
@@ -86,9 +87,9 @@ notices still stop packaging. No Python binary or dependency version was changed
 Directory: `build/pkg/output/` in this worktree.
 
 - `SquirrelOpsHome-2.1.1.pkg`, SHA-256
-  `eec208ad55303cd3d2eb99ed53f6428c4543ba56c318b78d77bad507778be1d7`.
+  `709b45cbbfffa12e952a374d7f0417dddd0d0733065e7aa016750d656be4806b`.
 - `THIRD-PARTY-SOURCES.tar`, 623,820,800 bytes, SHA-256
-  `e49a09d6be56ac8ea694dfa6849155f802330997bfd9467c3df4e1518f10074a`.
+  `ae6a1754f9c383a6e5502d7df922c3fbd9a28a30e770850b9c6df362cbb11b64`.
 - `THIRD-PARTY-INVENTORY.json` and `THIRD-PARTY-NOTICES.txt`.
   There are 348 retained notice entries; the installed notice file is
   2,861,176 bytes. The large source archive is not installed.
@@ -104,8 +105,13 @@ bash scripts/build-pkg.sh
 
 Private local evidence: `build/sensor-tests.log`, `build/pyright.log`,
 `build/local-package.log`, `build/artifact-verification.json`, and the extracted
-payload under `build/pkg-inspection-complete/`. No generated binaries, private
+payload under `build/pkg-inspection-arm64-guard/`. No generated binaries, private
 logs or source archives belong in the Git commit.
+
+The final local `pkgbuild` printed `write: Permission denied` diagnostics while
+returning success. Package expansion, the extracted app signature and payload
+checks passed. This local result does not replace the protected release build's
+strict signing, notarization and artifact verification gates.
 
 ## Remaining release gates
 

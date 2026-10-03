@@ -430,6 +430,7 @@ chmod +x "$SENSOR_INSTALL/uninstall.sh"
 
 info "Preparing complete third-party source and notice companions..."
 python3 "$SCRIPT_DIR/prepare-third-party.py" \
+    --architecture "$BUILD_ARCH" \
     --python "$SENSOR_INSTALL/python" \
     --guest "$STAGED_APP_BUNDLE/Contents/Resources/DeceptionGuest" \
     --cache "$REPO_ROOT/build/third-party-cache" \

@@ -347,6 +347,7 @@ def prepare(python_root: Path, guest: Path, cache: Path, output: Path, installed
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--architecture", choices=("arm64",), required=True)
     for name in ("python", "guest", "cache", "output", "installed-notices"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
