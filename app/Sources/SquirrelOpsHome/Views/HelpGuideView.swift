@@ -39,7 +39,7 @@ enum HelpGuideContent {
                 ),
                 .init(
                     "Confirm monitoring",
-                    "A green Monitoring Active status means the app has a live authenticated connection. After an upgrade, Build Local Sensor keeps checking the local sensor for up to 20 minutes while persisted decoys are restored. It shows exact elapsed time and connects automatically when the sensor is ready. Initial learning may take time while SquirrelOps builds a baseline.",
+                    "A green Monitoring Active status means the app has a live authenticated connection. After an upgrade, Build Local Sensor keeps checking the local sensor for up to 20 minutes while persisted decoys are restored. It shows exact elapsed time and connects automatically when the sensor is ready. Automatic behavioral-baseline collection is not active in this version.",
                     bullets: [
                         "Open the menu bar squirrel at any time to see connection and unread-alert status.",
                         "If the sensor is disconnected, open the dashboard for the specific repair message.",
@@ -82,7 +82,7 @@ enum HelpGuideContent {
                     "Set trust deliberately",
                     "Approve devices you recognize, reject identities that should not be present, and leave uncertain devices Unknown while investigating.",
                     bullets: [
-                        "A changed MAC address or fingerprint can produce a new review item.",
+                        "Fingerprint and MAC-change events do not automatically create alert-feed rows in this version.",
                         "Custom names and notes help preserve your reasoning.",
                         "Offline means not recently observed; it does not delete the device history.",
                     ]
@@ -126,7 +126,7 @@ enum HelpGuideContent {
             blocks: [
                 .init(
                     "Choose a decoy",
-                    "Host listeners expose a selected service on the sensor Mac. Fake hosts create a separate virtual network address with one or more service decoys. Use names that resemble your environment without copying credentials or sensitive production data."
+                    "Classic host listeners emulate selected HTTP routes: a file directory, a dev-server page, or Home Assistant login and error responses. Mimics replay observed service samples on a shared virtual IP. Studio Build Mac provides real SSH and SMB in a disposable Linux guest with macOS-shaped content; its model and MCP APIs return synthetic results. Use names that resemble your environment without copying real credentials or sensitive production data."
                 ),
                 .init(
                     "Understand the counts",
@@ -138,7 +138,7 @@ enum HelpGuideContent {
                 ),
                 .init(
                     "Respond to a trip",
-                    "A decoy connection is suspicious because ordinary users and devices should not need it. Check the source IP, time, repeated connections, credentials used, and related device history before isolating a device."
+                    "Unexpected decoy activity raises an alert, but operator tests and legitimate scanners can also trigger it. Automatic printer discovery is retained without an intrusion alert. Check the source IP, time, repeated interactions, recognized credentials, and related device history before isolating a device. SSH and SMB relays record connections, not login success or file operations."
                 ),
             ]
         ),
@@ -146,15 +146,15 @@ enum HelpGuideContent {
             id: "scouts",
             title: "Squirrel Scouts",
             symbol: "binoculars",
-            summary: "Extend visibility to supported remote or segmented network locations.",
+            summary: "Probe discovered LAN services and create grouped fake hosts.",
             blocks: [
                 .init(
                     "Deploy and monitor",
-                    "Use Scouts to create the enrollment command, install it only on a system you administer, and confirm the scout becomes healthy. A scout reports observations to the paired sensor; it does not replace the sensor."
+                    "On Standard or Full, use Run Scout to refresh HTTP samples, TLS metadata, and protocol banners from discovered devices. Fill Capacity creates one fake host per eligible source, up to the profile ceiling. Services copied from the same source share a virtual IP and hostname. Scouts runs inside the sensor; there is no remote scout enrollment or agent deployment."
                 ),
                 .init(
                     "Troubleshoot",
-                    "Confirm the scout can reach the sensor, its enrollment has not expired, system time is correct, and the service is running. Revoke a scout that is retired or no longer trusted."
+                    "Check the selected LAN, profile, collected service profiles, privileged-helper availability, and free virtual addresses. Reserve the virtual-IP pool outside DHCP. If every eligible source already has a fake host, Fill Capacity can return zero."
                 ),
             ]
         ),
@@ -199,7 +199,7 @@ enum HelpGuideContent {
                 ),
                 .init(
                     "Data sent to the provider",
-                    "Device classification can send the MAC vendor prefix, sanitized DNS and mDNS names, open port numbers, detected service names, DHCP option codes, mDNS service types, and available UPnP name, manufacturer, model, and server metadata. It does not send fingerprint hashes, connection destinations, device IP addresses, full MAC addresses, packet contents, alert history, or credentials. Decoy naming sends a bounded, sanitized sample of existing hostnames. With a cloud provider, review its retention terms before enabling these features."
+                    "Device classification can send the MAC vendor prefix, sanitized DNS and mDNS names, open port numbers, detected service names, mDNS service types, and available UPnP metadata. DHCP option codes are supported if supplied, but this scanner does not collect them. It does not send fingerprint hashes, connection destinations, device IP addresses, full MAC addresses, packet contents, alert history, or credentials. Decoy naming sends a bounded, sanitized hostname sample. With a cloud provider, review its retention terms before enabling these features."
                 ),
             ]
         ),
@@ -259,7 +259,7 @@ enum HelpGuideContent {
                 ),
                 .init(
                     "Explicit external services",
-                    "Slack, OpenRouter, Fireworks.ai, a custom remote AI provider, and externally hosted Home Assistant can transmit data beyond the local sensor. AI decoy naming can include a sanitized sample of observed hostnames. These services are optional and should be configured only with endpoints you trust."
+                    "Slack, cloud or custom remote AI, manually configured APNs relay delivery, and requested GitHub update checks can send data outside your network. AI naming can include a sanitized hostname sample. Home Assistant enrichment is restricted to validated private-LAN destinations. Configure optional services only with endpoints you trust."
                 ),
                 .init(
                     "Safe response",

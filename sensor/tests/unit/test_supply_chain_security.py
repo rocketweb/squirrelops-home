@@ -2186,10 +2186,13 @@ def test_macos_support_docs_distinguish_release_support_from_build_coverage() ->
         assert "Apple Silicon or Intel" not in normalized, relative_path
         assert "Apple silicon and Intel" not in normalized, relative_path
 
-    # Linux x86_64 requirements and dual-architecture guest build coverage
-    # must not be removed when correcting the macOS support statement.
+    # Linux development targets and dual-architecture guest build coverage
+    # remain distinct from published macOS support. Linux publication is on hold.
     guide = (REPO_ROOT / "docs/USER_GUIDE.md").read_text(encoding="utf-8")
-    assert "Linux ARM64 (Raspberry Pi 3/4/5) or x86_64 (NAS, general Linux)" in guide
+    linux_requirements = guide.split("### Docker on Linux/NAS", 1)[1].split("### ", 1)[0]
+    assert "ARM64" in linux_requirements and "x86_64" in linux_requirements
+    assert "development targets" in linux_requirements
+    assert "publication on hold" in linux_requirements
     for relative_path in (
         "docs/DEVELOPMENT.md",
         "docs/RELEASE_SECURITY.md",

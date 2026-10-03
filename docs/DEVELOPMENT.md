@@ -89,7 +89,11 @@ cd sensor
 uv run python -m squirrelops_home_sensor --port 8443
 ```
 
-The sensor uses the config at `sensor/data/config.yaml` and stores its SQLite database in `sensor/data/`.
+From `sensor/`, the default run loads built-in defaults, then any saved runtime
+settings in `sensor/data/config.yaml`, with environment overrides applied last.
+Its default SQLite data directory is `sensor/data/`. An explicit `--config`
+file supplies the base configuration and resolves a relative data directory
+beside that file.
 
 Useful flags:
 
@@ -107,13 +111,17 @@ bash build-app.sh
 open "$(bash build-app.sh --print-bundle-path)"
 ```
 
-> **Note:** Debug builds skip `SMAppService` helper registration (requires code signing). Use `dev-install-helper.sh` instead — see [First-Time Setup](#1-install-the-privileged-helper).
+> **Note:** Building the app does not install the privileged helper. Use `dev-install-helper.sh` for root-level RPC testing; full packaged sensor access requires the service account and installer setup described in [First-Time Setup](#1-install-the-privileged-helper).
+
+Build the ARM64 guest first to enable Studio Build Mac; see
+[Studio Mini guest](#studio-mini-guest). Debug app builds without the guest
+report Studio as unavailable. Release app builds require the validated bundle.
 
 ### Running Tests
 
 ```bash
 cd sensor
-uv run pytest tests/ -q    # More than 2,100 tests
+uv run pytest tests/ -q
 ```
 
 Run a specific test file or class:
@@ -180,14 +188,14 @@ launchd. It exposes two independent local channels:
 | Signed macOS app | `com.squirrelops.helper.enrollment` XPC Mach service | Release app identifier, Team ID, Apple anchor, and console UID; exact root-installed app CDHash for explicit local tests | Forward one bounded CSR to the local sensor |
 
 ```
-┌──────────────────────┐         JSON-RPC / Unix socket
-│  Python Sensor       │ ─────────────────────────────────►  ┌──────────────────┐
-│  (runs as _squirrelops)│  /var/run/squirrelops-helper.sock │  SquirrelOpsHelper│
-│                      │ ◄─────────────────────────────────  │  (runs as root)  │
-└──────────────────────┘                                     └──────────────────┘
+┌────────────────────────┐         JSON-RPC / Unix socket         ┌────────────────────────┐
+│  Python Sensor         │───────────────────────────────────────►│  SquirrelOpsHelper     │
+│  (runs as _squirrelops)│    /var/run/squirrelops-helper.sock    │  (runs as root)        │
+│                        │◄───────────────────────────────────────│                        │
+└────────────────────────┘                                        └────────────────────────┘
 ```
 
-**RPC methods:**
+**Selected network RPC methods:**
 
 | Method | Purpose |
 |--------|---------|

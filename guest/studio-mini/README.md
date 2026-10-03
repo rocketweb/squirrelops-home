@@ -1,7 +1,7 @@
 # Studio Mini guest
 
 This directory builds the architecture-specific, memory-only guest used by the
-2.1 deep decoy. The guest contains real OpenSSH and Samba services and relays
+2.1 deep decoy. This Linux guest contains real OpenSSH and Samba services and relays
 only those services over Virtio sockets. It has no virtual NIC, persistent
 disk, host directory share, clipboard, or outbound path.
 

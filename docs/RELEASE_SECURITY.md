@@ -329,9 +329,10 @@ the attested image digest, and produces `sensor-release-metadata.json` and
 Only that workflow promotes the exact OCI archive to the final semver GHCR
 tag immediately before Sensor publication. It verifies the digest, amd64/arm64
 manifests and provenance before sealing the immutable release. It never
-publishes `latest`, major/minor or mutable version tags, and refuses to
+publishes `latest` or major/minor aliases, and refuses to
 overwrite an existing release or versioned container tag. There is no public
-`release-build-*` staging reference.
+`release-build-*` staging reference. Semver container tags are not inherently
+immutable; the installer pins the verified digest.
 
 ## Post-release website manifest
 

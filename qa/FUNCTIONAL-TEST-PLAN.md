@@ -1,5 +1,13 @@
 # SquirrelOps Home: Functional Test Plan
 
+This is a historical plan for the branch and installation below. Its expected
+defects, endpoint inventory, and test counts describe that snapshot, not current
+Home 2.1 behavior or completed acceptance. In particular, current PF publication
+uses tagged redirects and UID-guarded pass rules instead of unconditional
+`rdr pass`; standalone baseline tests do not establish automatic collection.
+For current checks and runtime limits, see the
+[October 2 documentation claim audit](../docs/testing/2026-10-02-documentation-claims.md).
+
 Branch: `bugfix/decoy-status-defects` (off `origin/main` @ acf1cf4)
 Scope: full product, meaning sensor, app, and live install.
 Policy: **findings are reported, not fixed.** Failures go to `qa/FINDINGS.md`.
