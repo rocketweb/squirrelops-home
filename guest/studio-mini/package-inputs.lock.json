@@ -1,0 +1,958 @@
+{
+  "schema_version": 1,
+  "base_image": "alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b",
+  "architectures": {
+    "arm64": {
+      "apk_arch": "aarch64",
+      "archive": {
+        "name": "studio-mini-packages-arm64.tar",
+        "sha256": "7fab57984d555dbffdf9fe10c28f3e3016185e5470f8cf4e6adb3854fecf3ab0",
+        "size": 71874560,
+        "url": "https://github.com/rocketweb/squirrelops-home/releases/download/guest-inputs-20261003-v1/studio-mini-packages-arm64.tar"
+      },
+      "packages": [
+        {
+          "name": "acl-2.3.2-r1.670471d4.apk",
+          "sha256": "03a395fe9e15f6b172a03b76f6e4ed3962f128dce9d553c1cd7055a56d168318",
+          "size": 28459
+        },
+        {
+          "name": "acl-libs-2.3.2-r1.3f647a9e.apk",
+          "sha256": "5bfce1fc46a3625268a7a60c10b5680aa846534d98856a108e692824a1f1b710",
+          "size": 15295
+        },
+        {
+          "name": "attr-2.5.2-r2.46002bf8.apk",
+          "sha256": "54372a0e409593506ce0c237fd606f0cb0527abbfcee48adabf7e9db5292276e",
+          "size": 19090
+        },
+        {
+          "name": "avahi-libs-0.9_rc4-r0.09f11573.apk",
+          "sha256": "bf6c5092d9a90b2e5c22f007d888e8e786de73dcb9a787361d7a04afb8f8ecf6",
+          "size": 42597
+        },
+        {
+          "name": "brotli-libs-1.2.0-r1.8ead4b39.apk",
+          "sha256": "e0e7a7892f28326a9f18e09607b1aea72baedda470bc4e3d2b11262b9ae5dda3",
+          "size": 424924
+        },
+        {
+          "name": "c-ares-1.34.8-r0.a7111669.apk",
+          "sha256": "689603d300dc56f0b99e313506e4d7b3a3ffb87cec536324f8a306bc218afe67",
+          "size": 108771
+        },
+        {
+          "name": "cpio-2.15-r0.508288e8.apk",
+          "sha256": "4703295a22b5028adf50398ca320ec6adc125c24acb49b04d02a7dc4ecdc776d",
+          "size": 66284
+        },
+        {
+          "name": "cryptsetup-libs-2.8.6-r0.b26ee161.apk",
+          "sha256": "0246bf3cca3c04d3489f67375712429954d2384664092c3dd97054a4ed56025f",
+          "size": 222004
+        },
+        {
+          "name": "cups-libs-2.4.19-r0.07a14e8b.apk",
+          "sha256": "9dda94ea64cb61b02c69789c42b0e402d886679957489b31ed9421afdc887323",
+          "size": 240123
+        },
+        {
+          "name": "dbus-libs-1.16.2-r2.b9cca17f.apk",
+          "sha256": "b09b297d622377f870da5f162563b2bb4926dda17dfb2c7b1c84c37b05e8e295",
+          "size": 130817
+        },
+        {
+          "name": "device-mapper-libs-2.03.35-r3.dc714286.apk",
+          "sha256": "d55ba6a69b7ed83d4db27feac077e0c5f8b40efa7d256f92abcb68a232c581be",
+          "size": 133587
+        },
+        {
+          "name": "file-5.47-r2.31800767.apk",
+          "sha256": "fb1ccc520c2e80cb1d3b739500826cedf4b35b8a43ff78aa683c6f6bd48dd3e5",
+          "size": 10233
+        },
+        {
+          "name": "gdbm-1.26-r0.5d83634a.apk",
+          "sha256": "bad50eb26533e2f58e014fbcd3c1744f2fdb79954af6e3c188ccd059251c7790",
+          "size": 33830
+        },
+        {
+          "name": "git-2.54.0-r0.dbaccdb4.apk",
+          "sha256": "ea41e2f837f1f6a8b66e72a5ece0fc75cca44f76f49cf5500d467fc5627d0ab7",
+          "size": 3594478
+        },
+        {
+          "name": "git-init-template-2.54.0-r0.a4617cb4.apk",
+          "sha256": "bad163db30bfd90c99f86fac54e7ac082040024d214c0e1d0c7d98a4f5a7edb5",
+          "size": 10812
+        },
+        {
+          "name": "git-zsh-completion-5.9-r7.c8650d3b.apk",
+          "sha256": "7b6c77eaa0bdc6ad77bbcd86c5080b9f9dd0e12d3c2511ff65d3a43f145aebb5",
+          "size": 102706
+        },
+        {
+          "name": "gmp-6.3.0-r4.0c9cebf5.apk",
+          "sha256": "4dab6e86b850fe1b5bc0cf2fac17efa4d7f648bea44f3d9019694cc1e1cb12b7",
+          "size": 221014
+        },
+        {
+          "name": "gnutls-3.8.13-r0.f8c0fdb6.apk",
+          "sha256": "8678c104d4c08e7e41b5fcacdfdbffa208066bcb1c3f7f8b620e0a6bd22b3e40",
+          "size": 901801
+        },
+        {
+          "name": "grep-3.12-r0.1a381a3d.apk",
+          "sha256": "6ae66e3dd756ccf136e3180ade3c647b91a6f300dc5fddbd02d769c0026c1e43",
+          "size": 89281
+        },
+        {
+          "name": "icu-data-en-78.1-r0.ecb6a27f.apk",
+          "sha256": "3fa1dfb91a081f73c32a46f6ec054196caa37c9fd9569c433ddf6b29415dcf13",
+          "size": 1025819
+        },
+        {
+          "name": "icu-libs-78.1-r0.6142e665.apk",
+          "sha256": "2393882dcf1e3f5be98696665c3468dd0d2a85cd568d50abd232729863df9738",
+          "size": 1957437
+        },
+        {
+          "name": "iproute2-7.0.0-r0.906db1c9.apk",
+          "sha256": "fbcfeece6ecf0d8273e946dcfbafc22c5a86982273f6e7763db06a52a329786b",
+          "size": 197987
+        },
+        {
+          "name": "iproute2-minimal-7.0.0-r0.d4bed69a.apk",
+          "sha256": "5ef23a7fd11df32dae739de6f3faca463711809eeab0391c38ad268636ee0b70",
+          "size": 284024
+        },
+        {
+          "name": "iproute2-ss-7.0.0-r0.e28d917e.apk",
+          "sha256": "aedabd90cdd393d3c90c3dd71d60d25722ab229e6b6e3e112c820f20c9b778dc",
+          "size": 48306
+        },
+        {
+          "name": "iproute2-tc-7.0.0-r0.ed2116be.apk",
+          "sha256": "748f12e0d0f13503f113e36fe4f8e287541c5d51d8c9c8fae1e2dcf31a7db903",
+          "size": 264680
+        },
+        {
+          "name": "jansson-2.15.0-r0.f3994155.apk",
+          "sha256": "a13822f5ca1772cced4bb7d3d178ec5dee770d8accba5b4816b2ddc413e6f055",
+          "size": 49825
+        },
+        {
+          "name": "jq-1.8.2-r0.fa455db4.apk",
+          "sha256": "1c146410d19ea643e81414352bc259ef9d2bf75d8c7208334614cca124a13f43",
+          "size": 151467
+        },
+        {
+          "name": "json-c-0.18-r1.8334fa50.apk",
+          "sha256": "2b9ac9f748f4c7b8a19edd51f3ae4cdf4275541763058381627f55a8bbf71ae6",
+          "size": 28537
+        },
+        {
+          "name": "kmod-34.2-r1.fa94fd76.apk",
+          "sha256": "f4191085d4449cebf94f5df835a68621dfe8e65ffe035a7c29c76f363d855011",
+          "size": 64633
+        },
+        {
+          "name": "kmod-libs-34.2-r1.4c860169.apk",
+          "sha256": "b6e330d7d5d207e1ebc4be0b4dec6e0f2f088f33303a6b45718c0119e60f289b",
+          "size": 39882
+        },
+        {
+          "name": "kmod-zsh-completion-34.2-r1.54a16d30.apk",
+          "sha256": "c893185f0b8d91154f25222475f60b43d019ceec9736e40a4978f9781b156a61",
+          "size": 2300
+        },
+        {
+          "name": "ldb-4.23.8-r0.7bbf1821.apk",
+          "sha256": "9c6a969bb4231f1dce1085c1f5c5595ea2e9b904c666d8e1295ca37177655e2d",
+          "size": 177922
+        },
+        {
+          "name": "lddtree-1.27-r0.62f98d18.apk",
+          "sha256": "c587cd8b1e365aa90fd7d6ca3a6821e4d27fe35004ca966c45b4750ff4362419",
+          "size": 5430
+        },
+        {
+          "name": "libattr-2.5.2-r2.9a119bd6.apk",
+          "sha256": "81d6c5b5eca04c2a1499407b4fbaf94bfb2ddb6c535ff4260dee862cf9803b2a",
+          "size": 8733
+        },
+        {
+          "name": "libauth-samba-4.23.8-r0.8609fec3.apk",
+          "sha256": "9d7b7bf0544c8b4a29d98df3cef52a59ffe8143496ebad6fe639fd6c0099f4a1",
+          "size": 64176
+        },
+        {
+          "name": "libblkid-2.42.3-r1.bf4a5022.apk",
+          "sha256": "9d0f24976c575c53c12526b6e078edf34c980c153bc8e5f1c1053cbece5b8cfa",
+          "size": 97097
+        },
+        {
+          "name": "libcap2-2.78-r0.0fb65b85.apk",
+          "sha256": "e13be383f18b1fcfe895361d816ff7cfd2b3c265e442bb371c4a234b29b0e4a9",
+          "size": 23993
+        },
+        {
+          "name": "libcurl-8.22.0-r0.c24a7708.apk",
+          "sha256": "cbec830a63888be570c06d20d87c85649aff1db38c3b4dcc17884b14471e39e3",
+          "size": 358024
+        },
+        {
+          "name": "libeconf-0.8.3-r0.11aabc31.apk",
+          "sha256": "cf0899d49ded0a6891e3cdf1b37887f2ecd77293afe1d8f3cb8937763c83f183",
+          "size": 27259
+        },
+        {
+          "name": "libelf-0.195-r0.4428eae4.apk",
+          "sha256": "1c108314af454a885ac0b053201db57027470c4f2309412c016897e2a2bf5d0e",
+          "size": 44727
+        },
+        {
+          "name": "libexpat-2.8.5-r0.82eff42b.apk",
+          "sha256": "568a12a4889a00711d1c80c197a5540ee1cdec26c1c59da38f8342ad69e7eff9",
+          "size": 60926
+        },
+        {
+          "name": "libffi-3.5.2-r1.baaa3a1f.apk",
+          "sha256": "9a67280b0c7c62db658c2d4d32ed1199903bef859c32dd4245e1a7e35c89ab4b",
+          "size": 17799
+        },
+        {
+          "name": "libgcc-15.2.0-r5.24b50bfb.apk",
+          "sha256": "369aaa6e9d099a737bad6dd3e6c2fe7bb1547ca26d22b94ee0411228f709b403",
+          "size": 66323
+        },
+        {
+          "name": "libidn2-2.3.8-r0.cef8a58a.apk",
+          "sha256": "d02ffda4510652f89c5fb89cd2e7ff721afb0c74e7d75476ad60bebe7ac0ae20",
+          "size": 105430
+        },
+        {
+          "name": "libintl-1.0-r0.0487ea56.apk",
+          "sha256": "d106a13e3e68103d3a8217406aae6186289baf352d0f3d10fc21938d2dd8adb1",
+          "size": 41483
+        },
+        {
+          "name": "libldap-2.6.15-r0.8c727744.apk",
+          "sha256": "2cb81082866cc8571a89fd9c29c8d3cf0bde83d604275492a24bb9563c9466bf",
+          "size": 167579
+        },
+        {
+          "name": "libmagic-5.47-r2.767c7ae2.apk",
+          "sha256": "bcd233f28a6f1c07cd789c47df2234eb35d2bac295aa223ea2ccef17d75ce0f0",
+          "size": 527434
+        },
+        {
+          "name": "libmnl-1.0.5-r2.8442af39.apk",
+          "sha256": "0ca382c70f78affef3a4a28016aab25ad8c3ccf1bcdad59f3968d4536a7b2478",
+          "size": 9466
+        },
+        {
+          "name": "libncursesw-6.6_p20260516-r0.c0d979fa.apk",
+          "sha256": "51a7aa4b3ec40b144d0801c0544e0a9f62e2a41d04b6067bb5e95786040741c6",
+          "size": 161906
+        },
+        {
+          "name": "libpsl-0.21.5-r3.1fc94b0c.apk",
+          "sha256": "b31e91371425d5f80c1db5cba2a849956b65c802add0b49de844b2ca961aa8da",
+          "size": 55302
+        },
+        {
+          "name": "libsasl-2.1.28-r9.c9ff992b.apk",
+          "sha256": "0be9020fdb51705c6f393bad6e533bbcd70f68c148ab0b88d35ef39a4ce8959f",
+          "size": 77509
+        },
+        {
+          "name": "libstdc++-15.2.0-r5.e9659a34.apk",
+          "sha256": "2302e766d4e4926038ec166ecb85837ee884576115236ddb565e3a5fca4a11d7",
+          "size": 908984
+        },
+        {
+          "name": "libtasn1-4.21.0-r0.411c59ab.apk",
+          "sha256": "c9fcd102c576a05675ebf4d61f147e5209fd4518e8627f229032240afaf7624b",
+          "size": 34161
+        },
+        {
+          "name": "libunistring-1.4.2-r0.89076557.apk",
+          "sha256": "58abfcbce2459071c505771a572a79953d6043d72b643ed0d5285ca39cdaf85c",
+          "size": 746169
+        },
+        {
+          "name": "liburing-2.14-r0.8d7a4251.apk",
+          "sha256": "388e70b040b6ec26bd8d171e514ac68626b00a1871a0134c53de22ed059c2627",
+          "size": 12493
+        },
+        {
+          "name": "libuuid-2.42.3-r1.2ca32642.apk",
+          "sha256": "9ce20c7ffe2ccaa7c321893c10564abbca13c3f2edb82f60a35f1f68e004f86c",
+          "size": 15385
+        },
+        {
+          "name": "libwbclient-4.23.8-r0.348836c0.apk",
+          "sha256": "a78ee9af2f74a9a1c177c2482669a135d5140236d77a173a84cdfe42ddb12fe2",
+          "size": 30286
+        },
+        {
+          "name": "libxtables-1.8.13-r0.e9b44d92.apk",
+          "sha256": "7535f18d9c7229178bc5e3809e5fea171033e33dfa054d88846512e1f25eefa8",
+          "size": 26331
+        },
+        {
+          "name": "linux-pam-1.7.1-r2.ef726f18.apk",
+          "sha256": "bc60d95c8a0fd16fbd72d41bc1e40510b9bd085f088a63ca1ad28778b0712efc",
+          "size": 274955
+        },
+        {
+          "name": "linux-virt-6.18.54-r0.1b027eed.apk",
+          "sha256": "9a4a6fa042b60b70f453dded99762810516b35793c64d776d75986b0b110b6e0",
+          "size": 41693537
+        },
+        {
+          "name": "lmdb-0.9.35-r0.22c793af.apk",
+          "sha256": "8204311bb80f6e312b9254e2538ae0c05a0b1740baaa060c00da550742fcd1e9",
+          "size": 49775
+        },
+        {
+          "name": "mdev-conf-4.10-r0.ff9e1ae6.apk",
+          "sha256": "9444c6e9def57f134ee353f3bf6f539175bbab44719765a5cd4fbedc36ca0529",
+          "size": 5403
+        },
+        {
+          "name": "mkinitfs-3.14.1-r0.1ef96112.apk",
+          "sha256": "e931257422b0adff0bdbb3e22b3ff3521fb56b42cfd96c3f362d0357ed8b9d79",
+          "size": 37912
+        },
+        {
+          "name": "ncurses-terminfo-base-6.6_p20260516-r0.fcccc512.apk",
+          "sha256": "e0c546b9461bdce206a90bc720cb69aa4628b5a5b8d908c3e5084e00f28f6a9d",
+          "size": 22150
+        },
+        {
+          "name": "nettle-3.10.2-r0.3954e440.apk",
+          "sha256": "573c54ecb55b157d9cd5323eb3a9bb9d87b375ee20392a6a9d16c0ba098af9e5",
+          "size": 356329
+        },
+        {
+          "name": "nghttp2-libs-1.70.0-r0.a1389f5e.apk",
+          "sha256": "7ef451f4dcdc065aa872c2f3c78b9d9bb4348caa5bcc70dee0c9e1fcf8e4c1fd",
+          "size": 63644
+        },
+        {
+          "name": "oniguruma-6.9.10-r0.a82fa1e1.apk",
+          "sha256": "df2b17f23b16edb362db6cc4750c4e51afe91573616c2c123365b94fdec29036",
+          "size": 186461
+        },
+        {
+          "name": "openssh-keygen-10.3_p1-r1.86d6aca0.apk",
+          "sha256": "e7214cdc3bfa4f10ea518de24dbc101e2462688473175654945ad2e7aebd52e0",
+          "size": 166555
+        },
+        {
+          "name": "openssh-server-10.3_p1-r1.9011f870.apk",
+          "sha256": "c1abf2e644d92fad2b4e08f4384104f2c1ef82235e0cd516f7872652bdc1718d",
+          "size": 851106
+        },
+        {
+          "name": "openssh-server-common-10.3_p1-r1.74f2397a.apk",
+          "sha256": "3e30af7ab76ea13d8a084e4236dfe7abf8ac52f7a149785ef0d7b5587074700b",
+          "size": 3171
+        },
+        {
+          "name": "openssh-sftp-server-10.3_p1-r1.88eb74f8.apk",
+          "sha256": "5f84d22ed575520478a5337fb271aaebb4e131a52cf539eee1bb2c70555fe37f",
+          "size": 61788
+        },
+        {
+          "name": "p11-kit-0.26.2-r0.6ed520f8.apk",
+          "sha256": "0ad7cbbc011491b604b4d8fb8aafb6ce2a271c19eb8b785dd51f1704c61c58a5",
+          "size": 361410
+        },
+        {
+          "name": "p11-kit-zsh-completion-0.26.2-r0.09148212.apk",
+          "sha256": "38256c2f3d256a7d6843d3e3b7d3ebd0c15262e8becd2aae87e683e103f517c0",
+          "size": 3109
+        },
+        {
+          "name": "pcre2-10.49-r0.d1ee539b.apk",
+          "sha256": "03efd0b29f7f38deb10a9ccb54f56e19683eb7ac27eb1f347e6dbd2e59ea000d",
+          "size": 320291
+        },
+        {
+          "name": "popt-1.19-r4.cc905387.apk",
+          "sha256": "5eb2037c453c870f31a1db4f1235f8ac2a27f8d401421cb5662f2ff6f1bea94b",
+          "size": 22013
+        },
+        {
+          "name": "readline-8.3.3-r1.18fbd6c6.apk",
+          "sha256": "9f0ae0923c02b0d6aba62e9173542b65396ba3f0efefcbf087ea32f1120e7b34",
+          "size": 129706
+        },
+        {
+          "name": "samba-client-libs-4.23.8-r0.a950489a.apk",
+          "sha256": "1abb676bb4fbfd3ba483954e03e2de164039549938be377d49fdd72be3de6a64",
+          "size": 394442
+        },
+        {
+          "name": "samba-common-4.23.8-r0.58d2e34a.apk",
+          "sha256": "27daad3c29ae3970a1ff7dee6e87c2788fef2ad9c143866dea653845413e14a0",
+          "size": 5485
+        },
+        {
+          "name": "samba-common-server-libs-4.23.8-r0.c1a353b7.apk",
+          "sha256": "b0d9c3ac5369a2caccc508f38a3c641f97b5dbd622febf79320256dee8eace6f",
+          "size": 1038170
+        },
+        {
+          "name": "samba-common-tools-4.23.8-r0.96b29747.apk",
+          "sha256": "ac194e29094735cfa8248a5aae9f0e56ec6ad40792a5d299599ddb3663a64b65",
+          "size": 488301
+        },
+        {
+          "name": "samba-libs-4.23.8-r0.5181acff.apk",
+          "sha256": "9de04d2faf49e8b6d5dc50bf9ebcda7ae5bb3353a59a25096db31707418a3df9",
+          "size": 5982329
+        },
+        {
+          "name": "samba-server-4.23.8-r0.c7d8ca07.apk",
+          "sha256": "d49b45d9a78b98c9686e3e0f856cf7135b0f567c5ed98189d82acb0090113ff3",
+          "size": 1782466
+        },
+        {
+          "name": "samba-util-libs-4.23.8-r0.bebcd63e.apk",
+          "sha256": "436a61b858a88d56168fe5d0126e77f6035f402f23593f9e0730e620841e051d",
+          "size": 374519
+        },
+        {
+          "name": "skalibs-libs-2.15.0.0-r0.63a2b8e1.apk",
+          "sha256": "7ea58fb512067402b519079fcce8a48381eb2b9c690341c4a017aa15f719c198",
+          "size": 91460
+        },
+        {
+          "name": "socat-1.8.1.3-r0.7b51a844.apk",
+          "sha256": "120356c2bfac5a960b8b79a2ac6c387cca73dd85af4887365523cd92a2db17f5",
+          "size": 221953
+        },
+        {
+          "name": "talloc-2.4.4-r1.d1c6d9f3.apk",
+          "sha256": "d24cac6cb4f15f89b2557994d841b9b6e8633186d5a05be97eae896265c0b537",
+          "size": 19290
+        },
+        {
+          "name": "tar-1.35-r5.e7e1b0ea.apk",
+          "sha256": "4172426271a516475f63be96208f77af7bd77966e7bffc2d0acb344ccf0a745d",
+          "size": 209555
+        },
+        {
+          "name": "tdb-libs-1.4.15-r1.068c7d76.apk",
+          "sha256": "60104077fc72ad2844e0e69398343194645449611b87c15eb01c4f0be0fd44e6",
+          "size": 43795
+        },
+        {
+          "name": "tevent-0.17.1-r1.e598f6fa.apk",
+          "sha256": "55fdfdb0a76c5978d32fb79331a8287f49de905f8363f571dfec6e84b4b7426f",
+          "size": 33923
+        },
+        {
+          "name": "utmps-libs-0.1.3.3-r0.9eedd2f5.apk",
+          "sha256": "d6487b6f260728969191314f6706d4cc62527370e757ec3ac6f7fee8ed38cf88",
+          "size": 5758
+        },
+        {
+          "name": "xz-libs-5.8.4-r0.15e7acfa.apk",
+          "sha256": "9be375832e747afe14f98e400e8b55d8f6fde25e41663090c81600628daab093",
+          "size": 119423
+        },
+        {
+          "name": "zsh-5.9-r7.18c97348.apk",
+          "sha256": "e76097433573a22fe9978605ca8867ac0b9fd125c7a53ddb6ce98b5cd7dd4003",
+          "size": 1629335
+        },
+        {
+          "name": "zstd-libs-1.5.7-r2.52b18513.apk",
+          "sha256": "2bb5136c89f5b0bbe1554c8915a3b520d5aa63ae2a51d4d821eb81698db5a818",
+          "size": 365383
+        }
+      ]
+    },
+    "x86_64": {
+      "apk_arch": "x86_64",
+      "archive": {
+        "name": "studio-mini-packages-x86_64.tar",
+        "sha256": "35a54b5f9e99f6069ac60f98c83858110c2edae0f14cf4ef16e9fa30a602fe44",
+        "size": 74741760,
+        "url": "https://github.com/rocketweb/squirrelops-home/releases/download/guest-inputs-20261003-v1/studio-mini-packages-x86_64.tar"
+      },
+      "packages": [
+        {
+          "name": "acl-2.3.2-r1.4472d98a.apk",
+          "sha256": "f3917964f6be2a6ed619d5f850a3f4f02158c82624e0f84a1f1537d00d8ab806",
+          "size": 24477
+        },
+        {
+          "name": "acl-libs-2.3.2-r1.8ca52f79.apk",
+          "sha256": "3f02851d586c25d97ba8b5b845615aacc209ae7eaeb6f7843eca76d85da2249d",
+          "size": 14335
+        },
+        {
+          "name": "attr-2.5.2-r2.f853e05e.apk",
+          "sha256": "69a220445c17f03c50d56810537a0c420956e8284108eed943874db1ccc5350e",
+          "size": 15322
+        },
+        {
+          "name": "avahi-libs-0.9_rc4-r0.33175964.apk",
+          "sha256": "380d59c58cfce9cb5cf342cf73947749ca77a880f729970e2f508aaa6fc2f713",
+          "size": 42321
+        },
+        {
+          "name": "brotli-libs-1.2.0-r1.82f88151.apk",
+          "sha256": "f0823de7c6d45859aeb6a7facfc5cfbf2dadb83ad4f27c794cb6ecc74e578cee",
+          "size": 429608
+        },
+        {
+          "name": "c-ares-1.34.8-r0.640a28ff.apk",
+          "sha256": "123fdeadc5ec884b897787f98d865492bf70402697b251cd1f3591a00b8c9d73",
+          "size": 110689
+        },
+        {
+          "name": "cpio-2.15-r0.7116ab32.apk",
+          "sha256": "7e48a4cfd91a4c4011ccf942fd9d3270841e384bd07b39321b232d02df83e114",
+          "size": 66168
+        },
+        {
+          "name": "cryptsetup-libs-2.8.6-r0.0b8a7e40.apk",
+          "sha256": "4e2803c61f4459800ff9b9b335138a9dfca6aeae2d2ea09d2fe97f8b06c30780",
+          "size": 224562
+        },
+        {
+          "name": "cups-libs-2.4.19-r0.c0f3e83d.apk",
+          "sha256": "c3fed5c9020cb0fdca8fe27f878c8d561ba16c941bd40e4e790df56e9b6cb342",
+          "size": 236595
+        },
+        {
+          "name": "dbus-libs-1.16.2-r2.2ccb761a.apk",
+          "sha256": "105f6ba17454c587ca9345f9deb348012d1950588a22da42120c954d396c99b6",
+          "size": 130198
+        },
+        {
+          "name": "device-mapper-libs-2.03.35-r3.1b13f674.apk",
+          "sha256": "ba6522d2e88296a44b71a7038043552256feb14564a1886030102a262843abac",
+          "size": 138220
+        },
+        {
+          "name": "file-5.47-r2.8adc8b71.apk",
+          "sha256": "4681c153c509aec126e2b9ea2c959730309b24a792d49fc8cc26fa5fa87e8fdd",
+          "size": 9722
+        },
+        {
+          "name": "gdbm-1.26-r0.619493d8.apk",
+          "sha256": "3278ccba30b241168ca4ab93c919be805411b918fdc062f06d3684d12dc33ae3",
+          "size": 31902
+        },
+        {
+          "name": "git-2.54.0-r0.2a50adaa.apk",
+          "sha256": "5a2c6782774d2e891fc2fc3fdc50c3c2743b8eb2dc7cda69b6b723af2eedcf78",
+          "size": 3546724
+        },
+        {
+          "name": "git-init-template-2.54.0-r0.5abdcc5f.apk",
+          "sha256": "e8094a47bfa6e66b7d550ae12a7a8bcab0bc4af502aacd5d2a6fc62d2c5e488d",
+          "size": 10825
+        },
+        {
+          "name": "git-zsh-completion-5.9-r7.5b853d93.apk",
+          "sha256": "90c60a9fb633f49e2f32532cf458f2825ef6406835824b52cbc0bf96a6335c57",
+          "size": 102726
+        },
+        {
+          "name": "gmp-6.3.0-r4.b9baa160.apk",
+          "sha256": "85323ef5bce8ff234736dc2d6592ea37aebdc6348a531e27430bdfe38364d256",
+          "size": 220074
+        },
+        {
+          "name": "gnutls-3.8.13-r0.e27c5b98.apk",
+          "sha256": "8d3f3612145db8cd7feb83607187a60f809f06cfa3c2e74d310d58a6b053d54c",
+          "size": 969352
+        },
+        {
+          "name": "grep-3.12-r0.04283766.apk",
+          "sha256": "a39238e2ddadc483c1512145bac8e246af940d6c828e5e14fb99a287eb139f42",
+          "size": 88064
+        },
+        {
+          "name": "icu-data-en-78.1-r0.50a254dd.apk",
+          "sha256": "7fc4d3abd06b6e3301c82e9f872e4555d4a41e2abc28087f4286aba01e5dd5a7",
+          "size": 1025836
+        },
+        {
+          "name": "icu-libs-78.1-r0.46bd3617.apk",
+          "sha256": "ef9a3035f23886cf0da5869902c736a775cf3db151ae1ab7f1406e2a0f84bd64",
+          "size": 1949839
+        },
+        {
+          "name": "iproute2-7.0.0-r0.2d65c8eb.apk",
+          "sha256": "4c74d82ca030ed30aa43f993d0353a1bba6e9f57f461ad90aa65ea355440673f",
+          "size": 183592
+        },
+        {
+          "name": "iproute2-minimal-7.0.0-r0.31a450a3.apk",
+          "sha256": "7a40bb386c19e7945e09683402adf2e30b15ce0003267376aa758280ce96dc27",
+          "size": 277788
+        },
+        {
+          "name": "iproute2-ss-7.0.0-r0.701e89a9.apk",
+          "sha256": "524ce46df07ed94d626e78a582934cfdaf40a966869bd4aeaea59b8147a9df7e",
+          "size": 47222
+        },
+        {
+          "name": "iproute2-tc-7.0.0-r0.cb39ce0c.apk",
+          "sha256": "986bd70ac15aee6f230d08e60b5df9b86acf30e65ee8d4adf7fc08799ee18741",
+          "size": 260920
+        },
+        {
+          "name": "jansson-2.15.0-r0.b2dbed63.apk",
+          "sha256": "7681b41486e1f2b2efce11875c839533464ae8857d30fc49130f0039c6585fdb",
+          "size": 48950
+        },
+        {
+          "name": "jq-1.8.2-r0.7c23d3f2.apk",
+          "sha256": "63bc58e20566fcf6215b9d2160a76af18def4f73c354dc8ea6d6004e0d0331ac",
+          "size": 155516
+        },
+        {
+          "name": "json-c-0.18-r1.db0d2649.apk",
+          "sha256": "22dc7a8fe3eda0d22635615cca682b2a575ef25e8c2f401445e12be4cbf77302",
+          "size": 27819
+        },
+        {
+          "name": "kmod-34.2-r1.f68ede4c.apk",
+          "sha256": "8ea87ae02fa3b72acc841959d8e1d4b6f376f593da68b8fd877d07d87bd2cc67",
+          "size": 64485
+        },
+        {
+          "name": "kmod-libs-34.2-r1.ec3dd2f5.apk",
+          "sha256": "d6504eb204a47a35e1dd5eaa1018301b2dc0b1809f84d88fab2fdbadfc9c3c73",
+          "size": 39566
+        },
+        {
+          "name": "kmod-zsh-completion-34.2-r1.b4bcdd5e.apk",
+          "sha256": "300c1b4e1822386d94d37dec0d7e6f148ed392637d183d414ae217e4f17628fa",
+          "size": 2313
+        },
+        {
+          "name": "ldb-4.23.8-r0.942d2b62.apk",
+          "sha256": "f4033e23e49259eca0acfe0334ac126809cd8b0b379e2ecb629e52e888209149",
+          "size": 160834
+        },
+        {
+          "name": "lddtree-1.27-r0.a8e366e1.apk",
+          "sha256": "f7ae234208dc65f1d27e5a2976909fe4039096adfbd7d725b4e0daba7ef31d2d",
+          "size": 5443
+        },
+        {
+          "name": "libattr-2.5.2-r2.f4c69d49.apk",
+          "sha256": "42a0975e03d3ca6f973340cb02b5985099735808c3a1845239f6f8925b0e4d40",
+          "size": 7972
+        },
+        {
+          "name": "libauth-samba-4.23.8-r0.d7183cef.apk",
+          "sha256": "d2ec365521bd61746b481f4ead5fdb383bfb5c43e0fd02e58c60a02552f10e36",
+          "size": 64776
+        },
+        {
+          "name": "libblkid-2.42.3-r1.0747b233.apk",
+          "sha256": "2512c2bff496ac2b8561a3c814d21d35ce10cda579b3d410f9f96da93a5aaac1",
+          "size": 98429
+        },
+        {
+          "name": "libcap2-2.78-r0.562df2f0.apk",
+          "sha256": "42886a7b4bcde26347c712925c8dc7db202b6029ef9b8c7ee81577ab7bdd8fad",
+          "size": 21582
+        },
+        {
+          "name": "libcurl-8.22.0-r0.7816006b.apk",
+          "sha256": "40b2a8e15a8d24bc95a5f42aaeb018313a1ff457cee71d8e15aaf1328da765e8",
+          "size": 358307
+        },
+        {
+          "name": "libeconf-0.8.3-r0.339ee06b.apk",
+          "sha256": "2a791c7957961f830cf31b04f35f814a63afcf633badc9052425ff1cf2f64380",
+          "size": 26054
+        },
+        {
+          "name": "libelf-0.195-r0.8c3935b2.apk",
+          "sha256": "78c5a1993342ab1bdcdce30639fd0937e8000f6d0d85cea171f573d31decd036",
+          "size": 43475
+        },
+        {
+          "name": "libexpat-2.8.5-r0.1fabc7b9.apk",
+          "sha256": "2e56946bc495cbed9eb1ad70859a79cba9db6420016453e065a0628848b32c7e",
+          "size": 61355
+        },
+        {
+          "name": "libffi-3.5.2-r1.2f7b261f.apk",
+          "sha256": "6da1a19313a40c56cac756fb11e2c4d5267831e1c22fc8323f24c943c94da6e0",
+          "size": 18348
+        },
+        {
+          "name": "libgcc-15.2.0-r5.379c156c.apk",
+          "sha256": "393dcd32629f06d7d85409c272d142d0c082772d10b87ef55ee82f47de3be637",
+          "size": 80348
+        },
+        {
+          "name": "libidn2-2.3.8-r0.5800d14c.apk",
+          "sha256": "7d038ac558dde464964b033ce5126dd2eaf84cc414dc15e77c5424a321d0ebee",
+          "size": 104623
+        },
+        {
+          "name": "libintl-1.0-r0.282d6642.apk",
+          "sha256": "cb03919cba5624b5e8759d04f3b31913b02585355988b914bc31de4746ff5ef6",
+          "size": 39537
+        },
+        {
+          "name": "libldap-2.6.15-r0.f9ff21b5.apk",
+          "sha256": "e6bcaad784d2b3c8585b1d5ac2a5f69ed414c5328231e2b7e4b69b25de6cb948",
+          "size": 164085
+        },
+        {
+          "name": "libmagic-5.47-r2.96d3eec4.apk",
+          "sha256": "1820acd299025619a848b19ac98c7996fd92c06965255898800b6a790a8b03a2",
+          "size": 526164
+        },
+        {
+          "name": "libmnl-1.0.5-r2.2701d504.apk",
+          "sha256": "3693162ff7c27998dbbb2da1c4bd9072079cd55af1fa3d6d2ade51d276e20157",
+          "size": 9023
+        },
+        {
+          "name": "libncursesw-6.6_p20260516-r0.9f318e6e.apk",
+          "sha256": "cf8caa8a88bc4ce9d9e395567fefaf9ef7fbd55c50ae6155b35c1b58f3755023",
+          "size": 159438
+        },
+        {
+          "name": "libpsl-0.21.5-r3.a551ddd5.apk",
+          "sha256": "ec665a344b6e887f00f0a47015cc732c3a281b69e84641dc8662ea234fde6cdb",
+          "size": 54692
+        },
+        {
+          "name": "libsasl-2.1.28-r9.422ebe8d.apk",
+          "sha256": "ae838d4be2c0eba0d8cdc4fe5029fcc2cb187ec5814366b9bb954e41b8dcd1d6",
+          "size": 65860
+        },
+        {
+          "name": "libstdc++-15.2.0-r5.5f7a2ad7.apk",
+          "sha256": "14c987b556f5385a5db18376e788c75f37d85321b8dc1920d926ea7daac1d6f6",
+          "size": 961295
+        },
+        {
+          "name": "libtasn1-4.21.0-r0.c51aa7b2.apk",
+          "sha256": "407f255c5af989f4e22a5e9404c4558f6fda04f14a4209a2ca1e06c3f2ba476e",
+          "size": 33219
+        },
+        {
+          "name": "libunistring-1.4.2-r0.f509c801.apk",
+          "sha256": "3aa6030e603e34d96192742f327c0509f409c6769ce2e7b1463685dede38d714",
+          "size": 743597
+        },
+        {
+          "name": "liburing-2.14-r0.04cf16ea.apk",
+          "sha256": "77b170b74dd0d2da3eef4a60cf75121baf6de3b308f8b3db8808d4e697602772",
+          "size": 11509
+        },
+        {
+          "name": "libuuid-2.42.3-r1.8f041ef6.apk",
+          "sha256": "8306e5bb577696c9069fe1dfd9e1dcc39d2d481c6a1b0e707fd03c3e21aa6aa2",
+          "size": 14261
+        },
+        {
+          "name": "libwbclient-4.23.8-r0.911bae02.apk",
+          "sha256": "854fd838444375fe6b87ba06cfa097315de0dcaaac7354b20eab670ec651428b",
+          "size": 29661
+        },
+        {
+          "name": "libxtables-1.8.13-r0.51b28b24.apk",
+          "sha256": "4b5c981a77af40f965debe18f06c0c20268956f141a1bfc1c8ff6a406d914465",
+          "size": 24615
+        },
+        {
+          "name": "linux-pam-1.7.1-r2.e026a60a.apk",
+          "sha256": "73c327468bfd849bf078fb3d59516f1adc54685682dec6386d8d9d75c00e939d",
+          "size": 203565
+        },
+        {
+          "name": "linux-virt-6.18.54-r0.e263a4fc.apk",
+          "sha256": "57a522d2b6e9d1b6c9de6b9f7fc42aa4b8d33ebf9f2b42b4251dbee6ff2d9839",
+          "size": 44480764
+        },
+        {
+          "name": "lmdb-0.9.35-r0.b368dc4a.apk",
+          "sha256": "90aba5a62cd665329ccc6521f051351b4dd6486fda6f360d02fc7eac0320027a",
+          "size": 49670
+        },
+        {
+          "name": "mdev-conf-4.10-r0.28b999bf.apk",
+          "sha256": "093c7e5e4cbc935f286d0cb2f2e4accfa94798d8bea922fb0a91b5d1eb188304",
+          "size": 5416
+        },
+        {
+          "name": "mkinitfs-3.14.1-r0.1525e7d9.apk",
+          "sha256": "b58dd6e2cb21865cc6e581658695652b9f93ae599e4ef872089fad3296d0a55e",
+          "size": 37077
+        },
+        {
+          "name": "ncurses-terminfo-base-6.6_p20260516-r0.9d551d82.apk",
+          "sha256": "ce83be6d0bd10584a53c3a5868cc1595ce5f0f8e0b621f8f7f70b6144e521fc9",
+          "size": 22172
+        },
+        {
+          "name": "nettle-3.10.2-r0.a5ef7c11.apk",
+          "sha256": "693c1a99b781cd17149916df30113ccd6bdddac130298c17b1286fd2ae438386",
+          "size": 343067
+        },
+        {
+          "name": "nghttp2-libs-1.70.0-r0.63bd319b.apk",
+          "sha256": "f0c4014eb2f10308dcdfd84cd49c121673c7b78cb8182b6e7a1388d8ae112a3b",
+          "size": 63259
+        },
+        {
+          "name": "oniguruma-6.9.10-r0.a1a67fc3.apk",
+          "sha256": "5860ef9fd15b8e675278483d1b05d0efd043450b9f1b618647cb1b4f43d53a06",
+          "size": 187199
+        },
+        {
+          "name": "openssh-keygen-10.3_p1-r1.1b697c56.apk",
+          "sha256": "a7a197dd781fd25d127fe7815db3d69130f0772655f421b4a88c7e4f7bb2ecf7",
+          "size": 172185
+        },
+        {
+          "name": "openssh-server-10.3_p1-r1.f5d3c163.apk",
+          "sha256": "2818d1c4ba1cc279e226632aceea3ada2c7652977fce364f75c0d2ad058ea57f",
+          "size": 880349
+        },
+        {
+          "name": "openssh-server-common-10.3_p1-r1.697ecdf3.apk",
+          "sha256": "d91b68c19d02f61587eb3e6b6b5a30c9658f22b655e412adbd25eddd503229bd",
+          "size": 3190
+        },
+        {
+          "name": "openssh-sftp-server-10.3_p1-r1.58b24d26.apk",
+          "sha256": "bdc87cdb63c3c9cdb9fbdb14f9125a44d2fdb846cb7d7a81a6ae3a7209105937",
+          "size": 62432
+        },
+        {
+          "name": "p11-kit-0.26.2-r0.2e7573ca.apk",
+          "sha256": "134d653aeeb4ada32746fbc3e2a7ae4201f584725de9263e4f32503658f3ddd8",
+          "size": 399735
+        },
+        {
+          "name": "p11-kit-zsh-completion-0.26.2-r0.ea12f696.apk",
+          "sha256": "e7393c59f19ebeda5080712b203d3e3049cdd15a8c35be2bf9d5cf7dad93082d",
+          "size": 3131
+        },
+        {
+          "name": "pcre2-10.49-r0.ec992b00.apk",
+          "sha256": "2919897914820f42a17a8d7d37df310d2dfad1c82ebe5f539cc5c765f916752a",
+          "size": 323099
+        },
+        {
+          "name": "popt-1.19-r4.d8ee5819.apk",
+          "sha256": "b9963bde5e192348f291e7c16f033435debc6f171365ee5483a22afeffaa3f46",
+          "size": 21154
+        },
+        {
+          "name": "readline-8.3.3-r1.945b16e3.apk",
+          "sha256": "766911ecb986a6c5cf0841a6b556cd1e9dbbf22b3559726de32416486cd15c81",
+          "size": 127194
+        },
+        {
+          "name": "samba-client-libs-4.23.8-r0.621b23f2.apk",
+          "sha256": "9d7c9500dff02a89652027d947f70efd1ad38d182b1524d4e4e29b0f99f4865c",
+          "size": 385792
+        },
+        {
+          "name": "samba-common-4.23.8-r0.8d96448a.apk",
+          "sha256": "b672ec3fea99d3ac868bf5c92a6dd05da90e16bb061bed8a1fb869c109d5eb2a",
+          "size": 5500
+        },
+        {
+          "name": "samba-common-server-libs-4.23.8-r0.c544b055.apk",
+          "sha256": "7505d0769359701c1662124ed57c6c7b080c22eb0338b8dd77759bdaa4492fc0",
+          "size": 1064381
+        },
+        {
+          "name": "samba-common-tools-4.23.8-r0.272ea653.apk",
+          "sha256": "b4039baed3cb60308170429babbfa0a6346b1046231f87d3829fd341d2e10de8",
+          "size": 494946
+        },
+        {
+          "name": "samba-libs-4.23.8-r0.5756c36a.apk",
+          "sha256": "657f6560515bbbe703461bcd83219a1f5f9996e259ca5701a6a3e323e01c4461",
+          "size": 6102224
+        },
+        {
+          "name": "samba-server-4.23.8-r0.6456fd88.apk",
+          "sha256": "b7b1e2fe3d3023f3ed15d0417942981f26a5aca41e68a20afff399509b670a6e",
+          "size": 1788665
+        },
+        {
+          "name": "samba-util-libs-4.23.8-r0.52b73d31.apk",
+          "sha256": "b940b60e07a2119fe91a941ec70a5eeccfe669aaaf7e4fbc307a2af8df7b0c49",
+          "size": 364292
+        },
+        {
+          "name": "skalibs-libs-2.15.0.0-r0.039dc07e.apk",
+          "sha256": "3301f6ccbeaea49cdd966c7e636898a8612fb8fe964a15f24f6d204b3944c3f3",
+          "size": 84969
+        },
+        {
+          "name": "socat-1.8.1.3-r0.fd874891.apk",
+          "sha256": "4b8eb402357d976d285f30a68e510bd268d9163db8a39bb0bbbe7ab93ada4042",
+          "size": 218840
+        },
+        {
+          "name": "talloc-2.4.4-r1.252abe67.apk",
+          "sha256": "56004bfdd152fed426328f8a0870cad3e4e4fc99f3bbeb8c56c2e54d63c762d2",
+          "size": 18217
+        },
+        {
+          "name": "tar-1.35-r5.b25069b7.apk",
+          "sha256": "5dad2fe0c7d18394dd7ffb64682760ce63718a7a1552b661f6e63036ce8b4958",
+          "size": 209614
+        },
+        {
+          "name": "tdb-libs-1.4.15-r1.ab79bec6.apk",
+          "sha256": "36479d87b3e9783a0093741a8f752c8d51082a01ad73836d144705c391de361e",
+          "size": 41561
+        },
+        {
+          "name": "tevent-0.17.1-r1.a7f4dc15.apk",
+          "sha256": "f92633775d11a22dc55517dff9671deff28687e83588234d1c1f21d1aead1cce",
+          "size": 33004
+        },
+        {
+          "name": "utmps-libs-0.1.3.3-r0.a37c749a.apk",
+          "sha256": "497f0f1cb51f0e6c1acc338fded0dc7722b1d43ea17bdb749f0d556794f8b2d8",
+          "size": 5206
+        },
+        {
+          "name": "xz-libs-5.8.4-r0.8501065b.apk",
+          "sha256": "ab362dd515ead04c31a6c302163248da7aa4813e283c971e6dd3f789b453a1d9",
+          "size": 118503
+        },
+        {
+          "name": "zsh-5.9-r7.4d6b57cc.apk",
+          "sha256": "22ec3c4de69e38437e351ba5a881f5d88e9b518a248c8aa06d36b148cf16ce32",
+          "size": 1588110
+        },
+        {
+          "name": "zstd-libs-1.5.7-r2.9569ce3a.apk",
+          "sha256": "23c6065b0049b2406441564bcf0032515a43f78e80d76fcb85535a3803ef5d4e",
+          "size": 376646
+        }
+      ]
+    }
+  }
+}

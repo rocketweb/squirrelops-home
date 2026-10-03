@@ -398,11 +398,26 @@ SQUIRRELOPS_GUEST_BUNDLE="guest/studio-mini/build/$(uname -m)" \
   bash app/build-app.sh
 ```
 
-Release builds additionally require `ALPINE_IMAGE` to use an exact image
-digest. `guest/studio-mini/packages.lock` pins the complete installed package
-inventory, and the build fails when either architecture resolves a different
-version set. Update that inventory only after reviewing the repository change
-and rebuilding both architectures from the same image digest. The Home release
+The base image must match the exact digest in
+`guest/studio-mini/package-inputs.lock.json`. That lock also pins the retained
+APK archive and each package's bytes for both architectures. Builds validate
+archive contents, verify Alpine package signatures, and install with networking
+disabled. `packages.lock` checks the complete installed inventory;
+`packages.world` preserves the original top-level package requests. There is
+no fallback to live package repositories. Missing unpublished archives stop
+the build; use `SQUIRRELOPS_GUEST_PACKAGE_ARCHIVE` for an explicit local archive
+subject to the same checks. The 2.1.1 candidate's lock uses the immutable
+[guest-inputs-20261003-v1 prerelease](https://github.com/rocketweb/squirrelops-home/releases/tag/guest-inputs-20261003-v1).
+That separate build-input publication includes both APK archives, a source
+companion, notices, an inventory, and a checksum manifest bound by its signed
+tag. It is not an installer release. See the
+[publication evidence](testing/2026-10-03-guest-input-publication.md).
+
+See the [guest build instructions](../guest/studio-mini/README.md) for the
+maintainer-only online capture workflow and review requirements. Refreshing
+packages requires both clean offline builds and a new ARM64 guest runtime test,
+not merely accepting an inventory diff. The required Supply Chain CI check now
+depends on both architecture builds. The Home release
 workflow builds both ARM64 and x86_64 guest bundles on Linux, downloads them
 into the macOS job, selects the package architecture, and validates the copied
 app resource before signing.
