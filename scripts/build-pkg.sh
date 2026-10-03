@@ -428,6 +428,14 @@ info "Copying uninstall script..."
 cp "$SCRIPT_DIR/pkg/uninstall.sh" "$SENSOR_INSTALL/uninstall.sh"
 chmod +x "$SENSOR_INSTALL/uninstall.sh"
 
+info "Preparing complete third-party source and notice companions..."
+python3 "$SCRIPT_DIR/prepare-third-party.py" \
+    --python "$SENSOR_INSTALL/python" \
+    --guest "$STAGED_APP_BUNDLE/Contents/Resources/DeceptionGuest" \
+    --cache "$REPO_ROOT/build/third-party-cache" \
+    --output "$OUTPUT_DIR" \
+    --installed-notices "$SENSOR_INSTALL/third-party"
+
 info "Validating staged sensor payload contains no build-host paths..."
 bash "$SCRIPT_DIR/sanitize-python-runtime.sh" validate \
     "$SENSOR_INSTALL" "$REPO_ROOT" "$BUILD_DIR"

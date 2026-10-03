@@ -31,7 +31,8 @@ def test_sensor_sdist_allowlists_source_and_package_metadata() -> None:
     )
     sdist = pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]
 
-    assert set(sdist["include"]) == {"src", "pyproject.toml"}
+    assert set(sdist["include"]) == {"src", "pyproject.toml", "LICENSE"}
+    assert (REPO_ROOT / "sensor/LICENSE").read_bytes() == (REPO_ROOT / "LICENSE").read_bytes()
 
 
 def test_helper_is_signed_with_its_launchd_identifier() -> None:

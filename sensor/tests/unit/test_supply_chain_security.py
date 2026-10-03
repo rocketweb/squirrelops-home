@@ -961,6 +961,16 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     version = (REPO_ROOT / "VERSION").read_text().strip()
     package = tmp_path / f"SquirrelOpsHome-{version}.pkg"
     package.write_bytes(b"signed-package-placeholder")
+    third_party = tmp_path / "third-party"
+    third_party.mkdir()
+    (third_party / "THIRD-PARTY-SOURCES.tar").write_bytes(b"retained-sources")
+    (third_party / "THIRD-PARTY-NOTICES.txt").write_bytes(b"original-notices")
+    (third_party / "THIRD-PARTY-INVENTORY.json").write_text(json.dumps({
+        "schema_version": 1, "distribution_version": version,
+        "source_archive": {"name": "THIRD-PARTY-SOURCES.tar", "size": len(b"retained-sources"),
+                           "sha256": hashlib.sha256(b"retained-sources").hexdigest()},
+        "notices_sha256": hashlib.sha256(b"original-notices").hexdigest(),
+    }))
     output_dir = tmp_path / "release-assets"
     root_manifest = b'{"manifests":[],"schemaVersion":2}'
     digest_hex = hashlib.sha256(root_manifest).hexdigest()
@@ -996,6 +1006,8 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
         str(REPO_ROOT / "scripts/prepare-release-assets.py"),
         "--package",
         str(package),
+        "--third-party",
+        str(third_party),
         "--tag",
         f"home-v{version}",
         "--commit",
@@ -1084,6 +1096,11 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     assert metadata["homebrew"]["sha256"] == expected_package_sha
     checksums = (output_dir / "SHA256SUMS").read_text()
     assert "squirrelops-home.rb" in checksums
+    for companion in ("THIRD-PARTY-SOURCES.tar", "THIRD-PARTY-INVENTORY.json", "THIRD-PARTY-NOTICES.txt"):
+        assert companion in checksums
+        assert metadata["third_party"][companion]["sha256"] == hashlib.sha256(
+            (third_party / companion).read_bytes()
+        ).hexdigest()
     assert "install.sh" not in checksums
     assert "squirrelops-sensor-" not in checksums
     assert f"{verification_sha}  RELEASE-VERIFICATION.md" in checksums
@@ -1100,6 +1117,19 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == {
         path.name: path.read_bytes() for path in repeat_output.iterdir()
     }
+    # Source/notice companions are not optional and cannot drift after packaging.
+    for name in ("THIRD-PARTY-SOURCES.tar", "THIRD-PARTY-NOTICES.txt"):
+        path = third_party / name
+        saved = path.read_bytes()
+        path.write_bytes(b"changed")
+        invalid = subprocess.run([*command[:-1], str(tmp_path / "invalid")], capture_output=True, text=True)
+        assert invalid.returncode != 0
+        assert "checksum mismatch" in invalid.stderr
+        path.write_bytes(saved)
+    (third_party / "THIRD-PARTY-INVENTORY.json").unlink()
+    missing = subprocess.run([*command[:-1], str(tmp_path / "missing")], capture_output=True, text=True)
+    assert missing.returncode != 0
+    assert "Missing regular companion" in missing.stderr
 
 
 def test_sensor_release_assets_are_independent_and_digest_pinned(

@@ -238,4 +238,6 @@ sensor/src/squirrelops_home_sensor/
 
 ## License
 
-All rights reserved. Source available for review.
+SquirrelOps Home is source-available under the [PolyForm Noncommercial 1.0.0
+license](LICENSE). Bundled third-party components retain their respective licenses;
+see [third-party distribution notes](docs/THIRD_PARTY.md).
