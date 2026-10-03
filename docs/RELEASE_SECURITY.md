@@ -70,9 +70,14 @@ Keep these settings in place for every release:
 
 The Home 2.1 package also has an indivisible guest-artifact boundary. Release
 automation builds ARM64 and x86_64 Studio Mini guests from the reviewed Alpine
-image digest. The complete installed Alpine package inventory is also pinned in
-`guest/studio-mini/packages.lock`, and either architecture build fails if the
-repository produces a different version set. The macOS job downloads that
+image digest. `guest/studio-mini/package-inputs.lock.json` additionally pins
+retained APK archives and each package's size and SHA-256. Archive validation
+rejects unlisted files, unsafe paths, links, duplicates, and missing inputs.
+Alpine's own signature verification remains required inside the pinned image.
+Package installation runs offline, then checks the complete installed inventory
+against `guest/studio-mini/packages.lock`. No live-repository fallback is allowed.
+Both clean guest builds are prerequisites of the required Supply Chain CI check.
+The macOS job downloads the freshly built
 private artifact, selects the exact package architecture, and rejects any
 unexpected file, symlink, writable file, digest mismatch, architecture
 mismatch, changed resource ceiling, changed containment declaration, or changed
@@ -83,6 +88,42 @@ guest network device is added. The guest runtime is signed separately with only 
 virtualization entitlement before the outer app signature is applied. Do not
 substitute a locally cached guest, floating container tag, or pre-existing
 release asset.
+
+The failed Home 2.1.0 build showed why an inventory lock alone is insufficient:
+the pinned base image still resolved newer dependencies from a live repository.
+Its mismatch check correctly stopped publication. Home 2.1.1 adds retained
+package bytes rather than bypassing that check. Existing 2.1.0 tags remain
+unchanged. The app remains 2.1.0. The sensor advances to 2.1.1 for the macOS
+dependency marker and license metadata correction; its new component tag needs
+independent review before the Home workflow can run.
+
+Home packaging also verifies source coverage against the actual guest and
+Python payload inventories. The final Home release must include
+`THIRD-PARTY-SOURCES.tar`, `THIRD-PARTY-INVENTORY.json` and
+`THIRD-PARTY-NOTICES.txt`, covered by checksums and attestations. Missing or
+changed companion inputs stop packaging/publication. See
+[third-party distribution notes](THIRD_PARTY.md). This does not authorize
+Linux publication, alter the product license or change the immutable APK archive.
+
+Package refresh is a separate maintainer action, never part of a normal release
+build. Review inventory changes and deception behavior, run both offline builds
+and current ARM64 guest acceptance, then approve archive retention/publication.
+The 2.1.1 candidate now uses the approved, immutable
+[guest-inputs-20261003-v1 prerelease](https://github.com/rocketweb/squirrelops-home/releases/tag/guest-inputs-20261003-v1).
+The signed archive-only tag points to source baseline
+`300569ba15c375a77201cccfe7c27dc2d0da888e` and binds the asset checksum manifest;
+it is not a tag of the new build integration. GitHub release attestation and
+freshly downloaded asset checksums were verified. No Actions capture provenance
+is claimed for these locally retained inputs. Normal CI and release builds must
+use the reviewed public URLs and verify the locked bytes. Local archive overrides
+are useful for review, not evidence of public availability.
+
+The source companion and notices cover the retained APKs. Complete base-image
+and Home installer third-party source/notice coverage still needs review before
+Home publication; this archive release does not close that broader gate. It does
+not change the latest Home installer or authorize a Linux sensor publication.
+See the [guest input report](testing/2026-10-03-reproducible-guest-build.md) and
+[archive publication evidence](testing/2026-10-03-guest-input-publication.md).
 
 1. Enable **release immutability**. The workflow checks the repository setting
    before building and again immediately before publication. A published
@@ -324,7 +365,7 @@ Download `RELEASE-VERIFICATION.md` first. Treat that attested asset as the
 canonical notes and command source; GitHub's release title and description can
 still be edited after publication. These commands apply only to an immutable
 Home release. Use the exact version and independently reviewed tag commit,
-not a local test package. In a fresh directory, download all six Home assets
+not a local test package. In a fresh directory, download all nine Home assets
 from that pinned release and verify provenance, bytes and the macOS signature
 before opening the installer:
 
@@ -341,10 +382,14 @@ gh release download "$RELEASE_TAG" --repo rocketweb/squirrelops-home \
   --pattern SquirrelOpsHome-X.Y.Z.pkg.sha256 \
   --pattern squirrelops-home.rb \
   --pattern release-metadata.json \
-  --pattern SHA256SUMS
+  --pattern SHA256SUMS \
+  --pattern THIRD-PARTY-SOURCES.tar \
+  --pattern THIRD-PARTY-INVENTORY.json \
+  --pattern THIRD-PARTY-NOTICES.txt
 for ASSET in RELEASE-VERIFICATION.md SquirrelOpsHome-X.Y.Z.pkg \
   SquirrelOpsHome-X.Y.Z.pkg.sha256 squirrelops-home.rb \
-  release-metadata.json SHA256SUMS; do
+  release-metadata.json SHA256SUMS THIRD-PARTY-SOURCES.tar \
+  THIRD-PARTY-INVENTORY.json THIRD-PARTY-NOTICES.txt; do
   gh attestation verify "$ASSET" \
     --repo rocketweb/squirrelops-home \
     --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \

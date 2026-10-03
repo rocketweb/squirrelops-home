@@ -13,7 +13,14 @@ jobs:
   verify:
     name: Verify release and package controls
     runs-on: ubuntu-latest
+    needs: guest-inputs
+    if: ${{ always() }}
     steps:
+      - name: Require successful guest builds
+        env:
+          GUEST_INPUTS_RESULT: ${{ needs.guest-inputs.result }}
+        run: test "$GUEST_INPUTS_RESULT" = success
+
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -46,6 +53,8 @@ jobs:
           cd sensor
           uv run pytest \
             tests/unit/test_supply_chain_security.py \
+            tests/unit/test_guest_package_inputs.py \
+            tests/unit/test_third_party_packaging.py \
             tests/unit/test_package_security.py \
             tests/unit/test_pkg_network_lifecycle.py \
             tests/unit/test_pkg_sqlite_backup.py \
@@ -58,13 +67,20 @@ jobs:
           cd sensor
           uv run ruff check \
             tests/unit/test_supply_chain_security.py \
+            tests/unit/test_guest_package_inputs.py \
+            tests/unit/test_third_party_packaging.py \
             tests/unit/test_package_security.py \
             tests/unit/test_pkg_network_lifecycle.py \
             tests/unit/test_pkg_sqlite_backup.py \
             tests/unit/test_pkg_component_plist.py \
             tests/unit/test_macos_lan_context.py \
             ../scripts/check-linux-release-boundary.py \
-            ../scripts/prepare-release-assets.py
+            ../scripts/prepare-release-assets.py \
+            ../scripts/prepare-third-party.py \
+            ../scripts/retain-alpine-sources.py \
+            ../scripts/guest-package-inputs.py \
+            ../scripts/capture-guest-package-inputs.py
+          uv run ruff check tests/integration/test_guest_package_install.py
 
       - name: Validate scripts and static configuration
         shell: bash
@@ -73,11 +89,52 @@ jobs:
           while IFS= read -r -d '' script; do
             bash -n "$script"
           done < <(find scripts -type f -name '*.sh' -print0)
+          bash -n guest/studio-mini/build-guest.sh
+          sh -n guest/studio-mini/install-packages.sh
           python3 -m py_compile \
             scripts/check-linux-release-boundary.py \
-            scripts/prepare-release-assets.py
+            scripts/prepare-release-assets.py \
+            scripts/prepare-third-party.py \
+            scripts/retain-alpine-sources.py \
+            scripts/guest-package-inputs.py \
+            scripts/capture-guest-package-inputs.py
           python3 -m json.tool .github/release-policy.json >/dev/null
           python3 -m json.tool site/vercel.json >/dev/null
+
+  guest-inputs:
+    name: Verify clean offline guest builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Enable cross-architecture guest builds
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+      - name: Set up isolated Docker builder
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build both guests from retained inputs with offline installation
+        env:
+          SQUIRRELOPS_RELEASE_BUILD: "1"
+        run: |
+          set -euo pipefail
+          bash guest/studio-mini/build-guest.sh arm64
+          bash guest/studio-mini/build-guest.sh x86_64
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.10.2"
+          enable-cache: false
+      - name: Reject inventory drift and untrusted APK signatures offline
+        env:
+          SQUIRRELOPS_TEST_GUEST_PACKAGE_INSTALL: "1"
+        run: |
+          set -euo pipefail
+          uv python install 3.11
+          cd sensor
+          uv lock --check
+          uv sync --frozen
+          uv run pytest tests/integration/test_guest_package_install.py -q
 
   macos-package-lifecycle:
     name: Verify macOS package lifecycle controls

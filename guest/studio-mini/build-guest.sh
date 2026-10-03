@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TARGET_ARCH="${1:-$(uname -m)}"
-ALPINE_IMAGE="${ALPINE_IMAGE:-alpine:3.24.1}"
+ALPINE_IMAGE="${ALPINE_IMAGE:-alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b}"
 
 case "$TARGET_ARCH" in
     arm64)
@@ -28,9 +28,23 @@ OUTPUT_DIR="$SCRIPT_DIR/build/$TARGET_ARCH"
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
+INPUT_ARGS=()
+if [ -n "${SQUIRRELOPS_GUEST_PACKAGE_ARCHIVE:-}" ]; then
+    INPUT_ARGS+=(--archive "$SQUIRRELOPS_GUEST_PACKAGE_ARCHIVE")
+fi
+python3 "$REPO_ROOT/scripts/guest-package-inputs.py" prepare \
+    --lock "$SCRIPT_DIR/package-inputs.lock.json" \
+    --architecture "$TARGET_ARCH" \
+    --base-image "$ALPINE_IMAGE" \
+    --output "$TEMP_DIR/packages" \
+    ${INPUT_ARGS[@]+"${INPUT_ARGS[@]}"}
+
 docker buildx build \
+    --no-cache \
+    --network none \
     --platform "$DOCKER_PLATFORM" \
     --build-arg "ALPINE_IMAGE=$ALPINE_IMAGE" \
+    --build-context "package-inputs=$TEMP_DIR/packages" \
     --output "type=local,dest=$TEMP_DIR" \
     "$SCRIPT_DIR"
 

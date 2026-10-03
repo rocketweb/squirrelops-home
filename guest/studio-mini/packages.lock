@@ -32,7 +32,7 @@ iproute2-minimal-7.0.0-r0 - IP Routing Utilities (/sbin/ip only)
 iproute2-ss-7.0.0-r0 - IP Routing Utilities (socket statistics tool)
 iproute2-tc-7.0.0-r0 - IP Routing Utilities (traffic control and XDP support)
 jansson-2.15.0-r0 - lightweight JSON library
-jq-1.8.1-r0 - A lightweight and flexible command-line JSON processor
+jq-1.8.2-r0 - A lightweight and flexible command-line JSON processor
 json-c-0.18-r1 - A JSON implementation in C
 kmod-34.2-r1 - Linux kernel module management utilities
 kmod-libs-34.2-r1 - Linux kernel module management utilities (libraries)
@@ -42,18 +42,18 @@ lddtree-1.27-r0 - List dynamic dependencies as a tree
 libapk-3.0.6-r0 - Alpine Package Keeper - package manager for alpine
 libattr-2.5.2-r2 - utilities for managing filesystem extended attributes (libraries)
 libauth-samba-4.23.8-r0 - Samba auth library shared by common-tools, server and clients
-libblkid-2.42.1-r0 - Block device identification library from util-linux
+libblkid-2.42.3-r1 - Block device identification library from util-linux
 libcap2-2.78-r0 - POSIX 1003.1e capabilities (libraries)
 libcrypto3-3.5.7-r0 - Crypto library from openssl
-libcurl-8.21.0-r0 - The multiprotocol file transfer library
+libcurl-8.22.0-r0 - The multiprotocol file transfer library
 libeconf-0.8.3-r0 - Enhanced Config File Parser
 libelf-0.195-r0 - Library to read, modify and create ELF files
-libexpat-2.8.4-r0 - XML Parser library written in C (libraries)
+libexpat-2.8.5-r0 - XML Parser library written in C (libraries)
 libffi-3.5.2-r1 - portable, high level programming interface to various calling conventions.
 libgcc-15.2.0-r5 - GNU C compiler runtime libraries
 libidn2-2.3.8-r0 - Encode/Decode library for internationalized domain names
 libintl-1.0-r0 - GNU gettext runtime library
-libldap-2.6.14-r0 - OpenLDAP libraries
+libldap-2.6.15-r0 - OpenLDAP libraries
 libmagic-5.47-r2 - File type identification library
 libmnl-1.0.5-r2 - Library for minimalistic netlink
 libncursesw-6.6_p20260516-r0 - Console display library (libncursesw)
@@ -64,19 +64,19 @@ libstdc++-15.2.0-r5 - GNU C++ standard runtime library
 libtasn1-4.21.0-r0 - The ASN.1 library used in GNUTLS
 libunistring-1.4.2-r0 - Library for manipulating Unicode strings and C strings
 liburing-2.14-r0 - Linux kernel io_uring access library
-libuuid-2.42.1-r0 - DCE compatible Universally Unique Identifier library
+libuuid-2.42.3-r1 - DCE compatible Universally Unique Identifier library
 libwbclient-4.23.8-r0 - Samba winbind client libraries
 libxtables-1.8.13-r0 - Linux kernel firewall, NAT and packet mangling tools (xtables library)
 linux-pam-1.7.1-r2 - Linux PAM (Pluggable Authentication Modules for Linux)
-linux-virt-6.18.48-r0 - Linux lts kernel
+linux-virt-6.18.54-r0 - Linux lts kernel
 lmdb-0.9.35-r0 - Lightning Memory-Mapped Database
 mdev-conf-4.10-r0 - Configuration files for mdev and mdevd
-mkinitfs-3.14.0-r0 - Tool to generate initramfs images for Alpine
+mkinitfs-3.14.1-r0 - Tool to generate initramfs images for Alpine
 musl-1.2.6-r2 - the musl c library (libc) implementation
 musl-utils-1.2.6-r2 - the musl c library (libc) implementation
 ncurses-terminfo-base-6.6_p20260516-r0 - Descriptions of common terminals
 nettle-3.10.2-r0 - Low-level cryptographic library
-nghttp2-libs-1.69.0-r0 - HTTP/2 C client, server and proxy (libraries)
+nghttp2-libs-1.70.0-r0 - HTTP/2 C client, server and proxy (libraries)
 oniguruma-6.9.10-r0 - a regular expressions library
 openssh-keygen-10.3_p1-r1 - ssh helper program for generating keys
 openssh-server-10.3_p1-r1 - OpenSSH server
@@ -84,7 +84,7 @@ openssh-server-common-10.3_p1-r1 - OpenSSH server configuration files
 openssh-sftp-server-10.3_p1-r1 - ssh sftp server module
 p11-kit-0.26.2-r0 - Library for loading and sharing PKCS#11 modules
 p11-kit-zsh-completion-0.26.2-r0 - Zsh completions for p11-kit
-pcre2-10.47-r1 - Perl-compatible regular expression library
+pcre2-10.49-r0 - Perl-compatible regular expression library
 popt-1.19-r4 - commandline option parser
 readline-8.3.3-r1 - GNU readline library
 samba-client-libs-4.23.8-r0 - Samba libraries used by clients
@@ -103,7 +103,7 @@ tar-1.35-r5 - Utility used to store, backup, and transport files
 tdb-libs-1.4.15-r1 - The tdb library (libraries)
 tevent-0.17.1-r1 - The tevent library
 utmps-libs-0.1.3.3-r0 - A secure utmp/wtmp implementation (libraries)
-xz-libs-5.8.3-r0 - Library and CLI tools for XZ and LZMA compressed files (libraries)
+xz-libs-5.8.4-r0 - Library and CLI tools for XZ and LZMA compressed files (libraries)
 zlib-1.3.2-r0 - A compression/decompression Library
 zsh-5.9-r7 - Very advanced and programmable command interpreter (shell)
 zstd-libs-1.5.7-r2 - Zstandard - Fast real-time compression algorithm (libraries)
