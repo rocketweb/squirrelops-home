@@ -2,11 +2,10 @@
 
 **Local-first home network security with high-signal deception.**
 
-This README describes [Home 2.1.1](https://github.com/rocketweb/squirrelops-home/releases/tag/home-v2.1.1),
-published on October 3, 2026. The package includes macOS app 2.1.0 and sensor
-2.1.1, including the Studio Build Mac guest and the 2.1 UI features below.
-Release notes and verification commands are in the attested
-[release document](https://github.com/rocketweb/squirrelops-home/releases/download/home-v2.1.1/RELEASE-VERIFICATION.md).
+This README describes the Home 2.1 feature set. The Home package, macOS app,
+and sensor have independent versions. For published packages and their exact
+component versions, use [Home releases](https://github.com/rocketweb/squirrelops-home/releases)
+and the attested `RELEASE-VERIFICATION.md` attached to the selected release.
 
 - **Network-aware honeypots:** automatically selects HTTP file-directory, development-server, and Home Assistant-style decoys from discovered service ports, with a file-directory fallback
 - **Squirrel Scouts:** probes discovered services and builds fake hosts with one service decoy per observed port, sharing a virtual IP and hostname. HTTP samples and protocol banners provide partial service emulation.
@@ -150,24 +149,16 @@ dependencies, and privileged helper. Do not use the old standalone
 `install-macos.sh` release asset. That script could fall back to an unpinned
 package index when it was separated from the source tree.
 
-```bash
-RELEASE_TAG=home-v2.1.1
-base="https://github.com/rocketweb/squirrelops-home/releases/download/${RELEASE_TAG}"
-curl -fsSLO "${base}/RELEASE-VERIFICATION.md"
-gh release verify "$RELEASE_TAG" --repo rocketweb/squirrelops-home
-gh attestation verify RELEASE-VERIFICATION.md \
-  --repo rocketweb/squirrelops-home \
-  --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
-  --signer-digest bec92c599fb793c09fbefd737e4c49659401b58b \
-  --source-digest bec92c599fb793c09fbefd737e4c49659401b58b \
-  --source-ref refs/heads/main
-```
+Choose a published `home-vX.Y.Z` release and download its
+`RELEASE-VERIFICATION.md`. Before following that document, verify release
+immutability and its attestation against the Home release workflow, exact
+signed-tag source commit, and `refs/heads/main`. The commands are documented in
+[independent verification](docs/RELEASE_SECURITY.md#independent-verification).
 
-Then follow the verified document to download the package and checksum, verify
-the package attestation, Developer ID signature and notarization, and install.
-The published 2.1.1 metadata and GitHub asset digest agree on package SHA-256
-`e34ee602d3187ee99f2781f4c7478ad60038b9e0d5332463c5b2006861523eab`.
-GitHub's release description is editable and is only a convenience pointer.
+Use the verified document's version-specific commands to download the package
+and checksum, verify the package attestation, Developer ID signature and
+notarization, and install. That document supplies the exact component versions
+and package digest; GitHub's editable release description is a convenience pointer.
 
 The source-checkout-only `scripts/install-macos.sh` remains available for
 development. It requires the local `sensor/uv.lock`, exact `uv` version, and
