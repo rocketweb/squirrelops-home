@@ -232,15 +232,15 @@
   <div class="container">
     <div class="title-row">
       <h1>SquirrelOps <span class="accent">Home</span></h1>
-      <span class="version-badge" id="version-badge">v1.0.0</span>
+      <span class="version-badge" id="version-badge">Channel v1.1.14</span>
     </div>
     <p class="subtitle">Local-first home network security with high-signal deception.</p>
 
     <div class="install-block">
       <h2>macOS</h2>
-      <p class="hint">App + sensor in one package</p>
-      <a class="download-btn" id="pkg-download" href="https://github.com/rocketweb/squirrelops-home/releases/latest/download/SquirrelOpsHome-1.1.14.pkg">
-        Download .pkg installer <span class="arrow">&rarr;</span>
+      <p class="hint">App + sensor in one package. This download follows the update-channel manifest; check published releases for newer packages and verification instructions.</p>
+      <a class="download-btn" id="pkg-download" href="https://github.com/rocketweb/squirrelops-home/releases/download/v1.1.14/SquirrelOpsHome-1.1.14.pkg">
+        Download channel .pkg <span class="arrow">&rarr;</span>
       </a>
       <br>
       <a class="download-link" href="https://github.com/rocketweb/squirrelops-home/releases">View all releases</a>
@@ -248,16 +248,13 @@
 
     <div class="install-block">
       <h2>Linux / NAS (Docker)</h2>
-      <p class="hint">Sensor only. Dashboard is macOS-only.</p>
-      <p class="hint">Download install.sh and install.sh.sha256 from a pinned release, then:</p>
-      <div class="code-block">shasum -a 256 -c install.sh.sha256<br>less install.sh<br>sudo bash install.sh</div>
+      <p class="hint">Linux publication is on hold pending independent review of the network-helper boundary. Current Home releases contain macOS artifacts only.</p>
     </div>
 
     <div class="requirements">
       <h2>System Requirements</h2>
       <ul>
         <li><span class="platform">macOS:</span> macOS 14+ (Sonoma) on Apple Silicon (ARM64). Intel Macs are not supported.</li>
-        <li><span class="platform">Linux:</span> Docker 24+ on x86_64 or ARM64</li>
       </ul>
     </div>
 
@@ -265,7 +262,7 @@
       <a href="https://github.com/rocketweb/squirrelops-home">GitHub</a>
       <a href="/manifest.json">Manifest</a>
       <span class="spacer"></span>
-      <span class="no-telemetry">Local data only. No telemetry.</span>
+      <span class="no-telemetry">Local by default. Cloud AI and alert delivery are opt-in.</span>
     </footer>
   </div>
 
@@ -282,7 +279,7 @@
         if (!version) return;
 
         const badge = document.getElementById('version-badge');
-        if (badge) badge.textContent = 'v' + version;
+        if (badge) badge.textContent = 'Channel v' + version;
 
         const pkgUrl = manifest.downloads && manifest.downloads.macos_pkg;
         if (pkgUrl) {

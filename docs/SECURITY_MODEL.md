@@ -106,6 +106,20 @@ user, and the server refuses to replace a non-socket path.
 
 ## Untrusted LAN device probes
 
+The running sensor performs ARP and selected TCP port scans, with mDNS/SSDP or
+Home Assistant enrichment. It does not currently collect passive DHCP or
+connection destinations. The baseline collector and anomaly detector have
+standalone tests but are not wired into sensor startup. A learning status in
+the API or app therefore does not establish automatic behavioral monitoring.
+
+Classic decoys and Scout mimics emulate selected HTTP routes and protocol
+banners. Only Studio's guest provides real SSH/SFTP and SMB. Recognized bait
+submitted to a supported HTTP handler can produce a Critical alert; bait-file
+retrieval alone is ordinary decoy activity. Opaque guest relays cannot identify
+SSH/SMB authentication, commands, or file access. A decoy alert is evidence to
+investigate, and can also be caused by an operator or scanner. Automatic IPP
+printer-discovery requests are retained without an intrusion alert.
+
 SSDP and Scout probes may connect to self-signed HTTPS services. Certificate
 verification is intentionally disabled only for these credential-free
 fingerprinting requests. Targets are restricted to private LAN addresses,
@@ -141,8 +155,8 @@ release gates. See the [PF safety development record](testing/2026-09-26-pf-safe
 
 ### Disposable guest
 
-The 2.1 Studio Build Mac runs real OpenSSH and Samba inside a disposable
-Virtualization.framework guest, not inside the sensor or privileged helper.
+The 2.1 Studio Build Mac runs real OpenSSH and Samba inside a disposable Linux
+Virtualization.framework guest, with macOS-shaped files and command responses.
 The separately signed guest runtime is unprivileged. Its virtual machine has
 no network device, persistent disk, shared directory, clipboard, USB, camera,
 microphone, audio, graphics, or input device. A fixed Virtio socket device is

@@ -2,17 +2,28 @@
 
 ## What is SquirrelOps Home?
 
-SquirrelOps Home is a local-first home network security platform. It passively monitors your network, learns what "normal" looks like, and deploys realistic decoy services (honeypots) that generate high-confidence alerts when anything touches them.
+SquirrelOps Home scans the selected IPv4 LAN, maintains a device inventory,
+and deploys decoy services. It records decoy interactions and raises alerts
+for unexpected activity, recognized credential use, and scan-derived security findings.
 
 **How it works:**
 
 1. A lightweight **sensor** scans your network and builds a device inventory
-2. The sensor deploys **decoys** — fake services like file shares, dev servers, and Home Assistant instances — that no legitimate device should ever contact
-3. **Squirrel Scouts** probe real devices to build coherent fake hosts, with one service decoy per observed port and a shared virtual IP and editable hostname for services copied from the same source
-4. When something connects to a decoy, you get a high-confidence alert with the connection preserved as forensic evidence.
-5. The sensor also monitors for **new devices** joining your network and **behavioral anomalies** after a 48-hour learning period
+2. The sensor selects **classic HTTP decoys** from discovered ports: file-directory, dev-server, and Home Assistant-style presentations
+3. **Squirrel Scouts** probe real devices to build fake hosts with one service decoy per observed port, a shared virtual IP, and an editable hostname. Their HTTP samples and banners provide partial service emulation.
+4. Unexpected decoy activity raises a High alert and is retained as forensic evidence. Protocol-defined automatic printer discovery is logged without an intrusion alert. Operator tests and legitimate scanners can also trip a decoy.
+5. Scans refresh the device inventory and flag risky services and ambiguous ARP ownership. Passive DHCP collection and automatic connection-baseline learning are not active in this runtime.
 
-**What stays local:** All data is stored in a local SQLite database on the sensor. No telemetry. No cloud dependency. The only things that leave your network are the ones you explicitly enable (push notifications, cloud AI device classification and decoy naming, Slack webhooks, update checks).
+**What stays local:** Inventory, alerts, and decoy evidence use local SQLite.
+Configuration uses local YAML and an encrypted secret store; the app keeps
+pairing keys in macOS Keychain. Core operation requires no cloud service.
+Cloud AI, Slack, and manually configured APNs relay delivery are optional;
+update checks contact GitHub when requested.
+
+This guide describes the 2.1 development source. It does not establish that
+2.1 has been published or that its signed installer has passed acceptance.
+See [publication readiness](testing/2026-10-01-publication-readiness.md) and
+the [documentation claim verification](testing/2026-10-02-documentation-claims.md).
 
 ---
 
@@ -21,7 +32,8 @@ SquirrelOps Home is a local-first home network security platform. It passively m
 ### Docker on Linux/NAS (publication on hold)
 
 - Docker Engine and Docker Compose v2
-- Linux ARM64 (Raspberry Pi 3/4/5) or x86_64 (NAS, general Linux)
+- Linux ARM64 or x86_64 development targets; published hardware support and
+  real-LAN acceptance remain pending
 - Network access: the unprivileged sensor stays on a private bridge; only the
   constrained network-helper sidecar uses host networking with
   `NET_RAW`/`NET_ADMIN`
@@ -87,8 +99,9 @@ spctl --assess --type install --verbose=2 SquirrelOpsHome-X.Y.Z.pkg
 open SquirrelOpsHome-X.Y.Z.pkg
 ```
 
-For future hardened immutable releases, download and attest
-`RELEASE-VERIFICATION.md`, then use the commands in that canonical asset.
+For current immutable Home releases, first download and attest
+`RELEASE-VERIFICATION.md`, then use the commands in that canonical asset. The
+README includes a [verified Home 2.0.3 example](../README.md#macos-app-and-sensor).
 GitHub's release description is editable and is only a pointer. The legacy
 standalone `install-macos.sh` release asset is not supported because a
 standalone copy cannot carry the locked source project it installs.
@@ -131,9 +144,11 @@ access unless the helper is built and installed separately.
 
 ### Path C: macOS App for a Remote Sensor
 
-The standalone macOS app remains available for a sensor already running on
-another device. It does not install local services or request administrator
-approval. On first launch:
+For a sensor already running on another device, choose the remote connection
+flow in the macOS app. Choosing that flow does not install services or request
+administrator approval. The supported `.pkg` itself includes local services;
+a source-built app can be used separately (see [Development](DEVELOPMENT.md)).
+On first launch:
 
 1. Choose **Connect to Another Sensor**
 2. Select the discovered sensor
@@ -260,16 +275,18 @@ encrypted certificate exchange, and mutual TLS.
 
 `--no-tls` is also development-only. It always forces the API to bind to loopback, and non-TLS bearer or fingerprint authentication is rejected for non-loopback peers.
 
-### Learning Mode (48 hours)
+### Learning status and current limits
 
-When the sensor starts for the first time, it enters **Learning Mode** for 48 hours. During this period:
+The source includes baseline storage, an anomaly detector, a learning-status
+API, and dashboard progress UI with a configurable 48-hour duration. Learning
+is disabled by default. The production startup and scan loop do not collect
+connection destinations, invoke the baseline collector or anomaly detector,
+or automatically start or complete a training period.
 
-- The sensor scans your network and discovers devices
-- It collects behavioral baselines (which devices connect where)
-- It deploys decoys immediately — decoy trip alerts still fire during learning
-- **Anomaly alerts are suppressed** until learning completes, preventing false positives while the sensor establishes what "normal" looks like
-
-The dashboard shows a progress bar with time remaining. After 48 hours, the sensor begins generating anomaly alerts for new connection patterns it hasn't seen before.
+Changing the learning-status configuration does not activate behavioral
+monitoring. Decoy detection and scan-derived security alerts operate without
+waiting for training. Device discovery covers reachable hosts on the selected
+IPv4 LAN; sleeping devices, other VLANs, and unidentified devices can be missed.
 
 ### Resource Profile Selection
 
@@ -302,7 +319,7 @@ The home view shows two things at a glance:
 - Counts for discovered devices, active decoy deployments, and unread alerts
 - A deployment breakdown that keeps fake hosts, their nested service decoys, and host listeners separate
 - Sensor version and uptime
-- Learning mode progress bar (during the first 48 hours)
+- Learning-status progress when explicitly enabled; it does not indicate active baseline collection
 
 **Network Map** — A categorized grid of all discovered devices, grouped by type:
 - Infrastructure (routers, switches)
@@ -346,9 +363,9 @@ Every device has a trust status:
 
 | Status | Meaning |
 |--------|---------|
-| **Approved** | Known device — future appearances won't generate alerts |
-| **Rejected** | Flagged as unauthorized — all future appearances generate high-priority alerts |
-| **Unknown** | Not yet classified — new alerts fire if the device reappears |
+| **Approved** | Recorded as a recognized device; decoy and security findings can still generate alerts |
+| **Rejected** | Recorded as unauthorized for operator review; automatic reappearance alerts are not connected to this runtime |
+| **Unknown** | No explicit trust decision has been recorded; this differs from an unknown device classification |
 
 ### Device Detail View
 
@@ -411,32 +428,45 @@ listener they control.
 
 | Type | Icon | Description |
 |------|------|-------------|
-| Dev Server | `</>` | Fake development server (Express, Next.js, Flask) |
-| Home Assistant | House | Fake Home Assistant login page and API |
-| File Share | Folder | Fake SMB/AFP share with planted credentials |
-| Mimic | Device-specific | A grouped fake host built from the observed services of one real source device |
-| Studio Build Mac | Desktop Mac | A grouped macOS-shaped host with real SSH and SMB plus Ollama, OpenAI-compatible, and MCP services |
+| Dev Server | `</>` | Python HTTP server with a static React-style page, `/api/health`, and `/.env`; Express-style headers, no Express, Next.js, or Flask runtime |
+| Home Assistant | House | Static HTTP login form and fixed authentication-error routes; no running Home Assistant instance |
+| File Share | Folder | HTTP directory listing with an nginx-style banner, `passwords.txt`, and `/.ssh/id_rsa`; no SMB or AFP service |
+| Mimic | Device-specific | A fake host grouped from one source's observed ports, HTTP samples, banners, local TLS identity, and mDNS records; partial protocol emulation |
+| Studio Build Mac | Desktop Mac | Real OpenSSH/SFTP and Samba in a disposable Linux guest with macOS-shaped content, plus synthetic model and MCP APIs in the sensor |
 
-Traditional honeypot decoys are automatically selected based on what real services exist on your network. The sensor deploys complementary decoys — it won't duplicate services already present. Mimic decoys are deployed by the Squirrel Scouts subsystem and appear in the grid alongside honeypots, giving you a single view of all deception deployed on your network.
+Classic decoys are selected from observed service categories: dev-server ports,
+Home Assistant port 8123, and SMB/AFP ports select their corresponding HTTP
+presentations. If none matches, a file-directory decoy is the fallback. The
+sensor avoids duplicate classic decoy types and respects stopped rows; it
+can emulate a category that already exists on a real device. Mimics and Studio
+appear alongside classic listeners in the Decoys grid.
 
 ### Studio Build Mac
 
-On a packaged macOS 2.1 installation, SquirrelOps also publishes one coherent
-deep decoy named `studio-mini.local`. It looks like a forgotten Mac mini used
-to build the synthetic FieldKit iOS app:
+With the required macOS 2.1 runtime, guest artifacts, profile, and helper,
+SquirrelOps can deploy one deep decoy named `studio-mini.local`. Its Linux
+guest presents macOS-shaped files and commands for a synthetic FieldKit iOS
+build environment. Detailed OS fingerprinting can reveal the underlying Linux guest.
 
 - OpenSSH provides the `buildbot` shell and SFTP access.
 - Samba provides writable `Builds`, `Engineering`, and `Time Machine Backups`
   shares using Apple's SMB extensions.
-- Ollama, OpenAI-compatible, and MCP endpoints expose the same project,
+- Synthetic Ollama, OpenAI-compatible, and MCP endpoints expose the same project,
   runbooks, model setup, build history, and synthetic credentials.
 - Shell history, Git metadata, Fastlane logs, Cursor, Claude, and Codex files
   all come from the same persona and remain stable across sensor restarts.
 
+The model endpoints do not run inference, and MCP tools return synthetic
+results without executing commands or contacting real infrastructure.
+Samba advertises Apple's Time Machine extensions, but a complete Time Machine
+backup and restore has not been verified. Opaque SSH/SMB relays record
+connections and relay outcomes; they do not detect login success, credential
+use, shell commands, or individual SMB reads and writes.
+
 SSH and SMB run inside a fresh memory-only guest. It has no network adapter,
 host folders, clipboard, disk image, Keychain access, camera, microphone, or
-graphics device. The guest disappears when the deep decoy stops. Any file a
-visitor writes is synthetic and lost with that guest.
+graphics device. The guest disappears when the deep decoy stops. Files a
+visitor writes stay in guest memory and are lost with that guest.
 
 The five service cards are grouped under one host and share one lifecycle
 control. The hostname and persona are release-managed so the surfaces cannot
@@ -747,9 +777,10 @@ Squirrel Scouts is an advanced reconnaissance and deception subsystem that makes
 4. **Port Forwarding** (pfctl on macOS, iptables on Linux) transparently redirects privileged ports to the mimic servers
 5. **mDNS Services** are registered under persistent, device-appropriate hostnames. You can edit a fake host's hostname, and the change applies to every service sharing its IP.
 
-The result is a set of internally consistent fake hosts whose advertised ports
-resemble real systems already present on the network. Supported HTTP credential
-routes trigger alerts when accessed.
+The result is a set of grouped fake hosts whose advertised service samples
+resemble systems already present on the network. Supported HTTP bait routes
+record decoy trips when requested. Critical alerts require recognized credential
+submission in a supported request, not merely downloading a bait file.
 
 On macOS, proxy-ARP virtual IPs share the Mac's physical-interface MAC address.
 The macOS helper selects a physical Ethernet or Wi-Fi LAN. If a VPN owns the
@@ -787,7 +818,7 @@ The **Run Scout** button triggers an immediate scout cycle (useful after adding 
 
 Shows all deployed fake hosts in a card grid. Each card displays:
 
-- **Name** — Derived from the source device being mimicked (e.g., "Mimic: tp-link-plug")
+- **Name:** An ordinary generated hostname, such as `automation.local`, with optional validated AI naming for some new hosts
 - **Status badge** — Active, Stopped, or Degraded
 - **Virtual IP** — The allocated IP address on your subnet
 - **Services** — Every observed port and protocol advertised by the fake host
@@ -819,17 +850,24 @@ Lists all collected service fingerprints in a scrollable table:
 
 ### Fake-host credential routes
 
-The mimic system exposes synthetic credential bait only on credible supported
-HTTP routes. Banner-only services, including SSH in this release, do not claim
-to implement a full authentication server.
+The mimic system adds synthetic bait files to one observed HTTP service per
+host. Without a supported HTTP route, no credential bait is planted. A generic
+mimic's SSH banner does not implement SSH negotiation or authentication;
+Studio's separate guest provides real SSH/SFTP and SMB.
 
 | Category | Credential Strategy |
 |----------|-------------------|
-| Smart Home | Home Assistant-style tokens in API error responses + login forms |
-| NAS / File Share | `passwords.txt` + SSH keys in directory listings |
+| Smart Home | HA-style token at the generated token's bait-file path |
+| NAS / File Share | `passwords.txt` and `/.ssh/id_rsa` bait routes |
 | Dev Server | `.env` files with API keys |
-| Camera | Basic auth credentials in camera config pages |
-| Generic | API keys in JSON error responses |
+| Camera | Password pairs in `passwords.txt`; recognized when submitted through supported authentication requests |
+| Generic, Media, Printer, Router | Password pairs in `passwords.txt` on a supported HTTP service |
+
+These are added text-file routes; the runtime does not insert secrets into the
+copied source page's login form, camera configuration, or JSON error response.
+Classic `.env` detection compares the generated credential value, which is
+the whole file; reuse of an individual key from that file is not guaranteed
+to be recognized. Use the exact supported bait/request format when testing.
 
 ---
 
@@ -837,7 +875,10 @@ to implement a full authentication server.
 
 ### Alert Feed
 
-The **Alerts** tab shows a chronological feed of alerts within the 90-day retention window. By default, only **active (undismissed) alerts** are shown. Choose **Actions → Show History** in the toolbar to include previously dismissed alerts.
+The **Alerts** tab shows stored alerts. Retention defaults to 90 days; active
+incidents and their linked alerts are preserved beyond that age. By default,
+only **active (undismissed) alerts** are shown. Choose **Actions → Show History**
+to include previously dismissed alerts.
 
 All timestamps in the app use local system time in
 `YYYY-MM-DD HH:MM:SS` format.
@@ -862,18 +903,18 @@ Every individual connection is still retained in the decoy's forensic log.
 
 | Type | Severity | Meaning |
 |------|----------|---------|
-| Credential Trip | Critical | A planted credential was used in an authentication attempt |
-| Rejected Device Reappearance | Critical | A device you flagged as unauthorized has returned |
-| Decoy Trip | High | Something connected to a decoy service |
-| New Device | High | An unknown device joined your network |
+| Credential Trip | Critical | A supported HTTP decoy recognized submitted planted credentials; guest SSH/SMB login is not inspected |
+| Decoy Trip | High | Unexpected decoy activity; automatic printer discovery is retained without an intrusion alert |
 | Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
-| Device Verification | Medium | A device reconnected with a different MAC but partial fingerprint match |
-| Behavioral Anomaly | Medium | A device deviated from its learned connection baseline |
-| Port Risk | Medium | A device is exposing a potentially risky port (e.g., open telnet, unencrypted management interface) |
-| Vendor Advisory | Medium | A device's manufacturer has a known security advisory |
-| Sensor Offline | Low | The sensor service stopped or became unreachable |
-| Learning Complete | Low | The 48-hour learning period has finished |
-| Review Reminder | Low | Devices have been in "unknown" trust status for an extended period |
+| ARP Ownership Conflict | High | The scan cannot establish a unique IP/MAC owner |
+| Sensor Disconnected | Medium | The Mac app has been disconnected for five minutes; this alert is local to the app |
+
+New-device, MAC-change, and verification events exist in the sensor, but there
+is no runtime subscriber turning them into alert-feed rows. Behavioral anomaly,
+learning-complete, vendor-advisory, and review-reminder types or standalone
+classes are also present without active runtime producers. Rejected-device
+reappearance is not an implemented alert type. These definitions are not
+promises of automatic notifications.
 
 ### Grouped Security Alerts
 
@@ -907,7 +948,7 @@ Click any alert in the feed to open a detail sheet showing the full context of t
 - **Source** — IP address, MAC address (if the device was identified), hostname, vendor, and device ID
 - **Intrusion Details** — Folded connection count, per-service totals, latest destination port, protocol, first and last seen times, request path (for HTTP-based detections), and detection method
 - **Recent Connections** — Up to 50 timestamped service and port entries represented by a folded decoy alert
-- **Credential Access** (only for credential trip alerts) — Which planted credential was accessed and the request path used
+- **Credential Use** (only for credential trip alerts): Which planted value was recognized in the submitted request and the request path
 - **Decoy** — Which decoy was tripped, with name and ID
 
 Click **Done** to close the detail sheet.
@@ -970,7 +1011,13 @@ devices and verified-free virtual IPs.
 
 Configure how alerts are delivered. Each method has an enable/disable toggle and a minimum severity picker (All, Medium+, High+, Critical only):
 
-**Push Notifications** — macOS system notifications for alerts even when the app is in the background.
+**macOS Notifications:** Local Notification Center banners and sounds, subject
+to macOS permission and Focus settings. The paired app must be running.
+
+APNs sender and relay source is present for manual sensor configuration with
+an enabled delivery method, relay URL, relay credentials, and device token.
+The app does not register an APNs token, and this repository contains no iPhone
+app. APNs delivery is not a ready-to-enable iPhone/Mac feature in Settings.
 
 **Menu Bar Alerts** — The menu bar icon changes color to indicate alert status.
 
@@ -987,11 +1034,14 @@ Controls how strictly devices must match their composite fingerprint to be auto-
 
 | Setting | Threshold | Behavior |
 |---------|-----------|----------|
-| **Relaxed** | 0.60 | More permissive — fewer verification alerts, but slightly higher chance of misidentification |
+| **Relaxed** | 0.60 | More permissive, with fewer verification-needed events and a higher chance of misidentification |
 | **Standard** | 0.75 | Default — balanced between convenience and security |
-| **Strict** | 0.90 | More restrictive — more verification alerts, but stronger identity assurance |
+| **Strict** | 0.90 | More restrictive, requiring a closer fingerprint match for auto-approval |
 
-When a returning device's fingerprint confidence falls between 0.50 and the threshold, you'll get a Device Verification Alert instead of auto-approval.
+When a returning device's fingerprint confidence falls between 0.50 and the
+threshold, the device manager publishes a verification-needed event instead of
+auto-approval. This runtime does not convert that event into an alert-feed row;
+review device identity and trust in Devices.
 
 ### Credential Decoys
 
@@ -1002,10 +1052,11 @@ File Share decoys after a sensor restart. Existing decoys retain their stored
 filenames. This setting does not change Studio Build Mac's real SMB shares or
 SSH files, which use their own persona content and synthetic credentials.
 
-Synthetic credentials are exposed on supported HTTP decoy routes. When an
-intruder requests a planted endpoint such as `/.env` or `/passwords.txt`, a
-**Critical** severity "Credential Accessed" alert fires immediately. Services
-that only replay a protocol banner do not accept or validate credentials.
+Synthetic credentials are exposed on supported HTTP decoy routes. Requesting
+`/.env` or `/passwords.txt` records ordinary decoy activity. A **Critical**
+credential alert requires a supported handler to recognize a planted value
+submitted in the request. Banner-only services do not implement authentication;
+Studio's opaque SSH/SMB relays do not inspect credential use.
 
 ### DNS Canary Status
 
@@ -1074,19 +1125,22 @@ The sensor uses AI device classification only when the local signature database
 cannot fully classify a newly discovered device. It waits until the scan's port
 and discovery enrichment is complete, then the prompt can include the device's
 OUI prefix, sanitized DNS and mDNS names, open TCP port numbers, detected
-service names, DHCP option codes, mDNS service types, and available UPnP name,
+service names, mDNS service types, and available UPnP name,
 manufacturer, model, and server metadata. It does not include fingerprint
 hashes, connection destinations, the device's full MAC address, or any device
 IP address. An accepted response supplies manufacturer, device type, model,
 and confidence. AI does not analyze alerts, inspect packet contents, choose
 decoy targets, or take autonomous action.
 
+The classifier can accept DHCP option codes when supplied, but the current
+scan loop does not collect them.
+
 Fake hosts use simple home and business names such as `files`, `media`,
 `office`, `backup`, `printer`, and `automation`. SquirrelOps does not add a
 generic numeric or hexadecimal host identifier unless several real hostnames
 show that the network uses terminal identifiers. When AI is configured, the
 sensor sends a bounded, sanitized sample of observed real-device hostnames and
-asks for pattern-aware suggestions for at most half of a new deployment batch.
+asks for pattern-aware suggestions for half of a new deployment batch, rounded up.
 Suggestions are validated locally, cannot reuse real or sensor hostnames, and
 never rename an existing fake host. A failed or invalid suggestion falls back
 to deterministic naming without interrupting deployment.
@@ -1191,27 +1245,34 @@ same stable sensor process is still initializing. Build Local Sensor keeps
 checking automatically for 20 minutes and shows how long it has waited. The
 Sensor Not Responding screen appears only after that recovery window expires.
 
-The app reconnects automatically on a 30-second interval. After 5 minutes of disconnection, it generates a Low-severity "Sensor Offline" alert.
+The app reconnects automatically on a 30-second interval. After five minutes
+of disconnection, it adds a Medium-severity **Sensor Disconnected** alert to
+the local app view; this is not a sensor-persisted alert.
 
 ### No Alerts Appearing
 
 **Symptoms:** Sensor is connected but no alerts show up.
 
 **Possible causes:**
-- **Still in learning mode** — Anomaly alerts are suppressed during the first 48 hours. Decoy trip alerts still fire during learning. Check the dashboard for the learning mode progress bar.
-- **No new devices have joined** — If your network is stable, New Device alerts won't fire.
+- **Unsupported alert expectation:** Automatic behavioral, new-device, and rejected-device-reappearance alerts are not connected to the runtime. Check Devices for inventory changes.
 - **Decoys haven't been deployed** — Check the Decoys tab. If no decoys are deployed, the sensor may not have found suitable ports or addresses.
 
 ### Decoy Shows "Degraded"
 
 **Symptoms:** A decoy card shows a "Degraded" status badge.
 
-**What happened:** The decoy crashed 3 times within 5 minutes. The sensor stopped trying to restart it automatically.
+**What happened:** The service could not be fully started or published. Causes
+include unavailable networking, helper failure, missing Studio artifacts,
+packet-filter checks, or Bonjour registration failure. A Degraded badge does
+not establish that a decoy crashed three times.
 
 **What to do:**
 1. Click the **Restart** button on the decoy card
 2. If it degrades again, check the sensor logs for the underlying error
-3. The sensor also retries degraded decoys automatically every 30 minutes during health checks
+3. Classic listeners saved as degraded are retried after scans; enabled Studio
+   startup failures have their separate scan-driven retry. Classic periodic
+   crash checks and the standalone 30-minute recovery method are not scheduled
+   by this runtime.
 
 ### Sensor Shows 0 Devices (macOS)
 
@@ -1340,14 +1401,17 @@ material.
 
 ### What Stays on Your Network
 
-Everything, by default. All device data, alert history, scan results, and configuration are stored in a local SQLite database on the sensor. The macOS app communicates with the sensor over your local network using TLS-encrypted connections with certificates exchanged during pairing.
+Device inventory, alert history, scan results, and decoy evidence use local
+SQLite. Non-secret configuration uses local YAML, configuration credentials
+use an encrypted secret store, and the app's pairing keys use macOS Keychain.
+After pairing, app management traffic uses mutual TLS over your local network.
 
 ### What Can Leave Your Network (Only If You Enable It)
 
 | Feature | Data Sent | Destination | How to Disable |
 |---------|-----------|-------------|----------------|
-| **Push Notifications** | Alert title and body text | Apple Push Notification Service (via relay) | Toggle off in Settings > Alert Methods |
-| **Cloud AI Classification and Decoy Naming** | Classification: OUI prefix, sanitized DNS and mDNS names, open port numbers, detected services, DHCP option codes, mDNS service types, and available UPnP metadata. Naming: a bounded, sanitized sample of observed hostnames. No fingerprint hashes, connection destinations, IP addresses, full MAC address, packet contents, alerts, or credentials. | OpenRouter, Fireworks.ai, or your configured OpenAI-compatible provider, using your own API key | Choose **None** or switch to Lite |
+| **Manually configured APNs relay** | Device token, alert title/body, type, and severity | Your configured relay and Apple Push Notification Service | Disable the sensor's `alert_methods.push` or `alert_methods.apns` configuration; token registration is not implemented in the app |
+| **Cloud AI Classification and Decoy Naming** | Classification: OUI prefix, sanitized DNS and mDNS names, open port numbers, detected services, mDNS service types, and available UPnP metadata. DHCP option codes are supported if supplied, but are not collected by the current scanner. Naming: a bounded, sanitized hostname sample. No fingerprint hashes, connection destinations, device IPs, full MAC addresses, packet contents, alerts, or credentials. | Your selected cloud or custom AI provider, using your own API key | Choose **None** or switch to Lite |
 | **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers." | Your Slack workspace | Toggle off in Settings > Alert Methods |
 | **Update Checks** | Standard request metadata, such as your public IP address and HTTP headers | GitHub Releases API | Don't click "Check for Updates" |
 
@@ -1356,22 +1420,29 @@ stay on that network.
 
 ### Certificate Pinning
 
-After pairing, the macOS app pins the sensor's TLS certificate by SHA-256 fingerprint. This prevents man-in-the-middle attacks on your local network — even if someone could intercept traffic between the app and sensor, they can't impersonate the sensor without the original certificate.
+After pairing, the macOS app checks the sensor's TLS certificate against its
+saved SHA-256 fingerprint and rejects a substituted certificate. Mutual TLS
+also requires each peer to prove possession of its corresponding private key.
 
 ### What the Sensor Does NOT Do
 
-- **No deep packet inspection** — Traffic analysis is limited to connection metadata (source, destination, port, protocol, byte count). Payload content is never inspected.
-- **No traffic modification** — The sensor never blocks, throttles, or modifies real network traffic. It is a detection system, not a firewall.
+- **No passive packet inspection:** The sensor does not capture unrelated devices' traffic. Scout probes read bounded service samples; decoys inspect HTTP requests sent to them. Studio SSH/SMB relays observe connection metadata without parsing those protocols.
+- **Decoy forwarding:** Packet-filter rules publish and isolate owned virtual
+  decoy addresses. The product does not implement a general device-blocking
+  policy. Reserve its address pool and investigate reported IP conflicts.
 - **No scanning beyond your network** — The sensor only monitors subnets it has direct Layer 2 adjacency to.
-- **No telemetry** — No usage data, device inventories, or analytics are sent anywhere.
+- **No product analytics:** There is no usage-analytics sender. Optional cloud
+  classification and alert delivery send the specific data listed above.
 - **No auto-updates** — The sensor never updates itself without your explicit confirmation.
 
 ### Virtual IP Safety
 
 Virtual IPs used by mimic and Studio Build Mac decoys are:
-- Allocated from helper-enforced offsets 200 through 250 from the observed network base on macOS to avoid DHCP conflicts
+- Allocated from helper-enforced offsets 200 through 250 from the observed network base on macOS. Reserve that pool outside DHCP; occupancy checks cannot detect sleeping lease holders.
 - Excluded from the sensor's own scan loop to prevent false device discoveries
-- Automatically evacuated if a real device claims the same IP. The affected fake host is stopped and the alias is removed before the address can answer again.
+- Scheduled for evacuation if an active real device claims the same IP. The
+  affected fake host stops and its alias is withdrawn when cleanup succeeds;
+  failed cleanup retains isolation rules rather than authorizing exposure.
 
 On macOS, the virtual IPs are published through proxy ARP and therefore share
 the sensor Mac's physical MAC address. The sensor advertises distinct mDNS
@@ -1383,9 +1454,13 @@ Ethernet or VM-style network architecture.
 
 On macOS, the sensor uses pfctl packet filter rules (loaded into a dedicated `com.apple/squirrelops` anchor) to redirect privileged ports to mimic servers. These rules:
 - Only affect traffic destined for virtual IPs (never your real devices)
-- Are automatically cleaned up on sensor shutdown
+- Are removed during orderly sensor shutdown when cleanup succeeds; failed alias removal retains isolation rules for safety
 - Do not modify the system's `pf.conf` or interfere with existing firewall rules
 
 ### Credential Safety
 
-The only credentials the sensor stores are **synthetic credentials it generates for deception**. These are clearly marked as synthetic in the database (`planted_credentials` table with `credential_type` and `planted_location` columns). The sensor never stores your real service credentials.
+The `planted_credentials` table contains generated deception bait. Separately,
+operator-supplied Home Assistant tokens, AI keys, Slack webhook URLs, and APNs
+delivery secrets are stored in the encrypted secret store and redacted from
+configuration responses. Pairing and TLS keys are also retained locally.
+Synthetic bait must never be replaced with real service credentials.
