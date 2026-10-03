@@ -148,6 +148,25 @@ fakes. `SQUIRRELOPS_TEST_LIVE_LAN=1` enables observation, not network mutation.
 
 ## Live acceptance gate, not executed
 
+October 2 update: the [Mini eight-phase result](2026-10-02-mini-a5-eight-phase-result.md)
+now records listener replacement with real closing PF states, packet-correlated
+denial observations, failure injection, recovery and cleanup. The heading above
+is retained for existing links and the original September 26 record. This is
+partial coverage of the matrix below, not full A5 sign-off. The subsequent
+[TCP-edge result](2026-10-02-mini-a5-edge-result.md) verifies simultaneous
+exact/wildcard rejection and records established cross-UID bind refusal and
+half-open state closure before replacement. Those kernel constraints need a
+qualified review disposition, not a claimed retained-state replacement pass.
+Filter-attribution qualifications remain open. The
+[MacBook upgrade result](2026-10-02-macbook-upgrade-result.md) now covers the
+actual 2.0.3-to-2.1.0 package upgrade, saved-record preservation and replacement
+of 15 unconditional `rdr pass` rules. The
+[completed saved-evidence review](2026-10-02-saved-release-evidence-result.md)
+confirms both archived state listings were empty and all original aliases are
+present in a later read-only check. It resolves the Mini counter-format and
+child-event omissions, but not the kernel-limited cases or upgrade with existing
+states. This remains partial coverage of case 6, not full A5 sign-off.
+
 Use an isolated Mac or obtain approval for an exact maintenance scope on this
 Mac. Before any live write, identify the interface, unused policy-valid test
 VIP, anchor, listener ports, and test UIDs. Capture the existing rules, relevant

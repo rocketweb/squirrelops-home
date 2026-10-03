@@ -8,11 +8,26 @@ struct NetworkMapView: View {
         "infrastructure", "computer", "server", "phone", "media", "iot", "unknown",
     ]
 
-    private var groupedDevices: [(category: String, devices: [DeviceSummary])] {
-        let grouped = Dictionary(grouping: devices) { $0.deviceType }
+    var groupedDevices: [(category: String, devices: [DeviceSummary])] {
+        let grouped = Dictionary(grouping: devices) { Self.displayCategory(for: $0.deviceType) }
         return Self.categoryOrder.compactMap { category in
             guard let items = grouped[category], !items.isEmpty else { return nil }
             return (category: category, devices: items)
+        }
+    }
+
+    // These are display groups, not the sensor's device taxonomy. Preserve
+    // legacy values and keep future/unrecognized types visible in Unknown.
+    private static func displayCategory(for deviceType: String) -> String {
+        switch deviceType {
+        case "infrastructure", "network_equipment": return "infrastructure"
+        case "computer", "sbc": return "computer"
+        case "server", "nas": return "server"
+        case "phone", "smartphone": return "phone"
+        case "media", "smart_tv", "speaker", "smart_speaker", "streaming",
+             "gaming_console", "game_console": return "media"
+        case "iot", "camera", "thermostat", "smart_home", "smart_lighting", "iot_device": return "iot"
+        default: return "unknown"
         }
     }
 

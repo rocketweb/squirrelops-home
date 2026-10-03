@@ -1,5 +1,9 @@
 # Home 2.1 publication readiness
 
+Update: the [October 2 follow-up](2026-10-02-release-gates.md) records PR #52's
+merge and green post-merge CI. The GitHub snapshot below is historical; the
+live A5 and final signed-artifact gates remain open.
+
 Checked October 1, 2026, Eastern time (October 2 UTC). **Not ready to publish.**
 The resolver-fix Mini acceptance is complete. Live PF failure-case acceptance,
 review/CI for the final source, and release-signed artifact acceptance remain.

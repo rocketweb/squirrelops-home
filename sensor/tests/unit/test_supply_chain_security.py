@@ -48,6 +48,29 @@ UniqueKeyLoader.add_constructor(
 )
 
 
+def test_home_release_verification_docs_use_only_home_artifacts() -> None:
+    documentation = (REPO_ROOT / "docs/RELEASE_SECURITY.md").read_text(encoding="utf-8")
+    verification = documentation.split("## Independent verification\n", 1)[1].split(
+        "## ", 1
+    )[0]
+    commands = "\n".join(re.findall(r"```bash\n(.*?)```", verification, re.DOTALL))
+    assert "RELEASE_TAG=home-vX.Y.Z" in commands
+    assert "--signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml" in commands
+    for sensor_only in ("install.sh", "oci://", "release-sensor.yml", "sensor-v"):
+        assert sensor_only not in commands, f"Home verification includes {sensor_only}"
+    for home_asset in (
+        "RELEASE-VERIFICATION.md",
+        "SquirrelOpsHome-X.Y.Z.pkg",
+        "squirrelops-home.rb",
+        "release-metadata.json",
+        "SHA256SUMS",
+    ):
+        assert home_asset in commands
+    assert "shasum -a 256 -c SHA256SUMS" in commands
+    assert "pkgutil --check-signature SquirrelOpsHome-X.Y.Z.pkg" in commands
+    assert "spctl --assess --type install --verbose=2 SquirrelOpsHome-X.Y.Z.pkg" in commands
+
+
 def test_packaged_python_runtime_is_sanitized_and_relocated(tmp_path: Path) -> None:
     build_root = tmp_path / "checkout"
     python_dir = build_root / "build/pkg/sensor-build/python"
