@@ -245,7 +245,10 @@ def test_release_container_build_inputs_are_digest_pinned() -> None:
     assert len(external_references) == 2
     assert all(re.search(r"@sha256:[0-9a-f]{64}$", reference) for reference in external_references)
     assert image_references.count("app") == 2
-    assert "ghcr.io/astral-sh/uv:0.10.2@" in dockerfile
+    assert re.fullmatch(
+        r"ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+@sha256:[0-9a-f]{64}",
+        external_references[0],
+    )
     assert 'CMD ["/app/.venv/bin/python", "-m", "squirrelops_home_sensor"]' in (dockerfile)
     assert 'CMD ["uv", "run"' not in dockerfile
 
