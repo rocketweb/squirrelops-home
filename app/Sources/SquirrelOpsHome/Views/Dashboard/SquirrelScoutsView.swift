@@ -206,12 +206,7 @@ struct SquirrelScoutsView: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack {
-            Text("Squirrel Scouts")
-                .font(Typography.h3)
-                .tracking(Typography.h3Tracking)
-                .foregroundStyle(Theme.textPrimary(colorScheme))
-            Spacer()
+        PageHeader(title: "Squirrel Scouts") {
             if let status = scoutStatus {
                 Text(status.enabled ? "Enabled" : "Disabled")
                     .font(Typography.bodySmall)
@@ -220,7 +215,6 @@ struct SquirrelScoutsView: View {
                         : Theme.textTertiary(colorScheme))
             }
         }
-        .padding(Spacing.md)
     }
 
     // MARK: - Content
@@ -263,7 +257,7 @@ struct SquirrelScoutsView: View {
                         Text(scoutStatus?.isRunning == true ? "Scout Running" : "Run Scout")
                             .font(Typography.bodySmall)
                     }
-                    .foregroundStyle(Theme.accentDefault(colorScheme))
+                    .foregroundStyle(Theme.accentText(colorScheme))
                 }
                 .buttonStyle(.plain)
                 .disabled(
@@ -323,11 +317,13 @@ struct SquirrelScoutsView: View {
                 .font(.system(size: 24))
                 .foregroundStyle(Theme.textTertiary(colorScheme))
             VStack(alignment: .leading, spacing: Spacing.xs) {
-                Text("Scouts Not Enabled")
+                Text(loadError == nil ? "Scouts Not Enabled" : "Scout Status Unavailable")
                     .font(Typography.h4)
                     .tracking(Typography.h4Tracking)
                     .foregroundStyle(Theme.textSecondary(colorScheme))
-                Text("Switch to Standard or Full profile to enable Squirrel Scouts.")
+                Text(loadError == nil
+                    ? "Switch to Standard or Full profile to enable Squirrel Scouts."
+                    : "Reconnect to the sensor to load scout status and available actions.")
                     .font(Typography.bodySmall)
                     .foregroundStyle(Theme.textTertiary(colorScheme))
             }
@@ -366,7 +362,7 @@ struct SquirrelScoutsView: View {
                         Text("Fill Capacity")
                             .font(Typography.bodySmall)
                     }
-                    .foregroundStyle(Theme.accentDefault(colorScheme))
+                    .foregroundStyle(Theme.accentText(colorScheme))
                 }
                 .buttonStyle(.plain)
                 .disabled(
@@ -476,7 +472,7 @@ struct SquirrelScoutsView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(Theme.accentDefault(colorScheme))
+                            .foregroundStyle(Theme.accentText(colorScheme))
                             .disabled(
                                 isSavingHostname
                                 || hostnameDraft.trimmingCharacters(
@@ -491,7 +487,9 @@ struct SquirrelScoutsView: View {
                                 .font(Typography.h4)
                                 .tracking(Typography.h4Tracking)
                                 .foregroundStyle(Theme.textPrimary(colorScheme))
-                                .lineLimit(1)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .help(mimicHostTitle(group))
 
                             Button {
                                 beginEditingHostname(group)
@@ -500,7 +498,7 @@ struct SquirrelScoutsView: View {
                                     .font(.system(size: 11))
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(Theme.accentDefault(colorScheme))
+                            .foregroundStyle(Theme.accentText(colorScheme))
                             .help("Edit hostname for every service on this fake host")
                         }
                     }
@@ -537,7 +535,7 @@ struct SquirrelScoutsView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(Theme.accentDefault(colorScheme))
+                        .foregroundStyle(Theme.accentText(colorScheme))
                         .disabled(lifecycleControlsDisabled)
                     }
 
@@ -622,7 +620,7 @@ struct SquirrelScoutsView: View {
                 Text(":\(mimic.port)")
                     .font(Typography.mono)
                     .tracking(Typography.monoTracking)
-                    .foregroundStyle(Theme.accentDefault(colorScheme))
+                    .foregroundStyle(Theme.accentText(colorScheme))
                 if let serviceProtocol = mimic.serviceProtocol,
                    !serviceProtocol.isEmpty {
                     Text(serviceProtocol.uppercased())
@@ -702,7 +700,7 @@ struct SquirrelScoutsView: View {
                     Text(":\(String(profile.port))")
                         .font(Typography.mono)
                         .tracking(Typography.monoTracking)
-                        .foregroundStyle(Theme.accentDefault(colorScheme))
+                        .foregroundStyle(Theme.accentText(colorScheme))
                 }
                 HStack(spacing: Spacing.sm) {
                     if let service = profile.serviceName {

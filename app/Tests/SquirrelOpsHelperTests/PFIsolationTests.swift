@@ -16,7 +16,7 @@ struct PFIsolationTests {
         (interface: "en0", address: "192.168.1.18"),
     ]
 
-    @Test("Builds redirect-pass and default-deny alias rules")
+    @Test("Builds owner-checked tagged redirects and default-deny alias rules")
     func buildsIsolatedRuleset() throws {
         let rules = try buildPFRules(
             forwardingRules: [forwardingRule],
@@ -24,19 +24,19 @@ struct PFIsolationTests {
                 "ip": "192.168.1.200",
                 "direct_ports": [8443, 8080],
             ]],
-            interface: "en0"
+            interface: "en0", sensorUID: 550
         )
 
         #expect(
             rules.contains(
-                "rdr pass on en0 inet proto tcp from any to 192.168.1.200 "
-                    + "port 80 -> 192.168.1.200 port 10080"
+                "rdr on en0 inet proto tcp from any to 192.168.1.200 "
+                    + "port 80 tag squirrelops_192_168_1_200_80_10080 -> 192.168.1.200 port 10080"
             )
         )
         #expect(
             rules.contains(
                 "pass in quick on en0 inet proto tcp from any to 192.168.1.200 "
-                    + "port { 8080, 8443 }"
+                    + "port { 8080, 8443 } user 550"
             )
         )
         #expect(
@@ -50,9 +50,9 @@ struct PFIsolationTests {
                 == "block drop in quick inet from any to 192.168.1.200"
         )
 
-        // The implementation-only high port is reachable through rdr-pass,
-        // but a direct scan of :10080 must hit the final block.
-        #expect(!rules.contains(where: { $0.contains("to 192.168.1.200 port 10080") }))
+        // A direct scan has no translation tag and must hit the final block.
+        #expect(rules.filter { $0.hasPrefix("pass ") && $0.contains("port 10080") }
+            .allSatisfy { $0.contains("user 550") && $0.contains("tagged squirrelops_") })
     }
 
     @Test("Protects aliases that only expose redirected ports")
@@ -63,13 +63,14 @@ struct PFIsolationTests {
                 "ip": "192.168.1.200",
                 "direct_ports": [Int](),
             ]],
-            interface: "en0"
+            interface: "en0", sensorUID: 550
         )
 
-        #expect(rules.count == 3)
-        #expect(rules[0].hasPrefix("rdr pass "))
-        #expect(rules[1].contains("proto icmp"))
-        #expect(rules[2].hasPrefix("block drop in quick"))
+        #expect(rules.count == 4)
+        #expect(rules[0].hasPrefix("rdr on "))
+        #expect(rules[1].contains("user 550") && rules[1].contains("tagged squirrelops_"))
+        #expect(rules[2].contains("proto icmp"))
+        #expect(rules[3].hasPrefix("block drop in quick"))
     }
 
     @Test("Default deny covers every ingress interface")
@@ -80,7 +81,7 @@ struct PFIsolationTests {
                 "ip": "192.168.1.200",
                 "direct_ports": [Int](),
             ]],
-            interface: "en0"
+            interface: "en0", sensorUID: 550
         )
 
         #expect(
@@ -101,7 +102,7 @@ struct PFIsolationTests {
                 ["ip": "192.168.1.200", "direct_ports": [8080]],
                 ["ip": "192.168.1.200", "direct_ports": [8443]],
             ],
-            interface: "en0"
+            interface: "en0", sensorUID: 550
         )
 
         #expect(rules.count == 3)
@@ -369,7 +370,7 @@ struct PFIsolationTests {
                 "ip": "192.168.1.200",
                 "direct_ports": [8080, 8443],
             ]],
-            interface: "en0"
+            interface: "en0", sensorUID: 550
         )
         let result = try runPFCTL(
             arguments: ["-n", "-f", "-"],

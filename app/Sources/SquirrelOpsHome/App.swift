@@ -5,12 +5,13 @@ import SwiftUI
 @main
 struct SquirrelOpsHomeApp: App {
     @State private var appState = AppState()
-    @State private var connectionService: SensorConnectionService?
+    @State private var connectionOwner = SensorConnectionOwner()
     @State private var pairingManager = PairingManager(
         client: SensorClient(
             pairingBaseURL: URL(string: "https://localhost")!
         )
     )
+    @State private var helpGuideNavigation = HelpGuideNavigation()
     @AppStorage("appearanceMode") private var appearanceMode: String = "system"
     private let notificationService = MacNotificationService.shared
 
@@ -20,7 +21,6 @@ struct SquirrelOpsHomeApp: App {
         // redaction on the sensor does not reach a file already written.
         ResponseCacheHygiene.purgeLegacyResponseCacheIfNeeded()
         FontRegistration.registerAllFonts()
-        HelperManager.installIfNeeded()
     }
 
     var body: some Scene {
@@ -63,8 +63,7 @@ struct SquirrelOpsHomeApp: App {
                 // Wire up repair action for auth-failed banner
                 appState.onRepairRequested = { [weak appState] in
                     guard let appState else { return }
-                    connectionService?.disconnect()
-                    connectionService = nil
+                    connectionOwner.disconnect()
                     let pairedSensor = appState.pairedSensor
                     // Clear persisted pairing from Keychain
                     if let pairedSensor {
@@ -86,13 +85,17 @@ struct SquirrelOpsHomeApp: App {
                 }
             }
         }
-        .defaultSize(width: 1080, height: 720)
+        .defaultSize(
+            width: MainWindowPresentation.setup.contentSize.width,
+            height: MainWindowPresentation.setup.contentSize.height
+        )
         .commands {
-            SquirrelOpsHelpCommands()
+            SquirrelOpsHelpCommands(navigation: helpGuideNavigation)
+            DecoyRefreshCommands()
         }
 
         Window("SquirrelOps Home Help", id: AppWindow.help.rawValue) {
-            HelpGuideView()
+            HelpGuideView(navigation: helpGuideNavigation)
                 .onAppear {
                     NSApp.setActivationPolicy(.regular)
                     NSApp.activate(ignoringOtherApps: true)
@@ -103,12 +106,10 @@ struct SquirrelOpsHomeApp: App {
 
     private func connectToSensor(_ sensor: PairingManager.PairedSensor) {
         appState.pairedSensor = sensor
-
-        let caCertData: Data
-        let clientIdentity: SecIdentity
         do {
-            caCertData = try PairingManager.loadCACertificateData(for: sensor)
-            clientIdentity = try PairingManager.loadClientIdentity(for: sensor)
+            try connectionOwner.connect(to: sensor) {
+                try makeConnection(to: sensor)
+            }
         } catch {
             // Missing or unreadable paired credentials are an authentication
             // failure. Never reinterpret them as pairing-time TOFU.
@@ -116,6 +117,11 @@ struct SquirrelOpsHomeApp: App {
             appState.connectionState = .authFailed
             return
         }
+    }
+
+    private func makeConnection(to sensor: PairingManager.PairedSensor) throws -> SensorConnectionService {
+        let caCertData = try PairingManager.loadCACertificateData(for: sensor)
+        let clientIdentity = try PairingManager.loadClientIdentity(for: sensor)
 
         let client = SensorClient(
             baseURL: sensor.baseURL,
@@ -135,7 +141,7 @@ struct SquirrelOpsHomeApp: App {
         let wsSession = URLSession(configuration: .default, delegate: wsDelegate, delegateQueue: nil)
         let wsManager = WebSocketManager(url: wsURL, session: wsSession)
 
-        let service = SensorConnectionService(
+        return SensorConnectionService(
             sensorClient: client,
             webSocketManager: wsManager,
             appState: appState,
@@ -148,13 +154,5 @@ struct SquirrelOpsHomeApp: App {
                 }
             }
         )
-        connectionService = service
-
-        Task {
-            await service.connect(
-                baseURL: sensor.baseURL,
-                certFingerprint: sensor.certFingerprint
-            )
-        }
     }
 }

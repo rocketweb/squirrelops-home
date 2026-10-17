@@ -74,6 +74,13 @@ async def _authenticate(
     except (TimeoutError, WebSocketDisconnect):
         return None
 
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
+        raw = None
+
+    if not isinstance(raw, dict):
+        await ws.send_json({"type": "auth_error", "reason": "Expected a JSON auth object."})
+        return None
+
     msg_type = raw.get("type")
 
     if msg_type != "auth":
@@ -86,7 +93,8 @@ async def _authenticate(
     tls_fingerprint = client_cert_fingerprint_from_scope(ws.scope)
     if tls_fingerprint:
         cursor = await db.execute(
-            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ?",
+            """SELECT client_name FROM pairing
+               WHERE client_cert_fingerprint = ? AND status = 'active'""",
             (tls_fingerprint,),
         )
         row = await cursor.fetchone()
@@ -113,13 +121,19 @@ async def _authenticate(
     fingerprint = raw.get("cert_fingerprint")
     token = raw.get("token")
 
+    if any(value is not None and not isinstance(value, str) for value in (fingerprint, token)):
+        await ws.send_json({"type": "auth_error", "reason": "Invalid credentials."})
+        return None
+
     if fingerprint:
         # A cert fingerprint is an identifier derived from the public client
         # cert, not a secret, so it only authenticates a locally-paired client
         # over the non-TLS dev path. Require is_local=1 to match deps.py and the
         # token path below (previously this path omitted the constraint).
         cursor = await db.execute(
-            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ? AND is_local = 1",
+            """SELECT client_name FROM pairing
+               WHERE client_cert_fingerprint = ?
+                 AND is_local = 1 AND status = 'active'""",
             (fingerprint,),
         )
         row = await cursor.fetchone()
@@ -128,7 +142,9 @@ async def _authenticate(
 
     if token:
         cursor = await db.execute(
-            "SELECT client_name FROM pairing WHERE client_cert_fingerprint = ? AND is_local = 1",
+            """SELECT client_name FROM pairing
+               WHERE client_cert_fingerprint = ?
+                 AND is_local = 1 AND status = 'active'""",
             (token,),
         )
         row = await cursor.fetchone()
@@ -270,11 +286,21 @@ async def ws_events(ws: WebSocket):
                     raw = await ws.receive_json()
                 except WebSocketDisconnect:
                     break
+                except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
+                    await ws.close(code=1007, reason="Invalid JSON message.")
+                    break
+
+                if not isinstance(raw, dict):
+                    await ws.close(code=1008, reason="Expected a JSON object.")
+                    break
 
                 msg_type = raw.get("type")
 
                 if msg_type == "replay":
                     since_seq = raw.get("since_seq", 0)
+                    if type(since_seq) is not int or not 0 <= since_seq <= 2**63 - 1:
+                        await ws.close(code=1008, reason="Invalid replay sequence.")
+                        break
                     await _replay_events(ws, db, since_seq)
 
                 elif msg_type == "pong":

@@ -7,6 +7,19 @@ import Testing
 @Suite("Codable Models")
 struct ModelsTests {
 
+    @Test("Studio diagnostics decode without breaking older sensor status")
+    func decodeDeepDecoyStatus() throws {
+        let base: [String: Any] = ["profile": "standard", "learning_mode": false,
+                                   "device_count": 1, "decoy_count": 0, "alert_count": 0]
+        let old = try JSONDecoder().decode(StatusResponse.self, from: JSONSerialization.data(withJSONObject: base))
+        #expect(old.deepDecoy == nil)
+        var updated = base
+        updated["deep_decoy"] = ["status": "degraded", "reason": "No verified virtual IP is available."]
+        let current = try JSONDecoder().decode(StatusResponse.self, from: JSONSerialization.data(withJSONObject: updated))
+        #expect(current.deepDecoy?.needsAttention == true)
+        #expect(current.deepDecoy?.reason == "No verified virtual IP is available.")
+    }
+
     // MARK: - DeviceSummary decoding
 
     @Test("Decode DeviceSummary from snake_case JSON")
@@ -434,6 +447,35 @@ struct ModelsTests {
     }
 
     // MARK: - IncidentDetail decoding
+
+    @Test("Decode folded decoy activity summary")
+    func decodeFoldedDecoyActivitySummary() throws {
+        let json = """
+        {
+            "id": 73,
+            "incident_id": 9,
+            "alert_type": "decoy.trip",
+            "severity": "high",
+            "title": "Port scan detected from 192.168.1.7",
+            "source_ip": "192.168.1.7",
+            "read_at": null,
+            "actioned_at": null,
+            "created_at": "2026-09-03T05:11:01Z",
+            "alert_count": 1,
+            "connection_count": 10,
+            "ports": [22, 445],
+            "service_counts": {"22": 4, "445": 6}
+        }
+        """.data(using: .utf8)!
+
+        let alert = try JSONDecoder().decode(AlertSummary.self, from: json)
+
+        #expect(alert.connectionCount == 10)
+        #expect(alert.ports == [22, 445])
+        #expect(alert.serviceCounts == ["22": 4, "445": 6])
+        #expect(alert.decoyActivitySummary == "10 connections · SSH 4 · SMB 6")
+        #expect(alert.decoyActivityTypeLabel == "Port scan detected")
+    }
 
     @Test("Decode IncidentDetail with child alerts")
     func decodeIncidentDetail() throws {
@@ -1021,6 +1063,41 @@ struct ModelsTests {
 
         #expect(!decoy.isActiveDeployment)
         #expect(decoy.isVirtualMimic)
+    }
+
+    @Test("Deep service is grouped as a virtual fake host")
+    func deepDecoyPresentation() {
+        let decoy = DecoySummary(
+            id: 8,
+            name: "Studio Build Mac",
+            decoyType: "deep",
+            bindAddress: "192.168.1.240",
+            port: 445,
+            status: "active",
+            connectionCount: 0,
+            credentialTripCount: 0,
+            createdAt: "2026-08-31T00:00:00Z",
+            updatedAt: "2026-08-31T00:00:00Z",
+            hostId: 3,
+            hostname: "studio-mini.local"
+        )
+
+        #expect(decoy.isDeepDecoy)
+        #expect(decoy.isVirtualHostService)
+        #expect(!decoy.isVirtualMimic)
+        #expect(!decoy.isHostListener)
+        #expect(decoy.deploymentScopeLabel == "Virtual IP")
+        #expect(OperationalDecoyInventory([decoy]).virtualHostGroups.count == 1)
+
+        let previewDeepServices = PreviewData.decoys.filter(\.isDeepDecoy)
+        #expect(previewDeepServices.count == 5)
+        #expect(
+            OperationalDecoyInventory(PreviewData.decoys)
+                .virtualHostGroups
+                .contains { group in
+                    group.hostname == "studio-mini.local" && group.services.count == 5
+                }
+        )
     }
 
     @Test("Concrete classic address is still presented as a host listener")

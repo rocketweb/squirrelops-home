@@ -134,6 +134,11 @@ stop_service_and_verify() {
     local label="$1"
     local description="$2"
     local attempts=0
+    local max_attempts=10
+    # Match the sensor's 60s ExitTimeOut, with 10s for launchd removal.
+    if [ "$label" = "com.squirrelops.sensor" ]; then
+        max_attempts=70
+    fi
 
     if ! service_is_loaded "$label"; then
         return 0
@@ -148,7 +153,7 @@ stop_service_and_verify() {
     fi
 
     while service_is_loaded "$label"; do
-        if [ "$attempts" -ge 10 ]; then
+        if [ "$attempts" -ge "$max_attempts" ]; then
             warn "${description} shutdown could not be verified; aborting uninstall."
             return 1
         fi
@@ -401,12 +406,18 @@ record_attribute_is_empty_or_missing() {
     local record="$1"
     local key="$2"
     local output
-    if ! output=$(
-        /usr/bin/dscl . -read "$record" "$key" 2>/dev/null
-    ); then
+    local read_status=0
+    output=$(
+        LC_ALL=C /usr/bin/dscl . -read "$record" "$key" 2>&1
+    ) || read_status=$?
+    # dscl can report a missing key on stderr while returning success.
+    # Require that exact response and a still-existing record, not silence
+    # or an arbitrary directory-service failure.
+    if [ "$output" = "No such key: ${key}" ]; then
         /usr/bin/dscl . -read "$record" >/dev/null 2>&1
         return
     fi
+    [ "$read_status" -eq 0 ] || return 1
     printf '%s\n' "$output" \
         | /usr/bin/awk -v expected="${key}:" '
             $1 == expected && NF == 1 { seen++ ; next }
@@ -430,8 +441,12 @@ deprovisioning_records_match_id() {
     fi
     if [ "$user_present" -eq 1 ]; then
         [ "$group_present" -eq 1 ] || return 1
-        record_value_matches_or_is_missing \
+        # Existing service accounts may use their record name as the display
+        # name. Keep the identity, shell, home and membership checks below.
+        { record_value_matches_or_is_missing \
             "/Users/${SENSOR_USER}" "RealName" "SquirrelOps Sensor" \
+            || record_value_matches_or_is_missing \
+                "/Users/${SENSOR_USER}" "RealName" "$SENSOR_USER"; } \
             && record_value_matches_or_is_missing \
                 "/Users/${SENSOR_USER}" "UserShell" "/usr/bin/false" \
             && record_value_matches_or_is_missing \

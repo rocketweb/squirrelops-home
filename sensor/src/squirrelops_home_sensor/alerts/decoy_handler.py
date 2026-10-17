@@ -38,6 +38,7 @@ from squirrelops_home_sensor.db.queries import (
 logger = logging.getLogger(__name__)
 
 _IPP_DISCOVERY_PATHS = frozenset({"/ipp/print"})
+_MAX_RECENT_CONNECTIONS = 50
 
 
 # -- Protocols for dependency injection ------------------------------------
@@ -317,9 +318,10 @@ class DecoyAlertHandler:
                 "incident_id": incident_id,
                 "read_at": None,
                 "actioned_at": None,
-                # Keep this stable. The app uses visible summary fields as the
-                # modal revision; forensic connection_count lives in detail.
                 "alert_count": None,
+                "connection_count": int(detail["connection_count"]),
+                "ports": detail["ports"],
+                "service_counts": detail["service_counts"],
                 "source_event_seq": source_event_seq,
             },
             source_id=source_ip,
@@ -397,6 +399,54 @@ class DecoyAlertHandler:
         except (TypeError, ValueError):
             connection_count = 2
 
+        service_counts: dict[str, int] = {}
+        raw_service_counts = detail.get("service_counts")
+        if isinstance(raw_service_counts, dict):
+            for raw_service_port, raw_count in raw_service_counts.items():
+                service_port = DecoyAlertHandler._coerce_int(raw_service_port)
+                count = DecoyAlertHandler._coerce_int(raw_count)
+                if service_port is not None and count is not None and count > 0:
+                    service_counts[str(service_port)] = count
+        if not service_counts:
+            prior_port = DecoyAlertHandler._coerce_int(detail.get("dest_port"))
+            if prior_port is not None:
+                prior_count = max(1, connection_count - 1)
+                service_counts[str(prior_port)] = prior_count
+        current_port = DecoyAlertHandler._coerce_int(payload.get("dest_port"))
+        if current_port is not None:
+            service_key = str(current_port)
+            service_counts[service_key] = service_counts.get(service_key, 0) + 1
+
+        recent_connections: list[dict[str, Any]] = []
+        raw_recent_connections = detail.get("recent_connections")
+        if isinstance(raw_recent_connections, list):
+            recent_connections.extend(
+                item for item in raw_recent_connections if isinstance(item, dict)
+            )
+        if not recent_connections:
+            prior_port = DecoyAlertHandler._coerce_int(detail.get("dest_port"))
+            if prior_port is not None:
+                recent_connections.append(
+                    DecoyAlertHandler._connection_evidence(
+                        {
+                            "dest_port": prior_port,
+                            "protocol": detail.get("protocol", "tcp"),
+                            "decoy_id": existing["decoy_id"],
+                            "decoy_name": detail.get("decoy_name"),
+                            "timestamp": detail.get("first_seen")
+                            or existing["created_at"],
+                        },
+                        observed_at=existing["created_at"],
+                    )
+                )
+        recent_connections.append(
+            DecoyAlertHandler._connection_evidence(
+                payload,
+                observed_at=observed_at,
+            )
+        )
+        recent_connections = recent_connections[-_MAX_RECENT_CONNECTIONS:]
+
         detail.update(
             {
                 "dest_port": payload.get("dest_port", detail.get("dest_port")),
@@ -408,8 +458,10 @@ class DecoyAlertHandler:
                 "decoy_ids": sorted(decoy_ids),
                 "endpoints": sorted(endpoints),
                 "connection_count": connection_count,
+                "service_counts": service_counts,
                 "first_seen": detail.get("first_seen") or existing["created_at"],
                 "last_seen": observed_at,
+                "recent_connections": recent_connections,
             }
         )
         if len(endpoints) >= 2:
@@ -419,6 +471,35 @@ class DecoyAlertHandler:
         if payload.get("decoy_name"):
             detail["latest_decoy_name"] = payload["decoy_name"]
         return detail
+
+    @staticmethod
+    def _connection_evidence(
+        payload: dict[str, Any],
+        *,
+        observed_at: str,
+    ) -> dict[str, Any]:
+        """Return a bounded, display-safe record for one folded connection."""
+        evidence: dict[str, Any] = {
+            "protocol": str(payload.get("protocol") or "tcp")[:32],
+            "timestamp": (
+                str(payload["timestamp"])[:64]
+                if payload.get("timestamp")
+                else observed_at
+            ),
+        }
+        dest_port = DecoyAlertHandler._coerce_int(payload.get("dest_port"))
+        if dest_port is not None:
+            evidence["dest_port"] = dest_port
+        decoy_id = DecoyAlertHandler._coerce_int(payload.get("decoy_id"))
+        if decoy_id is not None:
+            evidence["decoy_id"] = decoy_id
+        decoy_name = payload.get("decoy_name")
+        if isinstance(decoy_name, str) and decoy_name:
+            evidence["decoy_name"] = decoy_name[:128]
+        interaction_type = payload.get("interaction_type")
+        if isinstance(interaction_type, str) and interaction_type:
+            evidence["interaction_type"] = interaction_type[:64]
+        return evidence
 
     @staticmethod
     def _coerce_int(value: object) -> int | None:
@@ -480,6 +561,9 @@ class DecoyAlertHandler:
                 request_path=payload.get("request_path"),
                 credential_used=credential_used,
                 credential_id=credential_id,
+                intruder_intent=payload.get("intruder_intent"),
+                narrative_stage=payload.get("narrative_stage"),
+                interaction_type=payload.get("interaction_type"),
             )
             await increment_decoy_connection_count(self._db, decoy_id)
             await self._publish_count_changed(decoy_id)
@@ -571,6 +655,32 @@ class DecoyAlertHandler:
             "dest_port": dest_port,
             "protocol": payload.get("protocol", "tcp"),
         }
+        if alert_type == AlertType.DECOY_TRIP:
+            trip_port = self._coerce_int(dest_port)
+            observed_at = (
+                str(payload["timestamp"])[:64]
+                if payload.get("timestamp")
+                else now
+            )
+            detail_obj.update(
+                {
+                    "connection_count": 1,
+                    "ports": [] if trip_port is None else [trip_port],
+                    "service_counts": (
+                        {} if trip_port is None else {str(trip_port): 1}
+                    ),
+                    "endpoints": (
+                        []
+                        if trip_port is None
+                        else [f"{decoy_id or 'unknown'}:{trip_port}"]
+                    ),
+                    "first_seen": observed_at,
+                    "last_seen": observed_at,
+                    "recent_connections": [
+                        self._connection_evidence(payload, observed_at=now)
+                    ],
+                }
+            )
         if payload.get("request_path"):
             detail_obj["request_path"] = payload["request_path"]
         if payload.get("credential_used"):
@@ -634,6 +744,9 @@ class DecoyAlertHandler:
                 "read_at": None,
                 "actioned_at": None,
                 "alert_count": None,
+                "connection_count": detail_obj.get("connection_count"),
+                "ports": detail_obj.get("ports"),
+                "service_counts": detail_obj.get("service_counts"),
                 "source_event_seq": source_event_seq,
             },
             source_id=source_ip,

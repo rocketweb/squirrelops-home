@@ -30,6 +30,14 @@ def event_bus():
     return bus
 
 
+@pytest.fixture(autouse=True)
+def isolated_lan_resolution(monkeypatch):
+    # Include orchestrators constructed within individual lifecycle tests.
+    # The offline/online test overrides this seam to exercise deferred startup.
+    # Concrete LAN selection is covered separately by resolver tests.
+    monkeypatch.setattr(orchestrator_module, "_resolve_bind_address", lambda **_: "127.0.0.1")
+
+
 @pytest.fixture()
 def orchestrator(event_bus, db):
     return DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
@@ -98,16 +106,11 @@ class TestAutoDeployCreatesDecoys:
         self, db, event_bus, monkeypatch,
     ):
         """No-LAN scans create no unreachable rows and re-resolve on the next scan."""
-        bindable_lan_address = orchestrator_module._route_selected_ip()
-        assert bindable_lan_address is not None
+        bindable_lan_address = "127.0.0.1"
         route_address: dict[str, str | None] = {"value": None}
         monkeypatch.setattr(
-            "squirrelops_home_sensor.decoys.orchestrator._route_selected_ip",
-            lambda: route_address["value"],
-        )
-        monkeypatch.setattr(
-            "squirrelops_home_sensor.decoys.orchestrator._interface_ipv4_addresses",
-            lambda _: [],
+            orchestrator_module, "_resolve_bind_address",
+            lambda **_: route_address["value"],
         )
         orchestrator = DecoyOrchestrator(event_bus=event_bus, db=db, max_decoys=8)
 

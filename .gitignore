@@ -46,3 +46,6 @@ Package.resolved
 # QA working artifacts. FINDINGS.md carries reproduction detail for defects in
 # releases that are still published, so it stays out of a public repository.
 qa/FINDINGS.md
+
+# Retain acceptance captures privately; commit sanitized reports and fixture code.
+docs/testing/evidence/

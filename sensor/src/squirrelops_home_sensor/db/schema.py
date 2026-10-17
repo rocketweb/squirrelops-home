@@ -1,6 +1,6 @@
 """SQLite schema definitions for SquirrelOps Home Sensor.
 
-Extends Pingting's existing tables with 11 new tables for device fingerprints,
+Extends Pingting's existing tables with sensor-owned tables for device fingerprints,
 trust management, incidents, alerts, decoys, credentials, pairing, canary
 observations, and event logging.
 """
@@ -8,7 +8,7 @@ observations, and event logging.
 from __future__ import annotations
 
 # Current schema version -- increment when adding migrations
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 12
 
 # All table names managed by this schema (does NOT include Pingting's tables)
 _TABLE_NAMES: list[str] = [
@@ -22,6 +22,7 @@ _TABLE_NAMES: list[str] = [
     "decoys",
     "planted_credentials",
     "decoy_connections",
+    "deception_campaigns",
     "pairing",
     "canary_observations",
     "connection_baselines",
@@ -217,8 +218,15 @@ CREATE TABLE IF NOT EXISTS pairing (
     client_cert_fingerprint TEXT NOT NULL,
     is_local INTEGER NOT NULL DEFAULT 0,
     paired_at TEXT NOT NULL,
-    last_connected_at TEXT
+    last_connected_at TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    enrollment_request_id TEXT,
+    enrollment_csr_fingerprint TEXT,
+    enrollment_client_cert_pem TEXT,
+    enrollment_expires_at TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pairing_enrollment_request
+ON pairing(enrollment_request_id) WHERE enrollment_request_id IS NOT NULL;
 
 -- DNS canary observations
 CREATE TABLE IF NOT EXISTS canary_observations (

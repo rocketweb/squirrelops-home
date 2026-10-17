@@ -6,6 +6,20 @@ import Testing
 @Suite("Desktop experience")
 @MainActor
 struct DesktopExperienceTests {
+    @Test("First-launch setup uses a compact fixed window")
+    func firstLaunchSetupUsesCompactWindow() {
+        let setup = MainWindowPresentation.setup
+        let dashboard = MainWindowPresentation.dashboard
+
+        #expect(setup.contentSize == NSSize(width: 640, height: 520))
+        #expect(!setup.isResizable)
+        #expect(setup.contentSize.width < dashboard.contentSize.width)
+        #expect(setup.contentSize.height < dashboard.contentSize.height)
+        #expect(dashboard.isResizable)
+        #expect(MainWindowPresentation.forPairingState(isPaired: false) == setup)
+        #expect(MainWindowPresentation.forPairingState(isPaired: true) == dashboard)
+    }
+
     @Test("Open Dashboard activates an existing dashboard window")
     func activatesExistingDashboard() {
         let dashboard = FakeWindow(title: AppWindow.dashboard.title, isMiniaturized: true)
@@ -90,6 +104,14 @@ struct DesktopExperienceTests {
             $0.body.contains("--show-pairing-code")
                 && $0.body.contains("sudo -u _squirrelops")
         } == true)
+    }
+
+    @Test("Help menu exposes every guide section")
+    func helpMenuCoverage() {
+        #expect(
+            SquirrelOpsHelpCommands.sectionIDs
+                == HelpGuideContent.sections.map(\.id)
+        )
     }
 
     @Test("Notification policy respects enablement, silence, read state, and severity")

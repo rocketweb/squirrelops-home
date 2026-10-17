@@ -91,6 +91,7 @@ class TestFreshDatabase:
                 "decoys",
                 "planted_credentials",
                 "decoy_connections",
+                "deception_campaigns",
                 "pairing",
                 "canary_observations",
                 "schema_version",
@@ -112,7 +113,7 @@ class TestFreshDatabase:
         assert "events" in names
         assert "decoy_hosts" in names
         assert "schema_version" in names
-        assert len(names) == 19
+        assert len(names) == 20
 
     @pytest.mark.asyncio
     async def test_idempotent_migration(self) -> None:

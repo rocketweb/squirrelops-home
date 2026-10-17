@@ -23,6 +23,7 @@ import asyncio
 import inspect
 import logging
 import os
+import socket
 import ssl
 import sys
 import uuid
@@ -153,6 +154,42 @@ def load_config(config_path: str | None) -> dict[str, Any]:
     return config
 
 
+async def resolve_runtime_network(config: dict[str, Any]) -> None:
+    """Use the helper's independently verified physical LAN, not a VPN default.
+
+    This is runtime-only discovery. No persisted operator settings are changed.
+    A mismatched explicit configuration fails before any network publication.
+    """
+    if sys.platform != "darwin":
+        return
+    from squirrelops_home_sensor.privileged.helper import create_privileged_ops
+
+    context = await create_privileged_ops().lan_context()
+    network = config.setdefault("network", {})
+    if (
+        network.get("interface", "auto") not in ("auto", context["interface"])
+        or network.get("subnet", "auto") not in ("auto", context["subnet"])
+    ):
+        raise RuntimeError("The configured network does not match the helper-verified LAN")
+    config["_lan_context"] = context
+    logger.info(
+        "Verified physical LAN: interface=%s address=%s subnet=%s gateway=%s",
+        context["interface"], context["sensor_ip"], context["subnet"], context["gateway_ip"],
+    )
+
+
+def _sensor_ip_for_config(config: dict[str, Any], fallback: str) -> str:
+    context = config.get("_lan_context")
+    return context["sensor_ip"] if context else _detect_sensor_ip(fallback)
+
+
+def _runtime_network_config(config: dict[str, Any]) -> dict[str, Any]:
+    network = dict(config.get("network", {}))
+    if context := config.get("_lan_context"):
+        network.update(interface=context["interface"], subnet=context["subnet"])
+    return network
+
+
 def _detect_sensor_ip(fallback: str) -> str:
     """Return the IPv4 address selected by the active default route."""
     import socket as _socket
@@ -274,7 +311,7 @@ def create_scan_loop(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
     # Build port scanner
     port_scanner = PortScanner(timeout_per_port=2.0, max_concurrent=100)
 
-    network_cfg = config.get("network", {})
+    network_cfg = _runtime_network_config(config)
     subnet = network_cfg.get("subnet", "192.168.1.0/24")
     scan_interval = network_cfg.get("scan_interval", 300)
 
@@ -567,7 +604,7 @@ def create_mdns_advertiser(config: dict[str, Any], port: int) -> Any:
     from squirrelops_home_sensor.mdns import ServiceAdvertiser
 
     sensor_name = config.get("sensor", {}).get("name", "SquirrelOps")
-    route_selected_ip = _detect_sensor_ip("")
+    route_selected_ip = _sensor_ip_for_config(config, "")
     return ServiceAdvertiser(
         name=sensor_name,
         port=port,
@@ -584,8 +621,8 @@ def create_orchestrator(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
 
     decoy_cfg = config.get("decoys", {})
     max_decoys = decoy_cfg.get("max_decoys", 8)
-    network_cfg = config.get("network", {})
-    sensor_ip = _detect_sensor_ip("127.0.0.1")
+    network_cfg = _runtime_network_config(config)
+    sensor_ip = _sensor_ip_for_config(config, "127.0.0.1")
     interface = _resolve_network_interface(
         network_cfg.get("interface", "auto"),
         sensor_ip,
@@ -635,7 +672,7 @@ def create_scouts_subsystem(
     from squirrelops_home_sensor.scouts.templates import MimicTemplateGenerator
 
     # Resolve subnet and sensor IP for IP allocation
-    network_cfg = config.get("network", {})
+    network_cfg = _runtime_network_config(config)
     from squirrelops_home_sensor.scanner.loop import _resolve_subnet
 
     subnet = _resolve_subnet(network_cfg.get("subnet", "192.168.1.0/24"))
@@ -645,8 +682,8 @@ def create_scouts_subsystem(
     network = ipaddress.IPv4Network(subnet, strict=False)
     # Gateway is typically .1.
     first_host = str(next(network.hosts()))
-    gateway_ip = first_host
-    sensor_ip = _detect_sensor_ip(first_host)
+    gateway_ip = config.get("_lan_context", {}).get("gateway_ip", first_host)
+    sensor_ip = _sensor_ip_for_config(config, first_host)
     interface = _resolve_network_interface(
         network_cfg.get("interface", "auto"),
         sensor_ip,
@@ -817,6 +854,11 @@ def _local_pairing_socket(config: dict[str, Any]) -> Path:
     return data_dir.parent / "run" / "pairing.sock"
 
 
+def _local_enrollment_socket(config: dict[str, Any]) -> Path:
+    data_dir = Path(config.get("sensor", {}).get("data_dir", "./data"))
+    return data_dir.parent / "run" / "enrollment.sock"
+
+
 def _display_pairing_code(code: str, config: dict[str, Any]) -> None:
     """Print the setup key and store a private recovery copy.
 
@@ -875,6 +917,8 @@ class _RuntimeResources:
         self.scout_scheduler_start_attempted = False
         self.mimic_orchestrator: Any | None = None
         self.mimic_start_attempted = False
+        self.deep_orchestrator: Any | None = None
+        self.deep_start_attempted = False
         self.ip_manager: Any | None = None
         self.mimic_network_attempted = False
         self.mimic_network_state_known = False
@@ -885,6 +929,8 @@ class _RuntimeResources:
         self.mdns_start_attempted = False
         self.local_pairing: Any | None = None
         self.local_pairing_start_attempted = False
+        self.local_enrollment: Any | None = None
+        self.local_enrollment_start_attempted = False
         self.cleaned = False
 
 
@@ -922,6 +968,12 @@ async def _cleanup_runtime(runtime: _RuntimeResources) -> list[BaseException]:
             runtime.local_pairing.stop,
         )
 
+    if runtime.local_enrollment is not None and runtime.local_enrollment_start_attempted:
+        await stop_step(
+            "Stopping local enrollment socket",
+            runtime.local_enrollment.stop,
+        )
+
     if runtime.mdns is not None and runtime.mdns_start_attempted:
         await stop_step("Stopping mDNS advertisement", runtime.mdns.stop)
 
@@ -932,6 +984,12 @@ async def _cleanup_runtime(runtime: _RuntimeResources) -> list[BaseException]:
         await stop_step(
             "Stopping scout scheduler",
             runtime.scout_scheduler.stop,
+        )
+
+    if runtime.deep_orchestrator is not None and runtime.deep_start_attempted:
+        await stop_step(
+            "Stopping Studio Mini deep decoy",
+            runtime.deep_orchestrator.stop_all,
         )
 
     if runtime.mimic_orchestrator is not None and (
@@ -1023,6 +1081,29 @@ async def _cleanup_runtime(runtime: _RuntimeResources) -> list[BaseException]:
     return errors
 
 
+class _RuntimeManagedServer(uvicorn.Server):
+    """HTTP server bound to the sensor's resource lifetime."""
+
+    def __init__(self, config: uvicorn.Config, *, runtime: _RuntimeResources) -> None:
+        super().__init__(config)
+        self._runtime = runtime
+
+    async def _serve(self, sockets: list[socket.socket] | None = None) -> None:
+        # Uvicorn's serve() replays captured signals after _serve() returns.
+        # SIGTERM can terminate the process immediately, while SIGINT can cancel
+        # async cleanup. Keep resource teardown inside that signal boundary.
+        # Real-process regression tests protect this pinned Uvicorn contract.
+        try:
+            await super()._serve(sockets)
+        finally:
+            startup_or_run_failed = sys.exc_info()[0] is not None
+            cleanup_errors = await _cleanup_runtime(self._runtime)
+            if cleanup_errors and not startup_or_run_failed:
+                raise RuntimeError(
+                    "Sensor shutdown did not complete cleanly"
+                ) from cleanup_errors[0]
+
+
 async def run_sensor(
     config_path: str | None = None,
     port: int | None = None,
@@ -1064,6 +1145,10 @@ async def run_sensor(
             logger.warning(
                 "Migrated plaintext configuration credentials into encrypted storage"
             )
+
+        # Resolve the physical LAN before opening state or starting background
+        # tasks. The helper remains the authority at every later mutation.
+        await resolve_runtime_network(config)
 
         # 2. Open database
         data_dir = config.get("sensor", {}).get("data_dir", "./data")
@@ -1146,12 +1231,55 @@ async def run_sensor(
         runtime.ip_manager = ip_manager
         runtime.mimic_mdns = mimic_mdns
         runtime.port_fwd = port_fwd
+        deep_orchestrator = None
+        if (
+            scouts is not None
+            and sys.platform == "darwin"
+            and bool(config.get("decoys", {}).get("deep_enabled", True))
+        ):
+            from squirrelops_home_sensor.decoys.deep.orchestrator import (
+                DeepDecoyOrchestrator,
+                load_or_create_deployment_secret,
+            )
+
+            deployment_secret = await load_or_create_deployment_secret(secret_store)
+            deep_orchestrator = DeepDecoyOrchestrator(
+                db=db,
+                event_bus=event_bus,
+                ip_manager=ip_manager,
+                port_forward_manager=port_fwd,
+                mdns_advertiser=mimic_mdns,
+                backend_bind_address_for=priv_ops.listener_bind_address,
+                deployment_secret=deployment_secret,
+                state_dir=Path(config["sensor"]["data_dir"]).parent
+                / "run/deception-guest",
+            )
+        runtime.deep_orchestrator = deep_orchestrator
         if mimic_orchestrator is not None:
             scan_loop.set_hostname_advisor_target(mimic_orchestrator)
             # Reuse every regular scan's fresh ARP snapshot to evacuate
             # conflicts before virtual IPs are filtered from device inventory.
+            async def _reconcile_deception_ip_conflicts(
+                arp_results: list[tuple[str, str]] | None = None,
+            ) -> int:
+                if deep_orchestrator is None:
+                    return await mimic_orchestrator.reconcile_ip_conflicts(arp_results)
+                conflicts = await ip_manager.find_conflicts(arp_results)
+                evacuated = 0
+                for conflict_ip in conflicts:
+                    if conflict_ip == deep_orchestrator.active_virtual_ip:
+                        removed = await deep_orchestrator.handle_ip_conflict(conflict_ip)
+                    else:
+                        removed = await mimic_orchestrator.handle_ip_conflict(conflict_ip)
+                    if removed:
+                        evacuated += 1
+                if evacuated:
+                    await mimic_orchestrator.evaluate_and_deploy(arp_results)
+                await deep_orchestrator.reconcile()
+                return evacuated
+
             conflict_hook_result = scan_loop.set_ip_conflict_handler(
-                mimic_orchestrator.reconcile_ip_conflicts
+                _reconcile_deception_ip_conflicts
             )
             if inspect.isawaitable(conflict_hook_result):
                 await conflict_hook_result
@@ -1223,11 +1351,20 @@ async def run_sensor(
         from squirrelops_home_sensor.api.routes_decoys import (
             get_decoy_orchestrator as _get_decoy_orch_dep,
         )
+        from squirrelops_home_sensor.api.routes_decoys import (
+            get_deep_decoy_orchestrator as _get_deep_decoy_orch_dep,
+        )
 
         async def _prod_get_decoy_orchestrator():
             return orchestrator.inner
 
+        async def _prod_get_deep_decoy_orchestrator():
+            return deep_orchestrator
+
         app.dependency_overrides[_get_decoy_orch_dep] = _prod_get_decoy_orchestrator
+        app.dependency_overrides[
+            _get_deep_decoy_orch_dep
+        ] = _prod_get_deep_decoy_orchestrator
 
         # 7c. Wire up live WebSocket broadcast from event bus
         from squirrelops_home_sensor.api.ws import broadcast_event
@@ -1311,6 +1448,14 @@ async def run_sensor(
                 )
             runtime.mimic_network_state_known = True
 
+            if deep_orchestrator is not None:
+                runtime.deep_start_attempted = True
+                deep_started = await deep_orchestrator.start()
+                if not deep_started:
+                    logger.warning(
+                        "Studio Mini deep decoy is unavailable; no real-protocol "
+                        "ports were published"
+                    )
             runtime.mimic_start_attempted = True
             resumed = await mimic_orchestrator.resume_active()
             if resumed:
@@ -1352,7 +1497,7 @@ async def run_sensor(
             proxy_headers=False,
             **uvicorn_kwargs,
         )
-        server = uvicorn.Server(uvicorn_config)
+        server = _RuntimeManagedServer(uvicorn_config, runtime=runtime)
 
         # 10. Start mDNS advertisement
         mdns = create_mdns_advertiser(config, port)
@@ -1366,12 +1511,49 @@ async def run_sensor(
             _maybe_regenerate_code,
         )
 
-        _init_pairing_state(app.state, config)
+        pairing_state = _init_pairing_state(app.state, config)
 
         # Display the pairing setup key and store a private recovery copy.
         pairing_code = getattr(app.state, "pairing_code", None)
         if isinstance(pairing_code, str) and pairing_code:
             _display_pairing_code(pairing_code, config)
+
+        local_enrollment_enabled = bool(
+            config.get("pairing", {}).get(
+                "local_enrollment_enabled",
+                False,
+            )
+        )
+        if local_enrollment_enabled:
+            from squirrelops_home_sensor.api.local_enrollment import (
+                LocalEnrollmentAuthority,
+                LocalEnrollmentServer,
+            )
+
+            sensor_config = config.get("sensor", {})
+            authority = LocalEnrollmentAuthority(
+                db=db,
+                ca_key=pairing_state["ca_key"],
+                ca_cert=pairing_state["ca_cert"],
+                sensor_id=str(
+                    sensor_config.get("id")
+                    or config.get("sensor_id")
+                    or "squirrelops-local"
+                ),
+                sensor_name=str(
+                    sensor_config.get("name")
+                    or config.get("sensor_name")
+                    or "SquirrelOps Home Sensor"
+                ),
+            )
+            app.state.local_enrollment_authority = authority
+            local_enrollment = LocalEnrollmentServer(
+                str(_local_enrollment_socket(config)),
+                authority,
+            )
+            runtime.local_enrollment = local_enrollment
+            runtime.local_enrollment_start_attempted = True
+            await local_enrollment.start()
 
         # The local socket is deliberately development-only. Kernel peer
         # identity authenticates the process that connected, not necessarily
@@ -1407,9 +1589,14 @@ async def run_sensor(
                     "Failed to start development local pairing socket",
                     exc_info=True,
                 )
+        elif local_enrollment_enabled:
+            logger.info(
+                "Development setup-key socket disabled; signed-app local "
+                "enrollment enabled"
+            )
         else:
             logger.info(
-                "Automatic local pairing disabled; retrieve the setup key "
+                "Local enrollment disabled; retrieve the setup key "
                 "with --show-pairing-code"
             )
 

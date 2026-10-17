@@ -46,10 +46,14 @@ class TestH03UnpaddedArpOctets:
 class TestH05SensorOwnMacsExcluded:
     """H-05: the sensor must not report itself as an ARP identity conflict."""
 
-    def test_local_interface_macs_are_discovered(self):
+    @pytest.mark.asyncio
+    async def test_local_interface_macs_are_discovered(self):
+        from squirrelops_home_sensor.privileged.helper import LinuxPrivilegedOps
         from squirrelops_home_sensor.scanner.loop import _local_interface_macs
 
-        macs = _local_interface_macs()
+        # Direct interface enumeration requires no privileged operations.
+        # The macOS helper path is covered by test_macos_decoy_recovery.py.
+        macs = await _local_interface_macs(LinuxPrivilegedOps())
         assert isinstance(macs, set)
         # Every entry must already be normalized, or comparison against scan
         # results silently fails to match and the sensor flags itself.

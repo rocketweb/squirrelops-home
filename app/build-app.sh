@@ -4,11 +4,15 @@
 #
 # Usage:
 #   cd app && bash build-app.sh
+#   bash build-app.sh --print-bundle-path  # query an existing build, no rebuild
 #
 # Environment variables:
 #   BUILD_CONFIG  - "debug" (default) or "release"
 #   BUILD_ARCH    - "arm64", "x86_64", or "universal" (default: current arch)
 #   SQUIRRELOPS_APP_VERSION - optional assertion; must match ../APP_VERSION
+#   SQUIRRELOPS_GUEST_BUNDLE - architecture-specific Studio Mini guest bundle
+#   SQUIRRELOPS_SWIFT_SDK - optional explicit SDK directory (passed to Swift)
+#   SQUIRRELOPS_SWIFT_SCRATCH_PATH - optional build directory (default: app/.build)
 #
 set -euo pipefail
 
@@ -26,13 +30,23 @@ fi
 
 APP_NAME="SquirrelOpsHome"
 HELPER_NAME="SquirrelOpsHelper"
+DECEPTION_RUNTIME_NAME="SquirrelOpsDeceptionGuest"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+GUEST_BUNDLE="${SQUIRRELOPS_GUEST_BUNDLE:-$REPO_ROOT/guest/studio-mini/build/$BUILD_ARCH}"
 
 fail() {
     echo "[x] $*" >&2
     exit 1
 }
+
+case "${1:-}" in
+    ""|--print-bundle-path) ;;
+    *) fail "Usage: bash build-app.sh [--print-bundle-path]" ;;
+esac
+[ "$#" -le 1 ] || fail "Usage: bash build-app.sh [--print-bundle-path]"
+case "$BUILD_CONFIG" in debug|release) ;; *) fail "Unsupported build configuration: $BUILD_CONFIG" ;; esac
+case "$BUILD_ARCH" in arm64|x86_64|universal) ;; *) fail "Unsupported build architecture: $BUILD_ARCH" ;; esac
 
 strip_release_binary() {
     local binary="$1"
@@ -51,11 +65,7 @@ validate_no_build_host_paths() {
 
 # --- Construct swift build flags ---
 
-SWIFT_FLAGS=()
-
-if [ "$BUILD_CONFIG" = "release" ]; then
-    SWIFT_FLAGS+=(-c release)
-fi
+SWIFT_FLAGS=(-c "$BUILD_CONFIG")
 
 if [ "$BUILD_ARCH" = "universal" ]; then
     SWIFT_FLAGS+=(--arch arm64 --arch x86_64)
@@ -63,31 +73,44 @@ elif [ "$BUILD_ARCH" != "$(uname -m)" ]; then
     SWIFT_FLAGS+=(--arch "$BUILD_ARCH")
 fi
 
-# --- Determine build output directory ---
-
-if [ "$BUILD_ARCH" = "universal" ]; then
-    # Universal builds go into .build/apple/Products/{Release,Debug}
-    if [ "$BUILD_CONFIG" = "release" ]; then
-        BUILD_DIR=".build/apple/Products/Release"
-    else
-        BUILD_DIR=".build/apple/Products/Debug"
-    fi
-else
-    # Single-arch builds go into .build/{arch}-apple-macosx/{release,debug}
-    BUILD_DIR=".build/${BUILD_ARCH}-apple-macosx/${BUILD_CONFIG}"
+if [ -n "${SQUIRRELOPS_SWIFT_SDK:-}" ]; then
+    [ -d "$SQUIRRELOPS_SWIFT_SDK" ] || fail "Swift SDK directory does not exist: $SQUIRRELOPS_SWIFT_SDK"
+    SWIFT_FLAGS+=(--sdk "$(cd "$SQUIRRELOPS_SWIFT_SDK" && pwd -P)")
 fi
 
-APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+SCRATCH_ROOT="${SQUIRRELOPS_SWIFT_SCRATCH_PATH:-$SCRIPT_DIR/.build}"
+case "$SCRATCH_ROOT" in /*) ;; *) SCRATCH_ROOT="$SCRIPT_DIR/$SCRATCH_ROOT" ;; esac
+SWIFT_FLAGS+=(--scratch-path "$SCRATCH_ROOT")
 
-echo "[+] Config: $BUILD_CONFIG | Arch: $BUILD_ARCH"
-echo "[+] Build dir: $BUILD_DIR"
-if [ ${#SWIFT_FLAGS[@]} -gt 0 ]; then
+if [ "${1:-}" != --print-bundle-path ]; then
+    echo "[+] Config: $BUILD_CONFIG | Arch: $BUILD_ARCH"
     echo "[+] Building with flags: ${SWIFT_FLAGS[*]}..."
     swift build "${SWIFT_FLAGS[@]}"
-else
-    echo "[+] Building..."
-    swift build
 fi
+
+# SwiftPM's output layout is toolchain-dependent. Use the identical flags for
+# compilation and discovery, never a guessed path that could contain old bytes.
+BUILD_DIR="$(swift build "${SWIFT_FLAGS[@]}" --show-bin-path)" \
+    || fail "Could not query Swift build output."
+case "$BUILD_DIR" in
+    ""|/|*$'\n'*|*$'\r'*|*/../*|*/..) fail "Invalid Swift build output: $BUILD_DIR" ;;
+    /*) ;;
+    *) fail "Swift build output must be absolute: $BUILD_DIR" ;;
+esac
+[ -d "$BUILD_DIR" ] || fail "Swift build output does not exist; build first: $BUILD_DIR"
+SCRATCH_ROOT="$(cd "$SCRATCH_ROOT" && pwd -P)" || fail "Invalid Swift scratch directory."
+BUILD_DIR="$(cd "$BUILD_DIR" && pwd -P)" || fail "Invalid Swift build output directory."
+[ "$SCRATCH_ROOT" != / ] || fail "Swift scratch directory cannot be the filesystem root."
+case "$BUILD_DIR" in
+    "$SCRATCH_ROOT"/*) ;;
+    *) fail "Swift build output is outside the selected scratch directory: $BUILD_DIR" ;;
+esac
+APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
+if [ "${1:-}" = --print-bundle-path ]; then
+    printf '%s\n' "$APP_BUNDLE"
+    exit 0
+fi
+echo "[+] Build dir: $BUILD_DIR"
 
 echo "[+] Creating .app bundle..."
 rm -rf "$APP_BUNDLE"
@@ -118,13 +141,60 @@ HELPER_PATH="$APP_BUNDLE/Contents/Library/LaunchServices/$HELPER_BUNDLE_ID"
 cp "$BUILD_DIR/$HELPER_NAME" "$HELPER_PATH"
 chmod 755 "$HELPER_PATH"
 
+# The deep-decoy runtime is a separate unprivileged process. It owns the
+# Virtualization.framework VM and opaque TCP-to-Virtio relays, keeping SSH and
+# SMB parsers out of the sensor and privileged helper.
+DECEPTION_RUNTIME_BUNDLE_ID="com.squirrelops.deception-guest"
+if [ ! -x "$BUILD_DIR/$DECEPTION_RUNTIME_NAME" ]; then
+    echo "[x] Required deception runtime is missing or not executable: $BUILD_DIR/$DECEPTION_RUNTIME_NAME" >&2
+    exit 1
+fi
+echo "[+] Bundling deception runtime: $DECEPTION_RUNTIME_NAME -> $DECEPTION_RUNTIME_BUNDLE_ID"
+mkdir -p "$APP_BUNDLE/Contents/Library/Helpers"
+DECEPTION_RUNTIME_PATH="$APP_BUNDLE/Contents/Library/Helpers/$DECEPTION_RUNTIME_BUNDLE_ID"
+cp "$BUILD_DIR/$DECEPTION_RUNTIME_NAME" "$DECEPTION_RUNTIME_PATH"
+chmod 755 "$DECEPTION_RUNTIME_PATH"
+if [ "$BUILD_CONFIG" = "debug" ]; then
+    echo "[+] Applying local virtualization entitlement to deception runtime..."
+    codesign --force --sign - \
+        --identifier "$DECEPTION_RUNTIME_BUNDLE_ID" \
+        --entitlements "$REPO_ROOT/app/entitlements/deception-guest.entitlements" \
+        "$DECEPTION_RUNTIME_PATH"
+fi
+
+# Guest bytes are immutable app resources. The sensor validates them again at
+# runtime before invoking Virtualization.framework.
+if [ "$BUILD_ARCH" = "universal" ]; then
+    if [ "$BUILD_CONFIG" = "release" ]; then
+        fail "Universal release apps cannot contain one architecture-specific guest."
+    fi
+elif [ -d "$GUEST_BUNDLE" ]; then
+    python3 "$REPO_ROOT/scripts/verify-guest-bundle.py" \
+        "$GUEST_BUNDLE" --architecture "$BUILD_ARCH"
+    GUEST_DESTINATION="$APP_BUNDLE/Contents/Resources/DeceptionGuest"
+    mkdir -p "$GUEST_DESTINATION"
+    cp "$GUEST_BUNDLE/manifest.json" "$GUEST_DESTINATION/manifest.json"
+    cp "$GUEST_BUNDLE/vmlinuz" "$GUEST_DESTINATION/vmlinuz"
+    cp "$GUEST_BUNDLE/studio-mini.initramfs" \
+        "$GUEST_DESTINATION/studio-mini.initramfs"
+    chmod 0444 "$GUEST_DESTINATION"/*
+    python3 "$REPO_ROOT/scripts/verify-guest-bundle.py" \
+        "$GUEST_DESTINATION" --architecture "$BUILD_ARCH"
+elif [ "$BUILD_CONFIG" = "release" ]; then
+    fail "Required Studio Mini guest bundle is missing: $GUEST_BUNDLE"
+else
+    echo "[!] Studio Mini guest bundle is absent; the deep decoy will be unavailable." >&2
+fi
+
 if [ "$BUILD_CONFIG" = "release" ]; then
     echo "[+] Removing build-host metadata from release binaries..."
     strip_release_binary "$APP_EXECUTABLE"
     strip_release_binary "$HELPER_PATH"
+    strip_release_binary "$DECEPTION_RUNTIME_PATH"
 
     validate_no_build_host_paths "$APP_EXECUTABLE"
     validate_no_build_host_paths "$HELPER_PATH"
+    validate_no_build_host_paths "$DECEPTION_RUNTIME_PATH"
 fi
 
 # Copy app icon

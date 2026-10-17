@@ -1,6 +1,9 @@
 import SwiftUI
 
 public enum Typography {
+    /// Compact desktop page title. Keep the brand face without marketing-scale chrome.
+    public static let pageTitle: Font = Font.custom("SpaceGrotesk-SemiBold", size: 20)
+
     /// Display1: SpaceGrotesk-Bold 72pt, tracking -0.04em, leading 1.0
     public static let display1: Font = Font.custom("SpaceGrotesk-Bold", size: 72)
         .leading(.tight)

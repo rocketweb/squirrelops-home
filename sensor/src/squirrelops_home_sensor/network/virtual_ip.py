@@ -183,12 +183,19 @@ class VirtualIPManager:
             ipaddress.IPv4Address(ip)
         return owners
 
-    async def _load_persisted_mimic_addresses(self) -> list[tuple[str, str]]:
-        """Reserve every durable mimic binding from new allocation."""
+    async def _load_persisted_virtual_addresses(self) -> list[tuple[str, str]]:
+        """Reserve every unretired virtual host, including stopped Studio hosts.
+
+        A released OS alias does not retire its durable host identity. Match
+        the decoy_hosts uniqueness boundary even if no service rows remain,
+        and retain the legacy per-service exclusions as a conservative union.
+        """
         cursor = await self._db.execute(
-            """SELECT DISTINCT bind_address
+            """SELECT bind_address FROM decoy_hosts WHERE retired_at IS NULL
+               UNION
+               SELECT bind_address
                FROM decoys
-               WHERE decoy_type = 'mimic'
+               WHERE decoy_type IN ('mimic', 'deep')
                  AND retired_at IS NULL
                  AND status IN ('active', 'stopped', 'degraded')"""
         )
@@ -216,33 +223,15 @@ class VirtualIPManager:
             self._allocator.set_active_ips([])
             return []
 
-    @staticmethod
-    def _local_interface_macs() -> set[str]:
+    async def _local_interface_macs(self) -> set[str]:
         """Return normalized MAC addresses owned by this host.
 
         Proxy-ARP-backed virtual IPs legitimately appear in the ARP table with
         the physical interface's MAC.  Those entries are ours, not conflicts.
         """
-        try:
-            import psutil
+        return {mac.lower() for mac in await self._ops.local_interface_macs()}
 
-            macs: set[str] = set()
-            for addresses in psutil.net_if_addrs().values():
-                for address in addresses:
-                    if address.family == psutil.AF_LINK and address.address:
-                        try:
-                            macs.add(normalize_mac(address.address).lower())
-                        except ValueError:
-                            logger.warning(
-                                "Ignoring invalid local interface MAC %r",
-                                address.address,
-                            )
-            return macs
-        except Exception:
-            logger.warning("Failed to enumerate local interface MACs", exc_info=True)
-            return set()
-
-    def _real_ip_owners(
+    async def _real_ip_owners(
         self, results: list[tuple[str, str]]
     ) -> dict[str, str]:
         """Normalize ARP owners and remove this host's proxy-ARP records."""
@@ -254,7 +243,7 @@ class VirtualIPManager:
             )
 
         local_macs: set[str] = set()
-        for mac in self._local_interface_macs():
+        for mac in await self._local_interface_macs():
             try:
                 local_macs.add(normalize_mac(mac).lower())
             except ValueError:
@@ -310,7 +299,7 @@ class VirtualIPManager:
                 return dict(self._owner_scan_cache)
 
             results = await self._ops.arp_scan(self._allocator.subnet)
-            owners = self._real_ip_owners(results)
+            owners = await self._real_ip_owners(results)
             self._owner_scan_cache = dict(owners)
             self._owner_scan_cache_at = time.monotonic()
             return owners
@@ -338,7 +327,7 @@ class VirtualIPManager:
 
         try:
             db_owners = await self._load_online_device_owners()
-            persisted_mimics = await self._load_persisted_mimic_addresses()
+            persisted_hosts = await self._load_persisted_virtual_addresses()
         except Exception:
             logger.exception(
                 "Cannot safely allocate virtual IPs: durable address inventory "
@@ -360,7 +349,7 @@ class VirtualIPManager:
             if arp_results is None or use_withdrawal_cache:
                 owners = await self._scan_real_ip_owners()
             else:
-                owners = self._real_ip_owners(arp_results)
+                owners = await self._real_ip_owners(arp_results)
                 self._owner_scan_cache = dict(owners)
                 self._owner_scan_cache_at = time.monotonic()
         except Exception:
@@ -372,7 +361,7 @@ class VirtualIPManager:
         # Database discovery and the direct ownership probe cover different
         # failure modes. Never let one exclusion set replace the other.
         self._allocator.set_active_ips(
-            [*db_owners, *persisted_mimics, *owners.items()]
+            [*db_owners, *persisted_hosts, *owners.items()]
         )
         return self._allocator.allocate(count)
 
@@ -428,7 +417,7 @@ class VirtualIPManager:
 
             try:
                 results = await self._ops.arp_scan(self._allocator.subnet)
-                owners = self._real_ip_owners(results)
+                owners = await self._real_ip_owners(results)
                 self._owner_scan_cache = dict(owners)
                 self._owner_scan_cache_at = time.monotonic()
             except Exception:
@@ -501,7 +490,7 @@ class VirtualIPManager:
             if arp_results is None:
                 owners = await self._scan_real_ip_owners(force_refresh=True)
             else:
-                owners = self._real_ip_owners(arp_results)
+                owners = await self._real_ip_owners(arp_results)
                 self._owner_scan_cache = dict(owners)
                 self._owner_scan_cache_at = time.monotonic()
         except Exception:
@@ -548,7 +537,7 @@ class VirtualIPManager:
                 # allocation-burst cache.
                 owners = await self._scan_real_ip_owners(force_refresh=True)
             else:
-                owners = self._real_ip_owners(arp_results)
+                owners = await self._real_ip_owners(arp_results)
                 self._owner_scan_cache = dict(owners)
                 self._owner_scan_cache_at = time.monotonic()
         except Exception:

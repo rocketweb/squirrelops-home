@@ -11,6 +11,25 @@ from tests.integration.conftest import seed_pairing
 class TestWebSocketAuth:
     """WS /ws/events -- authentication handshake."""
 
+    @pytest.mark.parametrize("frame", ["[]", "null", "42", '"text"', "{", '{"type":"auth","token":[1]}'])
+    def test_malformed_auth_is_rejected_without_crashing(self, client, frame):
+        with client.websocket_connect("/ws/events") as ws:
+            ws.send_text(frame)
+            assert ws.receive_json()["type"] == "auth_error"
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()
+
+    @pytest.mark.parametrize("frame", ["[]", "null", "{", '{"type":"replay","since_seq":{}}', '{"type":"replay","since_seq":true}', '{"type":"replay","since_seq":-1}', '{"type":"replay","since_seq":9223372036854775808}'])
+    def test_malformed_authenticated_frame_closes_cleanly(self, client, db, frame):
+        asyncio.get_event_loop().run_until_complete(seed_pairing(db))
+        with client.websocket_connect("/ws/events") as ws:
+            ws.send_json({"type": "auth", "cert_fingerprint": "sha256:testfp"})
+            assert ws.receive_json()["type"] == "auth_ok"
+            ws.send_text(frame)
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_json()
+            assert closed.value.code in (1007, 1008)
+
     def test_auth_ok_with_valid_fingerprint(self, client, db):
         asyncio.get_event_loop().run_until_complete(seed_pairing(db))
         with client.websocket_connect("/ws/events") as ws:

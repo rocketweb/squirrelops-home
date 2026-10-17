@@ -1,6 +1,6 @@
 """Decoy orchestrator — selection, deployment, health monitoring, and event handling.
 
-The orchestrator is the central manager for all active decoys. It:
+The orchestrator manages classic host listeners, not mimic or deep hosts. It:
 - Selects which decoy types to deploy based on discovered network services
 - Auto-deploys decoys after the first scan if none exist
 - Resumes previously active decoys from the database at startup
@@ -22,7 +22,7 @@ import socket
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 from squirrelops_home_sensor.privileged.helper import PrivilegedOperations
@@ -55,6 +55,16 @@ _DECOY_NAMES = {
     "dev_server": "Dev Server",
     "home_assistant": "Smart Home",
 }
+
+# Positive ownership, shared by SQL selection and instance admission. A new
+# decoy family must never be adopted merely because it is not a mimic.
+_CLASSIC_TYPES = tuple(_DECOY_NAMES)
+_CLASSIC_TYPE_FILTER = "decoy_type IN (" + ", ".join("?" for _ in _CLASSIC_TYPES) + ")"
+
+
+def _require_classic_type(decoy_type: str) -> None:
+    if decoy_type not in _CLASSIC_TYPES:
+        raise ValueError(f"Unsupported classic decoy type: {decoy_type!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +115,12 @@ class EventBusProtocol(Protocol):
 @runtime_checkable
 class DBProtocol(Protocol):
     """Minimal DB interface for the orchestrator."""
-    ...
+
+    async def execute(self, sql: str, parameters: Any = ...) -> Any: ...
+
+    async def executemany(self, sql: str, parameters: Any) -> Any: ...
+
+    async def commit(self) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +193,9 @@ def _resolve_bind_address(
 
     Binding classic decoys to ``0.0.0.0`` also exposed them on every mimic
     virtual-IP alias, making those aliases look exactly like the sensor host.
-    The default-route address is authoritative while online. Offline, use the
-    configured interface's primary non-virtual address. Active virtual IPs and
+    The configured interface is authoritative, including when a VPN owns the
+    global default route. Prefer the route-selected address only if that
+    interface actually owns it. Active virtual IPs and
     the configured allocation range are excluded so a classic listener can
     never accidentally bind to a mimic alias.
     """
@@ -198,10 +214,11 @@ def _resolve_bind_address(
             and virtual_ip_range_start <= host_octet <= virtual_ip_range_end
         )
 
+    interface_addresses = _interface_ipv4_addresses(interface)
     routed = _route_selected_ip()
-    if usable(routed, exclude_virtual_range=False):
+    if routed in interface_addresses and usable(routed, exclude_virtual_range=False):
         return routed
-    for candidate in _interface_ipv4_addresses(interface):
+    for candidate in interface_addresses:
         if usable(candidate, exclude_virtual_range=True):
             return candidate
     return None
@@ -255,6 +272,7 @@ def _create_decoy_instance(
     config: dict | None = None,
 ) -> BaseDecoy:
     """Factory for creating BaseDecoy subclass instances."""
+    _require_classic_type(decoy_type)
     from squirrelops_home_sensor.decoys.types.dev_server import DevServerDecoy
     from squirrelops_home_sensor.decoys.types.file_share import FileShareDecoy
     from squirrelops_home_sensor.decoys.types.home_assistant import HomeAssistantDecoy
@@ -282,7 +300,7 @@ def _create_decoy_instance(
 # ---------------------------------------------------------------------------
 
 class DecoyOrchestrator:
-    """Central manager for decoy lifecycle and health.
+    """Manager for classic host-listener lifecycle and health.
 
     Args:
         event_bus: Event bus for publishing decoy events.
@@ -306,6 +324,7 @@ class DecoyOrchestrator:
     ) -> None:
         self._event_bus = event_bus
         self._db = db
+        self._credential_load_lock = asyncio.Lock()
         self._max_decoys = max_decoys
         self._canary_enabled = canary_enabled
         self._canary_domain = canary_domain
@@ -398,11 +417,12 @@ class DecoyOrchestrator:
         self.set_max_decoys(max_decoys)
         try:
             cursor = await self._db.execute(
-                """SELECT id
+                f"""SELECT id
                    FROM decoys
                    WHERE status IN ('active', 'degraded')
-                     AND decoy_type != 'mimic'
-                   ORDER BY id"""
+                     AND {_CLASSIC_TYPE_FILTER}
+                   ORDER BY id""",
+                _CLASSIC_TYPES,
             )
             rows = await cursor.fetchall()
             excess_ids = [row["id"] for row in rows[max_decoys:]]
@@ -498,11 +518,12 @@ class DecoyOrchestrator:
         was stopped. Returns the number of decoys resumed.
         """
         cursor = await self._db.execute(
-            """SELECT *
+            f"""SELECT *
                FROM decoys
                WHERE status IN ('active', 'degraded')
-                 AND decoy_type != 'mimic'
-               ORDER BY id"""
+                 AND {_CLASSIC_TYPE_FILTER}
+               ORDER BY id""",
+            _CLASSIC_TYPES,
         )
         rows = await cursor.fetchall()
         if not rows:
@@ -588,17 +609,19 @@ class DecoyOrchestrator:
         """
         recovered = 0
         cursor = await self._db.execute(
-            """SELECT id
+            f"""SELECT id
                FROM decoys
-               WHERE status = 'degraded' AND decoy_type != 'mimic'
-               ORDER BY id"""
+               WHERE status = 'degraded' AND {_CLASSIC_TYPE_FILTER}
+               ORDER BY id""",
+            _CLASSIC_TYPES,
         )
         for row in await cursor.fetchall():
             if await self.enable_decoy(row["id"]):
                 recovered += 1
 
         cursor = await self._db.execute(
-            "SELECT decoy_type, status FROM decoys WHERE decoy_type != 'mimic'"
+            f"SELECT decoy_type, status FROM decoys WHERE {_CLASSIC_TYPE_FILTER}",
+            _CLASSIC_TYPES,
         )
         existing_rows = await cursor.fetchall()
         existing_types = {row["decoy_type"] for row in existing_rows}
@@ -673,7 +696,8 @@ class DecoyOrchestrator:
 
         Returns (decoy_instance, created_at_iso_string).
         """
-        name = _DECOY_NAMES.get(decoy_type, decoy_type.replace("_", " ").title())
+        _require_classic_type(decoy_type)
+        name = _DECOY_NAMES[decoy_type]
         now = datetime.now(UTC).isoformat()
         bind_address = await self._get_bind_address()
         creds = _generate_credentials(
@@ -722,15 +746,23 @@ class DecoyOrchestrator:
         return decoy, now
 
     async def _load_credentials(self, decoy_id: int) -> list:
-        """Load planted credentials for a decoy from the database."""
-        from squirrelops_home_sensor.decoys.credentials import GeneratedCredential
+        """Load bait, repairing legacy keys once without rewriting trip history."""
+        async with self._credential_load_lock:
+            return await self._load_served_credentials(decoy_id)
+
+    async def _load_served_credentials(self, decoy_id: int) -> list:
+        from squirrelops_home_sensor.decoys.credentials import (
+            CredentialGenerator,
+            GeneratedCredential,
+            is_parseable_ssh_key,
+        )
 
         cursor = await self._db.execute(
             "SELECT * FROM planted_credentials WHERE decoy_id = ?",
             (decoy_id,),
         )
         rows = await cursor.fetchall()
-        return [
+        credentials = [
             GeneratedCredential(
                 credential_type=row["credential_type"],
                 credential_value=row["credential_value"],
@@ -739,6 +771,36 @@ class DecoyOrchestrator:
             )
             for row in rows
         ]
+        served = []
+        invalid_locations = set()
+        for credential in credentials:
+            if credential.credential_type == "ssh_key" and not await asyncio.to_thread(
+                is_parseable_ssh_key, credential.credential_value,
+            ):
+                invalid_locations.add(credential.planted_location)
+            else:
+                served.append(credential)
+        valid_locations = {
+            credential.planted_location for credential in served
+            if credential.credential_type == "ssh_key"
+        }
+        for location in sorted(invalid_locations - valid_locations):
+            replacement = await asyncio.to_thread(CredentialGenerator().generate_ssh_key)
+            credential = GeneratedCredential(
+                credential_type="ssh_key", credential_value=replacement.credential_value,
+                planted_location=location,
+            )
+            await self._db.execute(
+                """INSERT INTO planted_credentials
+                   (credential_type, credential_value, planted_location, decoy_id, created_at)
+                   VALUES ('ssh_key', ?, ?, ?, ?)""",
+                (credential.credential_value, location, decoy_id, datetime.now(UTC).isoformat()),
+            )
+            served.append(credential)
+        if invalid_locations - valid_locations:
+            await self._db.commit()
+            logger.info("Replaced invalid SSH bait for decoy %d; historical rows retained", decoy_id)
+        return served
 
     # -----------------------------------------------------------------
     # Deployment
@@ -750,6 +812,7 @@ class DecoyOrchestrator:
         Args:
             decoy: The BaseDecoy instance to deploy.
         """
+        _require_classic_type(decoy.decoy_type)
         # Capture the running loop so threaded decoy callbacks can reach it.
         self._loop = asyncio.get_running_loop()
 
@@ -961,8 +1024,8 @@ class DecoyOrchestrator:
     async def enable_decoy(self, decoy_id: int) -> bool:
         """Start a classic decoy from its persisted row."""
         cursor = await self._db.execute(
-            "SELECT * FROM decoys WHERE id = ? AND decoy_type != 'mimic'",
-            (decoy_id,),
+            f"SELECT * FROM decoys WHERE id = ? AND {_CLASSIC_TYPE_FILTER}",
+            (decoy_id, *_CLASSIC_TYPES),
         )
         row = await cursor.fetchone()
         if row is None:
@@ -977,10 +1040,10 @@ class DecoyOrchestrator:
             return True
 
         cursor = await self._db.execute(
-            """SELECT COUNT(*)
+            f"""SELECT COUNT(*)
                FROM decoys
-               WHERE status = 'active' AND decoy_type != 'mimic' AND id != ?""",
-            (decoy_id,),
+               WHERE status = 'active' AND {_CLASSIC_TYPE_FILTER} AND id != ?""",
+            (*_CLASSIC_TYPES, decoy_id),
         )
         active_count = (await cursor.fetchone())[0]
         if active_count >= self._max_decoys:
@@ -1037,8 +1100,8 @@ class DecoyOrchestrator:
     async def disable_decoy(self, decoy_id: int) -> bool:
         """Stop a classic decoy listener and preserve it for later enable."""
         cursor = await self._db.execute(
-            "SELECT id FROM decoys WHERE id = ? AND decoy_type != 'mimic'",
-            (decoy_id,),
+            f"SELECT id FROM decoys WHERE id = ? AND {_CLASSIC_TYPE_FILTER}",
+            (decoy_id, *_CLASSIC_TYPES),
         )
         if await cursor.fetchone() is None:
             return False
@@ -1108,6 +1171,9 @@ class DecoyOrchestrator:
                 "protocol": event.protocol,
                 "request_path": event.request_path,
                 "credential_used": event.credential_used,
+                "intruder_intent": event.intruder_intent,
+                "narrative_stage": event.narrative_stage,
+                "interaction_type": event.interaction_type,
                 "timestamp": event.timestamp.isoformat(),
                 "decoy_id": decoy_id,
                 "decoy_name": decoy_name,
@@ -1124,6 +1190,9 @@ class DecoyOrchestrator:
                     "dest_port": event.dest_port,
                     "credential_used": event.credential_used,
                     "request_path": event.request_path,
+                    "intruder_intent": event.intruder_intent,
+                    "narrative_stage": event.narrative_stage,
+                    "interaction_type": event.interaction_type,
                     "timestamp": event.timestamp.isoformat(),
                     "detection_method": "decoy_http",
                     "decoy_id": decoy_id,

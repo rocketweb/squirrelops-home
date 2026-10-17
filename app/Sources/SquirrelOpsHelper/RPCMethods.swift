@@ -23,6 +23,25 @@ func registerMethods(router: RPCRouter) {
         ]
     }
 
+    router.handlers["getLocalInterfaceMACs"] = { _ in
+        try observeLocalInterfaceMACs { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
+    }
+
+    router.handlers["getLANContext"] = { _ in
+        let route = try observeIPv4DefaultRoute { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
+        let info = try runCommand(executable: "/sbin/ifconfig", arguments: [route.interface])
+        guard info.status == 0, ethernetAddressFromIfconfig(info.stdout) != nil else {
+            throw RPCError.internalError("Could not inspect physical LAN interface")
+        }
+        return try physicalLANContext(
+            route: route, networks: interfaceIPv4Networks(from: info.stdout)
+        )
+    }
+
     router.handlers["runARPScan"] = { params in
         guard let subnet = params["subnet"] as? String else {
             throw RPCError.internalError("Missing 'subnet' parameter")
@@ -145,10 +164,9 @@ func registerMethods(router: RPCRouter) {
             interface: interface,
             stateCache: pfEndpointStateCache
         )
-        let currentRouteInfo = try runCommand(
-            executable: "/sbin/route",
-            arguments: ipv4DefaultRouteCommandArguments
-        )
+        let currentRouteInfo = try observeIPv4LANRouteResult { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
         let currentInterfaceInfo = try runCommand(
             executable: "/sbin/ifconfig",
             arguments: [interface]
@@ -271,15 +289,20 @@ func registerMethods(router: RPCRouter) {
             interfaceAddresses: initialInterfaceAddresses,
             ownedEntries: try virtualIPOwnership.allEntries()
         )
+        // This UID is helper-observed, never supplied by the caller. Pin it
+        // across rendering and both process-list ownership observations.
+        let expectedSensorUID = serviceAccountUID()
         let pfRules = try buildPFRules(
             forwardingRules: rules,
             protectedEndpoints: protectedEndpoints,
-            interface: interface
+            interface: interface,
+            sensorUID: expectedSensorUID
         )
         let endpointSignatures = try pfEndpointStateSignatures(
             forwardingRules: rules,
             protectedEndpoints: protectedEndpoints,
-            interface: interface
+            interface: interface,
+            sensorUID: expectedSensorUID
         )
         let stateCleanupIPs = pfEndpointStateCache.cleanupIPs(
             for: endpointSignatures
@@ -342,9 +365,10 @@ func registerMethods(router: RPCRouter) {
             ownedEntries: currentOwnedEntries
         )
         if !backendListeners.isEmpty {
-            guard let sensorUID = serviceAccountUID() else {
+            guard let sensorUID = expectedSensorUID,
+                  serviceAccountUID() == sensorUID else {
                 throw RPCError.internalError(
-                    "Sensor service account is unavailable"
+                    "Sensor service account is unavailable or changed"
                 )
             }
             for listener in backendListeners {
@@ -360,10 +384,9 @@ func registerMethods(router: RPCRouter) {
             }
         }
 
-        let currentRouteResult = try runCommand(
-            executable: "/sbin/route",
-            arguments: ipv4DefaultRouteCommandArguments
-        )
+        let currentRouteResult = try observeIPv4LANRouteResult { executable, arguments in
+            try runCommand(executable: executable, arguments: arguments)
+        }
         let currentInterfaceResult = try runCommand(
             executable: "/sbin/ifconfig",
             arguments: [interface]
@@ -395,11 +418,18 @@ func registerMethods(router: RPCRouter) {
         if load.status != 0 {
             throw RPCError.internalError("pfctl anchor load failed: \(load.stderr)")
         }
+        // The kernel has these rules even if an ownership check or rollback
+        // fails next. Preserve the actual live generation and its cleanup debt.
+        pfEndpointStateCache.recordSuccessfulLiveMutation(
+            endpointSignatures,
+            cleanupIPs: stateCleanupIPs
+        )
         if !backendListeners.isEmpty {
             do {
-                guard let sensorUID = serviceAccountUID() else {
+                guard let sensorUID = expectedSensorUID,
+                      serviceAccountUID() == sensorUID else {
                     throw RPCError.internalError(
-                        "Sensor service account disappeared"
+                        "Sensor service account disappeared or changed"
                     )
                 }
                 for listener in backendListeners {
@@ -424,11 +454,6 @@ func registerMethods(router: RPCRouter) {
                 throw error
             }
         }
-        pfEndpointStateCache.recordSuccessfulLiveMutation(
-            endpointSignatures,
-            cleanupIPs: stateCleanupIPs
-        )
-
         try requirePacketFilteringEnabled(
             phase: "after anchor load"
         ) { arguments, input in
@@ -851,6 +876,27 @@ private func rollbackVirtualIPPublication(
 /// installed because automatic interface selection follows that new route
 /// instead of the explicitly scoped LAN interface. Supplying the validated
 /// physical-interface address avoids that ambiguity.
+func observeLocalInterfaceMACs(
+    using command: (String, [String]) throws -> CommandResult
+) throws -> [String] {
+    // This read-only operation accepts no caller-selected executable or args.
+    // Python and its child processes may receive privacy-redacted identities.
+    let result = try command("/sbin/ifconfig", ["-a"])
+    guard result.status == 0 else {
+        throw RPCError.internalError("Could not observe local interface identities")
+    }
+    let unusable: Set<String> = [
+        "00:00:00:00:00:00", "02:00:00:00:00:00", "ff:ff:ff:ff:ff:ff",
+    ]
+    let addresses = Set(result.stdout.split(separator: "\n").compactMap {
+        ethernetAddressFromIfconfig(String($0))
+    }).subtracting(unusable)
+    guard !addresses.isEmpty, addresses.count <= 256 else {
+        throw RPCError.internalError("Local interface identities are unavailable")
+    }
+    return addresses.sorted()
+}
+
 func ethernetAddressFromIfconfig(_ output: String) -> String? {
     for line in output.split(separator: "\n") {
         let fields = line.split(whereSeparator: \.isWhitespace)
@@ -1485,20 +1531,31 @@ func requireSensorOwnedListener(
 
 /// Builds the complete PF anchor ruleset for redirects and alias isolation.
 ///
-/// Redirects use ``rdr pass`` so only connections to an advertised port can
-/// reach its private listener. Direct backend-port scans then fall through to
-/// the endpoint's final block rule.
+/// Translation only marks provenance. A separate filter rule requires that
+/// mark AND the kernel-observed socket UID, so a failed quarantine replacement
+/// cannot leave an unconditional pass to a different user's listener. Direct
+/// backend-port scans have no translation tag and hit the final block rule.
 func buildPFRules(
     forwardingRules: [[String: Any]],
     protectedEndpoints: [[String: Any]],
-    interface: String
+    interface: String,
+    sensorUID: uid_t? = nil
 ) throws -> [String] {
     guard !interface.isEmpty,
           interface.allSatisfy({ $0.isLetter || $0.isNumber }) else {
         throw RPCError.internalError("Invalid interface name: \(interface)")
     }
 
+    let hasTCPPublication = !forwardingRules.isEmpty || protectedEndpoints.contains {
+        !(($0["direct_ports"] as? [Int]) ?? []).isEmpty
+    }
+    if hasTCPPublication {
+        guard let sensorUID, sensorUID != 0, sensorUID != uid_t.max else {
+            throw RPCError.internalError("PF TCP publication requires a non-root sensor UID")
+        }
+    }
     var translationRules: [String] = []
+    var redirectFiltersByIP: [String: [String]] = [:]
     for rule in forwardingRules {
         guard let fromIP = rule["from_ip"] as? String,
               let fromPort = rule["from_port"] as? Int,
@@ -1514,9 +1571,20 @@ func buildPFRules(
         guard (1...65535).contains(fromPort), (1...65535).contains(toPort) else {
             throw RPCError.internalError("Invalid port in port forward rule")
         }
+        guard fromIP == toIP, let sensorUID,
+              protectedEndpoints.contains(where: { $0["ip"] as? String == fromIP }) else {
+            throw RPCError.internalError("PF redirects require an exact protected VIP")
+        }
+        // PF tags are kernel metadata, not packet content a LAN peer can set.
+        // All components come from validated IPv4/port values, under 63 bytes.
+        let tag = "squirrelops_\(fromIP.replacingOccurrences(of: ".", with: "_"))_\(fromPort)_\(toPort)"
         translationRules.append(
-            "rdr pass on \(interface) inet proto tcp from any to \(fromIP) "
-                + "port \(fromPort) -> \(toIP) port \(toPort)"
+            "rdr on \(interface) inet proto tcp from any to \(fromIP) "
+                + "port \(fromPort) tag \(tag) -> \(toIP) port \(toPort)"
+        )
+        redirectFiltersByIP[toIP, default: []].append(
+            "pass in quick on \(interface) inet proto tcp from any to \(toIP) "
+                + "port \(toPort) user \(sensorUID) flags any tagged \(tag) keep state"
         )
     }
 
@@ -1538,17 +1606,18 @@ func buildPFRules(
 
     var filterRules: [String] = []
     for ip in directPortsByIP.keys.sorted() {
+        filterRules.append(contentsOf: redirectFiltersByIP[ip, default: []])
         let ports = directPortsByIP[ip, default: []].sorted()
-        if ports.count == 1, let port = ports.first {
+        if ports.count == 1, let port = ports.first, let sensorUID {
             filterRules.append(
                 "pass in quick on \(interface) inet proto tcp from any to \(ip) "
-                    + "port \(port)"
+                    + "port \(port) user \(sensorUID)"
             )
-        } else if !ports.isEmpty {
+        } else if !ports.isEmpty, let sensorUID {
             let portSet = ports.map(String.init).joined(separator: ", ")
             filterRules.append(
                 "pass in quick on \(interface) inet proto tcp from any to \(ip) "
-                    + "port { \(portSet) }"
+                    + "port { \(portSet) } user \(sensorUID)"
             )
         }
         filterRules.append(
@@ -1579,6 +1648,7 @@ struct PFEndpointStateSignature: Equatable {
     let interface: String
     let redirects: [PFRedirectStateSignature]
     let directPorts: [Int]
+    var sensorUID: uid_t? = nil
 }
 
 /// Produces an order-independent state signature for each PF endpoint.
@@ -1589,7 +1659,8 @@ struct PFEndpointStateSignature: Equatable {
 func pfEndpointStateSignatures(
     forwardingRules: [[String: Any]],
     protectedEndpoints: [[String: Any]],
-    interface: String
+    interface: String,
+    sensorUID: uid_t? = nil
 ) throws -> [String: PFEndpointStateSignature] {
     guard !interface.isEmpty,
           interface.allSatisfy({ $0.isLetter || $0.isNumber }) else {
@@ -1655,7 +1726,9 @@ func pfEndpointStateSignatures(
         signatures[ip] = PFEndpointStateSignature(
             interface: interface,
             redirects: redirects,
-            directPorts: directPortsByIP[ip, default: []].sorted()
+            directPorts: directPortsByIP[ip, default: []].sorted(),
+            sensorUID: redirects.isEmpty && directPortsByIP[ip, default: []].isEmpty
+                ? nil : sensorUID
         )
     }
     return signatures
@@ -1701,6 +1774,7 @@ struct PFEndpointStateCache {
         }
         return signature.interface == interface
             && signature.directPorts.isEmpty
+            && !pendingCleanupIPs.contains(ip)
     }
 
     mutating func recordSuccessfulLiveMutation(
@@ -1713,6 +1787,10 @@ struct PFEndpointStateCache {
 
     mutating func completeCleanup() {
         pendingCleanupIPs.removeAll()
+    }
+
+    mutating func requireCleanup(for ips: [String]) {
+        pendingCleanupIPs.formUnion(ips)
     }
 }
 
@@ -1871,8 +1949,8 @@ func requirePacketFilteringEnabled(
 
 /// Replaces a just-loaded redirect ruleset with block-only quarantine if the
 /// exact sensor listener changes during the load window. Existing PF states
-/// are killed for every changed, removed, or still-protected endpoint before
-/// the original request is allowed to fail.
+/// are cleaned independently of the rule-load outcome. Failed cleanup stays
+/// pending and every endpoint is attempted even when an earlier command fails.
 func quarantinePortForwardingAfterListenerRace(
     protectedEndpoints: [[String: Any]],
     interface: String,
@@ -1901,26 +1979,41 @@ func quarantinePortForwardingAfterListenerRace(
     let quarantineData = Data(
         (quarantineRules.joined(separator: "\n") + "\n").utf8
     )
-    let load = try runner(
-        ["-a", "com.apple/squirrelops", "-f", "-"],
-        quarantineData
-    )
-    guard load.status == 0 else {
+    stateCache.requireCleanup(for: cleanupIPs)
+    var failedPhases: [String] = []
+    do {
+        let load = try runner(
+            ["-a", "com.apple/squirrelops", "-f", "-"],
+            quarantineData
+        )
+        guard load.status == 0 else {
+            throw RPCError.internalError("PF quarantine load failed")
+        }
+        stateCache.recordSuccessfulLiveMutation(
+            quarantineSignatures,
+            cleanupIPs: cleanupIPs
+        )
+    } catch {
+        failedPhases.append("quarantine load")
+    }
+    do { try ensurePacketFilteringEnabled(using: runner) }
+    catch { failedPhases.append("PF enable verification") }
+    for ip in cleanupIPs {
+        do { try cleanupPFStates(for: [ip], using: runner) }
+        catch { failedPhases.append("state cleanup for \(ip)") }
+    }
+    do {
+        try requirePacketFilteringEnabled(
+            phase: "after listener-race quarantine", using: runner
+        )
+    } catch { failedPhases.append("PF final verification") }
+    guard failedPhases.isEmpty else {
+        // Do not echo arbitrary child-process output through the root RPC.
         throw RPCError.internalError(
-            "Listener ownership changed and PF quarantine failed"
+            "Listener ownership changed; PF recovery incomplete: "
+                + failedPhases.joined(separator: ", ")
         )
     }
-    stateCache.recordSuccessfulLiveMutation(
-        quarantineSignatures,
-        cleanupIPs: cleanupIPs
-    )
-
-    try ensurePacketFilteringEnabled(using: runner)
-    try cleanupPFStates(for: cleanupIPs, using: runner)
-    try requirePacketFilteringEnabled(
-        phase: "after listener-race quarantine",
-        using: runner
-    )
     stateCache.completeCleanup()
 }
 

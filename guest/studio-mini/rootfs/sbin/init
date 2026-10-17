@@ -1,0 +1,112 @@
+#!/bin/sh
+set -eu
+
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+export HOME=/root
+
+fail() {
+    echo "studio-mini boot failed: $*" >&2
+    exec /bin/sh
+}
+
+mkdir -p /dev /proc /run /sys /var/log/samba /var/lib/samba/private
+mount -t devtmpfs devtmpfs /dev || fail "devtmpfs"
+mount -t proc proc /proc || fail "proc"
+mount -t sysfs sysfs /sys || fail "sysfs"
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run || fail "run tmpfs"
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts || fail "devpts"
+ip link set lo up || fail "loopback link"
+ip address replace 127.0.0.1/8 dev lo || fail "loopback address"
+
+modprobe virtio_vsock 2>/dev/null || true
+modprobe vmw_vsock_virtio_transport_common 2>/dev/null || true
+modprobe vmw_vsock_virtio_transport 2>/dev/null || true
+
+mkdir -p /run/sshd /run/squirrelops
+umask 077
+socat -u VSOCK-LISTEN:10000,reuseaddr CREATE:/run/squirrelops/persona.tar,mode=0600 \
+    || fail "persona channel"
+
+persona_size="$(wc -c < /run/squirrelops/persona.tar | tr -d '[:space:]')"
+case "$persona_size" in
+    ''|*[!0-9]*) fail "persona size" ;;
+esac
+if [ "$persona_size" -le 0 ] || [ "$persona_size" -gt 524288 ]; then
+    fail "persona size"
+fi
+
+tar -tf /run/squirrelops/persona.tar > /run/squirrelops/persona.paths \
+    || fail "persona archive"
+while IFS= read -r archive_path; do
+    case "$archive_path" in
+        /*|../*|*/../*|*/..|.|*/.) fail "persona path" ;;
+        etc/hostname|run/squirrelops/persona.json|Users/buildbot/*) ;;
+        *) fail "unexpected persona path" ;;
+    esac
+done < /run/squirrelops/persona.paths
+
+tar -xf /run/squirrelops/persona.tar -C / --no-same-owner --no-same-permissions \
+    || fail "persona extraction"
+rm -f /run/squirrelops/persona.tar /run/squirrelops/persona.paths
+
+persona=/run/squirrelops/persona.json
+[ -f "$persona" ] || fail "persona control"
+[ "$(jq -r '.persona_id' "$persona")" = "studio-mini-v1" ] || fail "persona identity"
+[ "$(jq -r '.username' "$persona")" = "buildbot" ] || fail "persona user"
+[ "$(jq -r '.hostname' "$persona")" = "studio-mini" ] || fail "persona hostname"
+password="$(jq -r '.login_password' "$persona")"
+[ "${#password}" -ge 12 ] || fail "persona password"
+
+hostname studio-mini
+chmod 0755 /Users || fail "macOS users directory"
+adduser -D -u 501 -h /Users/buildbot -s /bin/zsh buildbot 2>/dev/null || true
+printf 'buildbot:%s\n' "$password" | chpasswd || fail "login password"
+chown -R buildbot:buildbot /Users/buildbot
+find /Users/buildbot -type d -exec chmod 0750 {} +
+find /Users/buildbot -type f -exec chmod 0640 {} +
+chmod 0600 \
+    /Users/buildbot/.zsh_history \
+    /Users/buildbot/Projects/fieldkit-ios/.env.local \
+    /Users/buildbot/.cursor/mcp.json \
+    /Users/buildbot/.claude/settings.json \
+    /Users/buildbot/.codex/config.toml
+
+project=/Users/buildbot/Projects/fieldkit-ios
+mv "$project/.git/config" /run/squirrelops/project.gitconfig
+rm -rf "$project/.git"
+git -C "$project" init -b release/2.8 >/dev/null 2>&1 || fail "git repository"
+cp /run/squirrelops/project.gitconfig "$project/.git/config"
+rm -f /run/squirrelops/project.gitconfig
+git --git-dir="$project/.git" --work-tree="$project" config user.name "Morgan Lee"
+git --git-dir="$project/.git" --work-tree="$project" config user.email "morgan.lee@hawthorn.internal"
+git --git-dir="$project/.git" --work-tree="$project" add \
+    README.md .gitignore FieldKit.xcodeproj Sources fastlane
+GIT_AUTHOR_DATE='2026-08-29T14:17:00Z' \
+GIT_COMMITTER_DATE='2026-08-29T14:17:00Z' \
+    git --git-dir="$project/.git" --work-tree="$project" \
+        commit -m 'Prepare FieldKit 2.8 staging build' >/dev/null 2>&1 \
+    || fail "git commit"
+chown -R buildbot:buildbot "$project"
+
+ssh-keygen -A >/dev/null 2>&1 || fail "ssh host keys"
+printf '%s\n%s\n' "$password" "$password" | smbpasswd -s -a buildbot >/dev/null \
+    || fail "samba password"
+unset password
+rm -f "$persona"
+
+syslogd
+/usr/sbin/sshd -D -e &
+sshd_pid=$!
+/usr/sbin/smbd --foreground --no-process-group &
+smbd_pid=$!
+
+socat VSOCK-LISTEN:10022,reuseaddr,fork,max-children=16 TCP:127.0.0.1:22 &
+ssh_relay_pid=$!
+socat VSOCK-LISTEN:10445,reuseaddr,fork,max-children=16 TCP:127.0.0.1:445 &
+smb_relay_pid=$!
+
+while kill -0 "$sshd_pid" "$smbd_pid" "$ssh_relay_pid" "$smb_relay_pid" 2>/dev/null; do
+    sleep 2
+done
+fail "service exited"

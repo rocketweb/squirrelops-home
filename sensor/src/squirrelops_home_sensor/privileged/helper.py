@@ -104,6 +104,16 @@ class PrivilegedOperations(ABC):
         """
         return True
 
+    async def lan_context(self) -> dict[str, str]:
+        """Read the macOS helper-selected physical LAN before sensor startup."""
+        raise NotImplementedError("Helper LAN discovery is only supported on macOS")
+
+    async def local_interface_macs(self) -> set[str]:
+        """Observe local link identities; macOS delegates to its helper."""
+        from squirrelops_home_sensor.network.identity import local_interface_macs
+
+        return local_interface_macs()
+
     @abstractmethod
     async def arp_scan(self, subnet: str) -> list[tuple[str, str]]:
         """Scan a subnet via ARP and return (ip, mac) pairs.

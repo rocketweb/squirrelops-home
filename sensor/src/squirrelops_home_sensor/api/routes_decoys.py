@@ -23,6 +23,11 @@ async def get_decoy_orchestrator():
     return None
 
 
+async def get_deep_decoy_orchestrator():
+    """Return the DeepDecoyOrchestrator instance. Overridden in production."""
+    return None
+
+
 # ---------- Request/Response models ----------
 
 
@@ -88,6 +93,9 @@ class ConnectionEntry(BaseModel):
     protocol: str | None = None
     request_path: str | None = None
     credential_used: str | None = None
+    intruder_intent: str | None = None
+    narrative_stage: int | None = None
+    interaction_type: str | None = None
     timestamp: str
 
 
@@ -187,6 +195,7 @@ def _decoy_summary(
 async def list_decoys(
     db: aiosqlite.Connection = Depends(get_db),
     mimic_orchestrator=Depends(get_mimic_orchestrator),
+    deep_orchestrator=Depends(get_deep_decoy_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """List all decoys (including mimics) with status and connection counts."""
@@ -207,9 +216,16 @@ async def list_decoys(
                     row["id"],
                     row["status"],
                 )
-                if row["decoy_type"] == "mimic"
-                and mimic_orchestrator is not None
-                else row["status"]
+                if row["decoy_type"] == "mimic" and mimic_orchestrator is not None
+                else (
+                    (
+                        deep_orchestrator.effective_status(row["id"], row["status"])
+                        if deep_orchestrator is not None
+                        else "degraded"
+                    )
+                    if row["decoy_type"] == "deep" and row["status"] == "active"
+                    else row["status"]
+                )
             ),
         )
         for row in rows
@@ -235,11 +251,19 @@ async def restart_decoy(
     db: aiosqlite.Connection = Depends(get_db),
     orchestrator=Depends(get_decoy_orchestrator),
     mimic_orchestrator=Depends(get_mimic_orchestrator),
+    deep_orchestrator=Depends(get_deep_decoy_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """Restart the live listener and report failure instead of faking state."""
     existing = await _get_decoy_or_404(db, decoy_id)
-    if existing["decoy_type"] == "mimic":
+    if existing["decoy_type"] == "deep":
+        if deep_orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Deep-decoy orchestrator is unavailable",
+            )
+        succeeded = await deep_orchestrator.restart(decoy_id)
+    elif existing["decoy_type"] == "mimic":
         if mimic_orchestrator is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -270,11 +294,19 @@ async def enable_decoy(
     db: aiosqlite.Connection = Depends(get_db),
     orchestrator=Depends(get_decoy_orchestrator),
     mimic_orchestrator=Depends(get_mimic_orchestrator),
+    deep_orchestrator=Depends(get_deep_decoy_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """Start a stopped decoy and only mark it active after it is reachable."""
     existing = await _get_decoy_or_404(db, decoy_id)
-    if existing["decoy_type"] == "mimic":
+    if existing["decoy_type"] == "deep":
+        if deep_orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Deep-decoy orchestrator is unavailable",
+            )
+        succeeded = await deep_orchestrator.enable(decoy_id)
+    elif existing["decoy_type"] == "mimic":
         if mimic_orchestrator is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -305,11 +337,19 @@ async def disable_decoy(
     db: aiosqlite.Connection = Depends(get_db),
     orchestrator=Depends(get_decoy_orchestrator),
     mimic_orchestrator=Depends(get_mimic_orchestrator),
+    deep_orchestrator=Depends(get_deep_decoy_orchestrator),
     _auth: dict = Depends(verify_client_cert),
 ):
     """Stop the live listener before reporting the decoy as stopped."""
     existing = await _get_decoy_or_404(db, decoy_id)
-    if existing["decoy_type"] == "mimic":
+    if existing["decoy_type"] == "deep":
+        if deep_orchestrator is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Deep-decoy orchestrator is unavailable",
+            )
+        succeeded = await deep_orchestrator.disable(decoy_id)
+    elif existing["decoy_type"] == "mimic":
         if mimic_orchestrator is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -345,6 +385,11 @@ async def update_decoy_config(
 ):
     """Update decoy-specific configuration. Merges with existing config, restarts decoy."""
     row = await _get_decoy_or_404(db, decoy_id)
+    if row["decoy_type"] == "deep":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Studio Mini configuration is release-managed and cannot be edited",
+        )
     existing_config = _parse_config(row["config"])
 
     # Merge: new keys overwrite, existing keys preserved
@@ -515,6 +560,9 @@ async def get_decoy_connections(
             protocol=row["protocol"],
             request_path=row["request_path"],
             credential_used=row["credential_used"],
+            intruder_intent=row["intruder_intent"],
+            narrative_stage=row["narrative_stage"],
+            interaction_type=row["interaction_type"],
             timestamp=row["timestamp"],
         )
         for row in rows

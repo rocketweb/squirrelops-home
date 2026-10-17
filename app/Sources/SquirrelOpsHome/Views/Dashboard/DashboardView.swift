@@ -75,7 +75,7 @@ struct DashboardView: View {
         ) { item in
             Label {
                 Text(item.rawValue)
-                    .font(Typography.body)
+                    .font(.system(size: 13))
             } icon: {
                 Image(systemName: item.icon)
             }

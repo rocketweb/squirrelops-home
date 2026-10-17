@@ -7,11 +7,14 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tarfile
 import tomllib
 from pathlib import Path
 
 import yaml
+
+from tests.guest_archive import NETWORK_FILES, initramfs
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -43,6 +46,29 @@ UniqueKeyLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
     _construct_unique_mapping,
 )
+
+
+def test_home_release_verification_docs_use_only_home_artifacts() -> None:
+    documentation = (REPO_ROOT / "docs/RELEASE_SECURITY.md").read_text(encoding="utf-8")
+    verification = documentation.split("## Independent verification\n", 1)[1].split(
+        "## ", 1
+    )[0]
+    commands = "\n".join(re.findall(r"```bash\n(.*?)```", verification, re.DOTALL))
+    assert "RELEASE_TAG=home-vX.Y.Z" in commands
+    assert "--signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml" in commands
+    for sensor_only in ("install.sh", "oci://", "release-sensor.yml", "sensor-v"):
+        assert sensor_only not in commands, f"Home verification includes {sensor_only}"
+    for home_asset in (
+        "RELEASE-VERIFICATION.md",
+        "SquirrelOpsHome-X.Y.Z.pkg",
+        "squirrelops-home.rb",
+        "release-metadata.json",
+        "SHA256SUMS",
+    ):
+        assert home_asset in commands
+    assert "shasum -a 256 -c SHA256SUMS" in commands
+    assert "pkgutil --check-signature SquirrelOpsHome-X.Y.Z.pkg" in commands
+    assert "spctl --assess --type install --verbose=2 SquirrelOpsHome-X.Y.Z.pkg" in commands
 
 
 def test_packaged_python_runtime_is_sanitized_and_relocated(tmp_path: Path) -> None:
@@ -302,6 +328,10 @@ def test_release_app_strips_and_rejects_embedded_build_host_paths() -> None:
     assert '/usr/bin/strip -S "$binary"' in app_builder
     assert 'validate_no_build_host_paths "$APP_EXECUTABLE"' in app_builder
     assert 'validate_no_build_host_paths "$HELPER_PATH"' in app_builder
+    assert 'if [ "$BUILD_CONFIG" = "debug" ]; then' in app_builder
+    assert '--entitlements "$REPO_ROOT/app/entitlements/deception-guest.entitlements"' in (
+        app_builder
+    )
     assert "Bundle.module" not in font_registration
     assert "Bundle.main.executableURL" in font_registration
     assert 'grep -aFRl "$REPO_ROOT" "$APP_ROOT"' in package_builder
@@ -351,14 +381,14 @@ def test_macos_package_rejects_missing_or_unusable_helper() -> None:
     assert '/usr/bin/nc -zU "$HELPER_SOCKET"' not in sensor_postinstall
 
 
-def test_sensor_postinstall_fails_when_daemon_does_not_become_healthy() -> None:
+def test_sensor_postinstall_fails_when_launchd_handoff_is_not_stable() -> None:
     sensor_postinstall = (REPO_ROOT / "scripts/pkg/postinstall").read_text()
 
     assert 'if ! launchctl bootstrap system "$PLIST_DEST"' in sensor_postinstall
     assert "Failed to bootstrap sensor service" in sensor_postinstall
-    assert "Sensor did not become healthy within ${HEALTH_TIMEOUT_SECONDS}s" in sensor_postinstall
-    timeout_guard = sensor_postinstall.index('if [ "$SENSOR_HEALTHY" -ne 1 ]; then')
-    assert "exit 1" in sensor_postinstall[timeout_guard:]
+    assert "Sensor did not remain stable during startup handoff" in sensor_postinstall
+    handoff_guard = sensor_postinstall.index("if wait_for_sensor_handoff; then")
+    assert "exit 1" in sensor_postinstall[handoff_guard:]
 
 
 def test_component_versions_are_independently_authoritative() -> None:
@@ -437,6 +467,13 @@ def test_app_signer_requires_identity_for_release_but_not_local_builds(
     helper.parent.mkdir(parents=True)
     helper.write_text("#!/bin/sh\n", encoding="utf-8")
     helper.chmod(0o755)
+    deception_runtime = (
+        app_bundle
+        / "Contents/Library/Helpers/com.squirrelops.deception-guest"
+    )
+    deception_runtime.parent.mkdir(parents=True)
+    deception_runtime.write_text("#!/bin/sh\n", encoding="utf-8")
+    deception_runtime.chmod(0o755)
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -493,6 +530,149 @@ def test_release_package_builder_fails_closed_on_all_trust_gates() -> None:
     assert 'codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"' in (package_builder)
     assert 'codesign --verify --deep --strict --verbose=2 "$STAGED_APP_BUNDLE"' in (package_builder)
     assert 'codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"' in signer
+
+
+def test_guest_bundle_verifier_accepts_exact_contract_and_rejects_tampering(
+    tmp_path: Path,
+) -> None:
+    bundle = tmp_path / "guest"
+    bundle.mkdir()
+    kernel = bytearray(64)
+    kernel[56:60] = b"ARMd"
+    (bundle / "vmlinuz").write_bytes(kernel)
+    (bundle / "studio-mini.initramfs").write_bytes(initramfs())
+
+    def digest(name: str) -> str:
+        return hashlib.sha256((bundle / name).read_bytes()).hexdigest()
+
+    manifest = {
+        "schema_version": 1,
+        "persona_id": "studio-mini-v1",
+        "boot": {
+            "kernel": {"path": "vmlinuz", "sha256": digest("vmlinuz")},
+            "initial_ramdisk": {
+                "path": "studio-mini.initramfs",
+                "sha256": digest("studio-mini.initramfs"),
+            },
+            "command_line": "console=hvc0 rdinit=/sbin/init",
+        },
+        "resources": {
+            "cpu_count": 2,
+            "memory_bytes": 1_073_741_824,
+            "max_connections": 16,
+        },
+        "containment": {
+            "network_devices": 0,
+            "host_shares": [],
+            "clipboard": False,
+            "egress": "none",
+            "root_filesystem": "memory-only",
+        },
+        "services": [
+            {"name": "ssh", "advertised_port": 22, "guest_vsock_port": 10022},
+            {"name": "smb", "advertised_port": 445, "guest_vsock_port": 10445},
+        ],
+    }
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    verifier = REPO_ROOT / "scripts/verify-guest-bundle.py"
+
+    valid = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert valid.returncode == 0, valid.stderr
+
+    polluted = NETWORK_FILES | {"etc/resolv.conf": b"nameserver 192.168.65.7\n"}
+    (bundle / "studio-mini.initramfs").write_bytes(initramfs([
+        (name, content, 0o100644, 1) for name, content in polluted.items()
+    ]))
+    manifest["boot"]["initial_ramdisk"]["sha256"] = digest("studio-mini.initramfs")
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    leaked_dns = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False, capture_output=True, text=True,
+    )
+    assert leaked_dns.returncode != 0, "Matching hashes must not authorize builder DNS"
+    assert "network identity" in leaked_dns.stderr
+    (bundle / "studio-mini.initramfs").write_bytes(initramfs())
+    manifest["boot"]["initial_ramdisk"]["sha256"] = digest("studio-mini.initramfs")
+
+    manifest["services"] = list(reversed(manifest["services"]))
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    reordered = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert reordered.returncode != 0
+    assert "service map changed" in reordered.stderr
+
+    manifest["services"] = list(reversed(manifest["services"]))
+    manifest["services"].append(dict(manifest["services"][0]))
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    duplicated = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert duplicated.returncode != 0
+    assert "service map changed" in duplicated.stderr
+
+    manifest["services"].pop()
+    (bundle / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (bundle / "studio-mini.initramfs").write_bytes(b"tampered")
+    tampered = subprocess.run(
+        [sys.executable, str(verifier), str(bundle), "--architecture", "arm64"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert tampered.returncode != 0
+    assert "digest does not match" in tampered.stderr
+
+
+def test_guest_macos_home_is_traversable_before_services_start() -> None:
+    init = (REPO_ROOT / "guest/studio-mini/rootfs/sbin/init").read_text()
+
+    users_mode = init.index('chmod 0755 /Users || fail "macOS users directory"')
+    user_creation = init.index("adduser -D -u 501")
+    ssh_start = init.index("/usr/sbin/sshd -D -e")
+    samba_start = init.index("/usr/sbin/smbd --foreground")
+
+    assert users_mode < user_creation < ssh_start
+    assert users_mode < user_creation < samba_start
+
+
+def test_guest_build_fails_when_the_reviewed_package_inventory_drifts() -> None:
+    dockerfile = (REPO_ROOT / "guest/studio-mini/Dockerfile").read_text()
+    package_lock = (
+        REPO_ROOT / "guest/studio-mini/packages.lock"
+    ).read_text(encoding="utf-8").splitlines()
+
+    assert package_lock == sorted(package_lock)
+    assert len(package_lock) == len(set(package_lock))
+    assert len(package_lock) >= 80
+    for required in (
+        "linux-virt-",
+        "openssh-server-",
+        "samba-server-",
+        "socat-",
+    ):
+        assert any(line.startswith(required) for line in package_lock)
+
+    assert "COPY packages.lock /tmp/squirrelops-packages.lock" in dockerfile
+    installer = (REPO_ROOT / "guest/studio-mini/install-packages.sh").read_text()
+    assert "sh /tmp/install-packages.sh" in dockerfile
+    assert "RUN --network=none" in dockerfile
+    assert "apk info -vv | sort > /etc/squirrelops-guest-packages.txt" in installer
+    assert (
+        "diff -u /tmp/squirrelops-packages.lock "
+        "/etc/squirrelops-guest-packages.txt"
+    ) in installer
 
 
 def test_release_workflow_requires_credentials_and_verifies_before_upload() -> None:
@@ -781,6 +961,16 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     version = (REPO_ROOT / "VERSION").read_text().strip()
     package = tmp_path / f"SquirrelOpsHome-{version}.pkg"
     package.write_bytes(b"signed-package-placeholder")
+    third_party = tmp_path / "third-party"
+    third_party.mkdir()
+    (third_party / "THIRD-PARTY-SOURCES.tar").write_bytes(b"retained-sources")
+    (third_party / "THIRD-PARTY-NOTICES.txt").write_bytes(b"original-notices")
+    (third_party / "THIRD-PARTY-INVENTORY.json").write_text(json.dumps({
+        "schema_version": 1, "distribution_version": version,
+        "source_archive": {"name": "THIRD-PARTY-SOURCES.tar", "size": len(b"retained-sources"),
+                           "sha256": hashlib.sha256(b"retained-sources").hexdigest()},
+        "notices_sha256": hashlib.sha256(b"original-notices").hexdigest(),
+    }))
     output_dir = tmp_path / "release-assets"
     root_manifest = b'{"manifests":[],"schemaVersion":2}'
     digest_hex = hashlib.sha256(root_manifest).hexdigest()
@@ -816,6 +1006,8 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
         str(REPO_ROOT / "scripts/prepare-release-assets.py"),
         "--package",
         str(package),
+        "--third-party",
+        str(third_party),
         "--tag",
         f"home-v{version}",
         "--commit",
@@ -904,6 +1096,11 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     assert metadata["homebrew"]["sha256"] == expected_package_sha
     checksums = (output_dir / "SHA256SUMS").read_text()
     assert "squirrelops-home.rb" in checksums
+    for companion in ("THIRD-PARTY-SOURCES.tar", "THIRD-PARTY-INVENTORY.json", "THIRD-PARTY-NOTICES.txt"):
+        assert companion in checksums
+        assert metadata["third_party"][companion]["sha256"] == hashlib.sha256(
+            (third_party / companion).read_bytes()
+        ).hexdigest()
     assert "install.sh" not in checksums
     assert "squirrelops-sensor-" not in checksums
     assert f"{verification_sha}  RELEASE-VERIFICATION.md" in checksums
@@ -920,6 +1117,19 @@ def test_release_asset_preparer_renders_and_checksums_pinned_inputs(
     assert {path.name: path.read_bytes() for path in output_dir.iterdir()} == {
         path.name: path.read_bytes() for path in repeat_output.iterdir()
     }
+    # Source/notice companions are not optional and cannot drift after packaging.
+    for name in ("THIRD-PARTY-SOURCES.tar", "THIRD-PARTY-NOTICES.txt"):
+        path = third_party / name
+        saved = path.read_bytes()
+        path.write_bytes(b"changed")
+        invalid = subprocess.run([*command[:-1], str(tmp_path / "invalid")], capture_output=True, text=True)
+        assert invalid.returncode != 0
+        assert "checksum mismatch" in invalid.stderr
+        path.write_bytes(saved)
+    (third_party / "THIRD-PARTY-INVENTORY.json").unlink()
+    missing = subprocess.run([*command[:-1], str(tmp_path / "missing")], capture_output=True, text=True)
+    assert missing.returncode != 0
+    assert "Missing regular companion" in missing.stderr
 
 
 def test_sensor_release_assets_are_independent_and_digest_pinned(
@@ -1957,6 +2167,40 @@ def test_release_verifier_rejects_legacy_and_malformed_tags(
         )
         assert result.returncode != 0
         assert "Release tag must be home-vX.Y.Z" in result.stderr
+
+
+def test_macos_support_docs_distinguish_release_support_from_build_coverage() -> None:
+    for relative_path in (
+        "README.md",
+        "docs/USER_GUIDE.md",
+        "docs/DEVELOPMENT.md",
+        "docs/RELEASE_SECURITY.md",
+        "docs/releases/2.1.0.md",
+        "guest/studio-mini/README.md",
+        "site/public/index.html",
+    ):
+        content = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        normalized = " ".join(content.split())
+        assert "Apple Silicon (ARM64)" in normalized, relative_path
+        assert "Intel Macs are not supported." in normalized, relative_path
+        assert "Apple Silicon or Intel" not in normalized, relative_path
+        assert "Apple silicon and Intel" not in normalized, relative_path
+
+    # Linux development targets and dual-architecture guest build coverage
+    # remain distinct from published macOS support. Linux publication is on hold.
+    guide = (REPO_ROOT / "docs/USER_GUIDE.md").read_text(encoding="utf-8")
+    linux_requirements = guide.split("### Docker on Linux/NAS", 1)[1].split("### ", 1)[0]
+    assert "ARM64" in linux_requirements and "x86_64" in linux_requirements
+    assert "development targets" in linux_requirements
+    assert "publication on hold" in linux_requirements
+    for relative_path in (
+        "docs/DEVELOPMENT.md",
+        "docs/RELEASE_SECURITY.md",
+        "guest/studio-mini/README.md",
+    ):
+        content = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "x86_64" in content, relative_path
+        assert "build coverage" in content, relative_path
 
 
 def test_release_docs_require_remote_trust_controls_and_reviewed_promotion() -> None:

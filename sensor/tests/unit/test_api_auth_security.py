@@ -1,5 +1,7 @@
 """Security invariants for development-only authentication paths."""
 
+import hashlib
+
 import aiosqlite
 import pytest
 from fastapi import FastAPI, HTTPException, Request
@@ -9,6 +11,8 @@ from squirrelops_home_sensor.api.deps import (
     is_loopback_client,
     verify_client_cert,
 )
+from squirrelops_home_sensor.api.ws import _authenticate
+from squirrelops_home_sensor.db.schema import create_all_tables
 
 
 def test_only_literal_loopback_addresses_are_accepted() -> None:
@@ -23,17 +27,11 @@ def test_only_literal_loopback_addresses_are_accepted() -> None:
 @pytest.mark.asyncio
 async def test_tls_transport_cannot_use_bearer_when_scheme_is_downgraded() -> None:
     async with aiosqlite.connect(":memory:") as db:
-        await db.execute(
-            """CREATE TABLE pairing (
-                   client_name TEXT NOT NULL,
-                   client_cert_fingerprint TEXT NOT NULL,
-                   is_local INTEGER NOT NULL
-               )"""
-        )
+        await create_all_tables(db)
         await db.execute(
             """INSERT INTO pairing
-               (client_name, client_cert_fingerprint, is_local)
-               VALUES ('local-client', 'local-token', 1)"""
+               (client_name, client_cert_fingerprint, is_local, paired_at)
+               VALUES ('local-client', 'local-token', 1, '2026-08-24T00:00:00Z')"""
         )
         await db.commit()
 
@@ -67,3 +65,84 @@ async def test_tls_transport_cannot_use_bearer_when_scheme_is_downgraded() -> No
             await verify_client_cert(request)
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_pending_tls_client_certificate_cannot_authenticate_http() -> None:
+    async with aiosqlite.connect(":memory:") as db:
+        await create_all_tables(db)
+        cert_der = b"pending-http-client-certificate"
+        fingerprint = f"sha256:{hashlib.sha256(cert_der).hexdigest()}"
+        await db.execute(
+            """INSERT INTO pairing
+               (client_name, client_cert_fingerprint, is_local, paired_at, status)
+               VALUES ('pending-client', ?, 1, '2026-08-24T00:00:00Z', 'pending')""",
+            (fingerprint,),
+        )
+        await db.commit()
+        app = FastAPI()
+
+        async def override_db():
+            yield db
+
+        app.dependency_overrides[get_db] = override_db
+        request = Request({
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "scheme": "https",
+            "method": "GET",
+            "path": "/devices",
+            "raw_path": b"/devices",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 8443),
+            "extensions": {"tls": {"client_cert_der": cert_der}},
+            "app": app,
+        })
+
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_client_cert(request)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_pending_tls_client_certificate_cannot_authenticate_websocket() -> None:
+    async with aiosqlite.connect(":memory:") as db:
+        await create_all_tables(db)
+        cert_der = b"pending-websocket-client-certificate"
+        fingerprint = f"sha256:{hashlib.sha256(cert_der).hexdigest()}"
+        await db.execute(
+            """INSERT INTO pairing
+               (client_name, client_cert_fingerprint, is_local, paired_at, status)
+               VALUES ('pending-client', ?, 1, '2026-08-24T00:00:00Z', 'pending')""",
+            (fingerprint,),
+        )
+        await db.commit()
+
+        class FakeWebSocket:
+            scope = {
+                "scheme": "wss",
+                "client": ("127.0.0.1", 50000),
+                "extensions": {"tls": {"client_cert_der": cert_der}},
+            }
+
+            def __init__(self) -> None:
+                self.sent: list[dict] = []
+
+            async def receive_json(self) -> dict:
+                return {"type": "auth"}
+
+            async def send_json(self, message: dict) -> None:
+                self.sent.append(message)
+
+        ws = FakeWebSocket()
+        result = await _authenticate(ws, db)  # type: ignore[arg-type]
+
+    assert result is None
+    assert ws.sent == [{
+        "type": "auth_error",
+        "reason": "Valid TLS client certificate required.",
+    }]

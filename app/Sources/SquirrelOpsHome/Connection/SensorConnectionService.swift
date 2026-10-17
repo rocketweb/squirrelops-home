@@ -92,18 +92,22 @@ public final class SensorConnectionService: @unchecked Sendable {
     // MARK: - Connection Lifecycle
 
     public func connect(baseURL: URL, certFingerprint: String) async {
+        guard !Task.isCancelled else { return }
         self.baseURL = baseURL
         self.certFingerprint = certFingerprint
         lastError = nil
 
         state = .connecting
         await syncStateAsync()
+        guard !Task.isCancelled else { return }
 
         // Health check
         let health: HealthResponse
         do {
             health = try await sensorClient.request(.health)
+            try Task.checkCancellation()
         } catch {
+            guard !Task.isCancelled else { return }
             if await localSensorProbe() {
                 state = .authFailed
                 lastError = "Stored pairing does not match the local sensor"
@@ -125,7 +129,9 @@ public final class SensorConnectionService: @unchecked Sendable {
         let status: StatusResponse
         do {
             status = try await sensorClient.request(.status)
+            try Task.checkCancellation()
         } catch let error as SensorClientError where error.httpStatusCode == 403 {
+            guard !Task.isCancelled else { return }
             // Sensor is reachable but rejected our credentials — pairing is broken.
             // Don't schedule reconnect; user must re-pair.
             state = .authFailed
@@ -133,6 +139,7 @@ public final class SensorConnectionService: @unchecked Sendable {
             await syncStateAsync()
             return
         } catch {
+            guard !Task.isCancelled else { return }
             state = .disconnected
             lastError = "Initial sync failed: \(error.localizedDescription)"
             await syncStateAsync()
@@ -155,7 +162,9 @@ public final class SensorConnectionService: @unchecked Sendable {
             .profile,
             as: ResourceProfileResponse.self
         )
+        guard !Task.isCancelled else { return }
         await MainActor.run {
+            guard !Task.isCancelled else { return }
             appState?.sensorInfo = HealthResponse(
                 version: status.version ?? health.version,
                 sensorId: health.sensorId,
@@ -186,7 +195,9 @@ public final class SensorConnectionService: @unchecked Sendable {
             .alerts(limit: 200, offset: 0),
             as: PaginatedAlerts.self
         )
+        guard !Task.isCancelled else { return }
         await MainActor.run {
+            guard !Task.isCancelled else { return }
             if let decoys {
                 appState?.decoys = decoys.items
             }
@@ -205,16 +216,23 @@ public final class SensorConnectionService: @unchecked Sendable {
         }
 
         // WebSocket setup
+        guard !Task.isCancelled else { return }
         do {
             webSocketManager.connect()
             try await webSocketManager.sendAuth(certFingerprint: certFingerprint, token: nil)
+            try Task.checkCancellation()
             // A fresh app process has no in-memory WebSocket cursor. The
             // authenticated REST status response supplies a server high-water
             // mark captured before the collection snapshot, so replay covers
             // only concurrent changes instead of the complete event history.
             let replayCursor = status.eventSeq ?? webSocketManager.lastSeq
             try await webSocketManager.requestReplay(sinceSeq: replayCursor)
+            try Task.checkCancellation()
         } catch {
+            guard !Task.isCancelled else {
+                webSocketManager.disconnect()
+                return
+            }
             state = .disconnected
             lastError = "WebSocket setup failed: \(error.localizedDescription)"
             await syncStateAsync()
@@ -229,6 +247,7 @@ public final class SensorConnectionService: @unchecked Sendable {
         disconnectAlertTask = nil
         reconnectAttempts = 0
         await replayQueuedActions()
+        guard !Task.isCancelled else { return }
 
         // Start learning progress polling if in learning mode
         if let learning = await MainActor.run(body: { appState?.learningStatus }),
@@ -240,10 +259,11 @@ public final class SensorConnectionService: @unchecked Sendable {
             guard let self else { return }
             let stream = self.webSocketManager.receiveMessages()
             for await frame in stream {
+                guard !Task.isCancelled else { return }
                 self.onEvent(frame)
             }
             // Stream ended — if we were still live, treat as disconnect
-            if self.state == .live {
+            if !Task.isCancelled && self.state == .live {
                 self.state = .disconnected
                 self.lastError = "WebSocket connection lost"
                 self.syncState()
@@ -277,6 +297,7 @@ public final class SensorConnectionService: @unchecked Sendable {
     public func replayQueuedActions() async {
         let endpoints = actionQueue.dequeueAll()
         for endpoint in endpoints {
+            guard !Task.isCancelled else { return }
             try? await sensorClient.request(endpoint)
         }
     }
@@ -293,7 +314,9 @@ public final class SensorConnectionService: @unchecked Sendable {
                 guard let self, self.state == .live else { return }
                 do {
                     let learning: LearningStatusResponse = try await self.sensorClient.request(.learning)
+                    guard !Task.isCancelled else { return }
                     await MainActor.run {
+                        guard !Task.isCancelled else { return }
                         self.appState?.updateLearningStatus(learning)
                     }
                     if !learning.enabled {
@@ -317,6 +340,7 @@ public final class SensorConnectionService: @unchecked Sendable {
         _ endpoint: Endpoint,
         as type: T.Type
     ) async -> T? {
+        guard !Task.isCancelled else { return nil }
         do {
             let value: T = try await sensorClient.request(endpoint)
             return value
@@ -331,9 +355,13 @@ public final class SensorConnectionService: @unchecked Sendable {
         var all: [P.Item] = []
         var offset = 0
         while true {
+            try Task.checkCancellation()
             let page = try await fetch(offset)
+            try Task.checkCancellation()
             all.append(contentsOf: page.pageItems)
-            if offset + page.pageItems.count >= page.pageTotal {
+            // A deletion between pages can leave the total ahead of the
+            // returned items. An empty page cannot advance this cursor.
+            if page.pageItems.isEmpty || offset + page.pageItems.count >= page.pageTotal {
                 break
             }
             offset += page.pageItems.count
@@ -355,9 +383,10 @@ public final class SensorConnectionService: @unchecked Sendable {
     /// Awaitable variant for async contexts (e.g. connect()) — guarantees
     /// the MainActor write completes before returning.
     private func syncStateAsync() async {
-        guard let appState else { return }
+        guard let appState, !Task.isCancelled else { return }
         let currentState = state
         await MainActor.run {
+            guard !Task.isCancelled else { return }
             appState.connectionState = currentState
         }
     }

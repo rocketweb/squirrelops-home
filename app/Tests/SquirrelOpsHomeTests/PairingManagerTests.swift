@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import SquirrelOpsLocalEnrollment
 import Testing
 
 @testable import SquirrelOpsHome
@@ -51,13 +52,87 @@ final class MockPairingClient: PairingClientProtocol, @unchecked Sendable {
     }
 }
 
+final class MockLocalEnrollmentProvider: LocalEnrollmentProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _requestCount = 0
+    var requestCount: Int { lock.withLock { _requestCount } }
+    private var _lastRequest: LocalEnrollmentRequest?
+    var lastRequest: LocalEnrollmentRequest? { lock.withLock { _lastRequest } }
+
+    var response: LocalEnrollmentResponse?
+    var error: (any Error)?
+
+    func enroll(request: LocalEnrollmentRequest) async throws -> LocalEnrollmentResponse {
+        lock.withLock {
+            _requestCount += 1
+            _lastRequest = request
+        }
+        if let error { throw error }
+        guard let response else { throw LocalEnrollmentClientError.invalidResponse }
+        return response
+    }
+}
+
 @Suite("PairingManager", .serialized)
 struct PairingManagerTests {
+    @Test("Nonce RNG failure stops pairing before verify or credential storage")
+    func nonceFailureStopsPairing() async {
+        let client = MockPairingClient()
+        client.challengeResponse = ChallengeResponse(
+            challenge: String(repeating: "ab", count: 32),
+            sensorId: "synthetic-sensor", sensorName: "Synthetic Sensor"
+        )
+        let manager = PairingManager(client: client)
+        manager.fillRandomBytes = { _ in -1 }
+        let sensor = PairingManager.DiscoveredSensor(
+            name: "Synthetic", endpoint: .hostPort(host: "127.0.0.1", port: 8443),
+            host: "127.0.0.1", port: 8443
+        )
+        do {
+            _ = try await manager.pair(sensor: sensor, code: "synthetic-code")
+            Issue.record("Expected random generation failure")
+        } catch {
+            #expect(error.localizedDescription == "Could not securely generate the pairing nonce")
+        }
+        #expect(client.callLog == ["challenge"])
+    }
 
     private func useIsolatedPairedSensorAccount() -> String {
         let account = "io.squirrelops.home.paired-sensor.test.\(UUID().uuidString)"
         PairingManager.pairedSensorAccountOverride = account
         return account
+    }
+
+    @Test("autoLocalPair sends a signed CSR through the privileged provider")
+    func autoLocalPairUsesPrivilegedEnrollment() async {
+        let client = MockPairingClient()
+        let provider = MockLocalEnrollmentProvider()
+        provider.error = LocalEnrollmentClientError.serviceUnavailable
+        let manager = PairingManager(client: client, localEnrollmentProvider: provider)
+        let sensor = PairingManager.DiscoveredSensor(
+            name: "Local Sensor",
+            endpoint: NWEndpoint.hostPort(
+                host: NWEndpoint.Host("127.0.0.1"),
+                port: NWEndpoint.Port(integerLiteral: 8443)
+            ),
+            host: "127.0.0.1",
+            port: 8443
+        )
+
+        do {
+            _ = try await manager.autoLocalPair(sensor: sensor)
+            Issue.record("Expected local enrollment to fail")
+        } catch let error as LocalEnrollmentClientError {
+            #expect(error == .serviceUnavailable)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(provider.requestCount == 1)
+        #expect(provider.lastRequest?.clientName.isEmpty == false)
+        #expect(provider.lastRequest?.csrPEM.contains("BEGIN CERTIFICATE REQUEST") == true)
+        #expect(UUID(uuidString: provider.lastRequest?.requestID ?? "") != nil)
+        #expect(client.callLog.isEmpty)
     }
 
     @Test("pair() calls challenge, verify, complete in order")

@@ -28,6 +28,10 @@
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <!-- Ordered mDNS, scan/scout, guest and network cleanup exceeds the
+         system-defined SIGTERM grace period on some macOS versions. -->
+    <key>ExitTimeOut</key>
+    <integer>60</integer>
     <key>StandardOutPath</key>
     <string>__LOG_DIR__/squirrelops-bootstrap.log</string>
     <key>StandardErrorPath</key>

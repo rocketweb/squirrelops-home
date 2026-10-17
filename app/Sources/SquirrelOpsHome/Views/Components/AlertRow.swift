@@ -4,7 +4,6 @@ struct AlertRow: View {
     @Environment(\.colorScheme) private var colorScheme
     let alert: AlertSummary
     var onDismiss: (() -> Void)?
-    @State private var isHovering = false
 
     private var isUnread: Bool {
         alert.readAt == nil
@@ -14,9 +13,13 @@ struct AlertRow: View {
         alert.alertCount != nil && (alert.alertCount ?? 0) > 1
     }
 
+    private var hasFoldedConnections: Bool {
+        (alert.connectionCount ?? 0) > 1
+    }
+
     private var friendlyType: String {
         switch alert.alertType {
-        case "decoy.trip": return "Port scan detected"
+        case "decoy.trip": return alert.decoyActivityTypeLabel
         case "decoy.credential_trip": return "Credential accessed"
         case "device.new": return "New device"
         case "device.verification_needed": return "Device verification"
@@ -44,7 +47,8 @@ struct AlertRow: View {
                             ? Theme.textPrimary(colorScheme)
                             : Theme.textSecondary(colorScheme)
                     )
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .help(alert.title)
 
                 HStack(spacing: Spacing.sm) {
                     if isGrouped, let count = alert.deviceCount, count > 0 {
@@ -65,24 +69,32 @@ struct AlertRow: View {
                             .lineLimit(1)
                     }
 
+
+                    if hasFoldedConnections, let count = alert.connectionCount {
+                        Text("\(count) connections")
+                            .font(Typography.mono)
+                            .tracking(Typography.monoTracking)
+                            .foregroundStyle(Theme.textSecondary(colorScheme))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Theme.backgroundTertiary(colorScheme))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+
                     Text(friendlyType)
                         .font(Typography.bodySmall)
                         .foregroundStyle(Theme.textTertiary(colorScheme))
                         .lineLimit(1)
                 }
+                Text(TimestampPresentation.local(alert.createdAt))
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.textTertiary(colorScheme))
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Spacer()
 
-            // Timestamp
-            Text(TimestampPresentation.local(alert.createdAt))
-                .font(Typography.mono)
-                .tracking(Typography.monoTracking)
-                .foregroundStyle(Theme.textTertiary(colorScheme))
-                .lineLimit(1)
-
-            // Dismiss button (visible on hover for unread alerts)
-            if let onDismiss = onDismiss, isHovering {
+            // Keep dismissal keyboard-accessible and reserve a stable trailing column.
+            if let onDismiss = onDismiss {
                 Button {
                     onDismiss()
                 } label: {
@@ -92,7 +104,8 @@ struct AlertRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Dismiss alert")
-            } else if isGrouped {
+                .accessibilityLabel("Dismiss alert")
+            } else if isGrouped || hasFoldedConnections {
                 // Detail chevron for grouped alerts
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
@@ -118,8 +131,5 @@ struct AlertRow: View {
                 : Color.clear
         )
         .contentShape(Rectangle())
-        .onHover { hovering in
-            isHovering = hovering
-        }
     }
 }

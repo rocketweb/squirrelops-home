@@ -7,17 +7,24 @@ struct RootView: View {
     var onPaired: ((PairingManager.PairedSensor) -> Void)?
 
     var body: some View {
-        if appState.isPaired {
-            ZStack {
-                DashboardView(appState: appState)
-                if appState.shouldPresentCriticalAlertModal {
-                    CriticalAlertModal(appState: appState)
+        Group {
+            if appState.isPaired {
+                ZStack {
+                    DashboardView(appState: appState)
+                    if appState.shouldPresentCriticalAlertModal {
+                        CriticalAlertModal(appState: appState)
+                    }
+                }
+            } else {
+                SetupFlow(pairingManager: pairingManager) { sensor in
+                    onPaired?(sensor)
                 }
             }
-        } else {
-            SetupFlow(pairingManager: pairingManager) { sensor in
-                onPaired?(sensor)
-            }
         }
+        .background(
+            MainWindowPresentationReader(
+                presentation: .forPairingState(isPaired: appState.isPaired)
+            )
+        )
     }
 }

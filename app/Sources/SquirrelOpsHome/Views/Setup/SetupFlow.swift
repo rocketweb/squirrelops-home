@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The setup onboarding flow for first-time sensor pairing.
 ///
-/// On first launch the flow attempts to detect a local sensor (installed by the
-/// .pkg) before falling back to mDNS network scanning.
+/// First launch asks whether to use the package-installed local sensor or a
+/// sensor already running elsewhere on the network.
 public struct SetupFlow: View {
     @Environment(\.colorScheme) private var colorScheme
     let pairingManager: PairingManager
@@ -11,8 +11,7 @@ public struct SetupFlow: View {
 
     @State private var selectedSensor: PairingManager.DiscoveredSensor?
     @State private var pairingComplete = false
-    /// `nil` = still checking for local sensor, `true` = local check done (no sensor found)
-    @State private var localCheckComplete: Bool?
+    @State private var setupPath: SetupPath?
 
     public init(pairingManager: PairingManager, onPaired: @escaping (PairingManager.PairedSensor) -> Void) {
         self.pairingManager = pairingManager
@@ -34,26 +33,114 @@ public struct SetupFlow: View {
                 ) {
                     pairingComplete = true
                 }
-            } else if localCheckComplete == true {
-                // Local sensor not found — fall back to mDNS network scan
+            } else if setupPath == .connectToAnotherSensor {
                 ScanningView(pairingManager: pairingManager) { sensor in
                     selectedSensor = sensor
                 }
-            } else {
-                // First step: try to find the local sensor and auto-pair
+            } else if setupPath == .protectThisMac {
                 LocalSensorSetupView(pairingManager: pairingManager) { sensor in
-                    // Auto-pair failed — fall back to manual code entry
                     selectedSensor = sensor
                 } onAutoPaired: {
-                    // Auto-paired successfully — skip straight to completion
                     pairingComplete = true
                 } onFallbackToScan: {
-                    localCheckComplete = true
+                    setupPath = .connectToAnotherSensor
+                }
+            } else {
+                SetupChoiceView { path in
+                    setupPath = path
                 }
             }
         }
         .frame(minWidth: 480, minHeight: 400)
         .background(Theme.background(colorScheme))
+        .overlay(alignment: .topLeading) {
+            if setupPath != nil, selectedSensor == nil, !pairingComplete {
+                Button {
+                    pairingManager.stopDiscovery()
+                    setupPath = nil
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
+                }
+                .buttonStyle(.plain)
+                .padding(Spacing.md)
+            }
+        }
+    }
+}
+
+// MARK: - SetupChoiceView
+
+struct SetupChoiceView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let onSelect: (SetupPath) -> Void
+
+    var body: some View {
+        VStack(spacing: Spacing.lg) {
+            Spacer()
+
+            Image(systemName: "shield.checkered")
+                .font(.system(size: 48))
+                .foregroundStyle(Theme.accentDefault(colorScheme))
+
+            VStack(spacing: Spacing.sm) {
+                Text("Set Up SquirrelOps Home")
+                    .font(Typography.h2)
+                    .foregroundStyle(Theme.textPrimary(colorScheme))
+
+                Text("Choose how you want to use this Mac.")
+                    .font(Typography.body)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+            }
+
+            HStack(spacing: Spacing.md) {
+                ForEach(SetupPath.allCases) { path in
+                    setupCard(path)
+                }
+            }
+            .frame(maxWidth: 720)
+
+            Spacer()
+        }
+        .padding(Spacing.xl)
+    }
+
+    private func setupCard(_ path: SetupPath) -> some View {
+        Button {
+            onSelect(path)
+        } label: {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Image(systemName: path.systemImage)
+                    .font(.system(size: 28))
+                    .foregroundStyle(Theme.accentDefault(colorScheme))
+
+                Text(path.title)
+                    .font(Typography.h3)
+                    .foregroundStyle(Theme.textPrimary(colorScheme))
+
+                Text(path.detail)
+                    .font(Typography.body)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+                    .multilineTextAlignment(.leading)
+
+                Spacer(minLength: 0)
+
+                Text(path.installationNote)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.textTertiary(colorScheme))
+            }
+            .frame(maxWidth: .infinity, minHeight: 190, alignment: .topLeading)
+            .padding(Spacing.lg)
+            .background(Theme.backgroundSecondary(colorScheme))
+            .overlay {
+                RoundedRectangle(cornerRadius: Spacing.radiusLg)
+                    .stroke(Theme.borderDefault(colorScheme), lineWidth: 1)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Spacing.radiusLg))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(path.detail)
     }
 }
 
@@ -62,8 +149,8 @@ public struct SetupFlow: View {
 /// First setup step: detect the local sensor installed by the .pkg.
 ///
 /// Checks `localhost:8443` for a running sensor. If found, automatically
-/// pairs via the localhost-only code endpoint. If not, checks whether the
-/// LaunchDaemon is installed and offers to retry or fall back to network scanning.
+/// enrolls through the signed privileged helper. If not, checks whether the
+/// LaunchDaemon is installed and keeps polling during bounded upgrade recovery.
 struct LocalSensorSetupView: View {
     @Environment(\.colorScheme) private var colorScheme
     let pairingManager: PairingManager
@@ -82,7 +169,8 @@ struct LocalSensorSetupView: View {
     }
 
     @State private var detectionState: DetectionState = .checking
-    @State private var retryCount = 0
+    @State private var retryGeneration = 0
+    @State private var startupElapsedSeconds = 0
 
     var body: some View {
         VStack(spacing: Spacing.lg) {
@@ -104,7 +192,7 @@ struct LocalSensorSetupView: View {
             Spacer()
         }
         .padding(Spacing.xl)
-        .task {
+        .task(id: retryGeneration) {
             await detectAndPair()
         }
     }
@@ -121,15 +209,33 @@ struct LocalSensorSetupView: View {
                 .font(Typography.h2)
                 .foregroundStyle(Theme.textPrimary(colorScheme))
 
-            Text("Detecting the local sensor on this device...")
+            Text(checkingMessage)
                 .font(Typography.body)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
+                .frame(maxWidth: 420)
 
             ProgressView()
                 .controlSize(.large)
                 .padding(.top, Spacing.md)
+
+            if startupElapsedSeconds > 0 {
+                Text("Elapsed \(formattedStartupElapsed)")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.textTertiary(colorScheme))
+                    .monospacedDigit()
+            }
+
+            Button {
+                onFallbackToScan()
+            } label: {
+                Label("Connect to Another Sensor", systemImage: "network")
+                    .frame(minWidth: 210)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .font(Typography.bodySmall)
+            .accessibilityHint("Stop waiting and search for a sensor on your network")
         }
     }
 
@@ -156,7 +262,7 @@ struct LocalSensorSetupView: View {
                 .font(.system(size: 48))
                 .foregroundStyle(Theme.statusWarning(colorScheme))
 
-            Text("Setup Key Required")
+            Text("Automatic Setup Couldn't Finish")
                 .font(Typography.h2)
                 .foregroundStyle(Theme.textPrimary(colorScheme))
 
@@ -169,8 +275,8 @@ struct LocalSensorSetupView: View {
             HStack(spacing: Spacing.md) {
                 Button {
                     detectionState = .checking
-                    retryCount += 1
-                    Task { await detectAndPair() }
+                    startupElapsedSeconds = 0
+                    retryGeneration += 1
                 } label: {
                     Text("Retry")
                         .font(Typography.body)
@@ -185,7 +291,7 @@ struct LocalSensorSetupView: View {
                 Button {
                     onManualPair(sensor)
                 } label: {
-                    Text("Enter Code")
+                    Text("Use Setup Key")
                         .font(Typography.body)
                         .foregroundStyle(Theme.textSecondary(colorScheme))
                         .frame(maxWidth: 140)
@@ -221,8 +327,8 @@ struct LocalSensorSetupView: View {
             HStack(spacing: Spacing.md) {
                 Button {
                     detectionState = .checking
-                    retryCount += 1
-                    Task { await detectAndPair() }
+                    startupElapsedSeconds = 0
+                    retryGeneration += 1
                 } label: {
                     Text("Retry")
                         .font(Typography.body)
@@ -264,7 +370,7 @@ struct LocalSensorSetupView: View {
                 .font(Typography.h2)
                 .foregroundStyle(Theme.textPrimary(colorScheme))
 
-            Text("No sensor is installed on this device. You can search the network for a remote sensor instead.")
+            Text("The local sensor is installed by the SquirrelOps Home package. Install that package to protect this Mac, or connect to a sensor already on your network.")
                 .font(Typography.body)
                 .foregroundStyle(Theme.textSecondary(colorScheme))
                 .multilineTextAlignment(.center)
@@ -288,40 +394,63 @@ struct LocalSensorSetupView: View {
     // MARK: - Detection & Auto-Pair Logic
 
     private func detectAndPair() async {
-        // Check localhost health endpoint
-        if let sensor = await pairingManager.detectLocalSensor() {
-            // Sensor found — auto-pair immediately
-            detectionState = .autoPairing(sensor)
-            do {
-                _ = try await pairingManager.autoLocalPair(sensor: sensor)
-                onAutoPaired()
-            } catch {
-                detectionState = .autoPairFailed(sensor, error.localizedDescription)
-            }
-            return
-        }
+        let startedAt = Date()
 
-        // Sensor didn't respond — check if it's at least installed
-        if PairingManager.isLocalSensorInstalled {
-            // Installed but not responding — maybe still starting after pkg install.
-            // Wait a few seconds and retry once automatically.
-            if retryCount == 0 {
-                try? await Task.sleep(for: .seconds(3))
-                if let sensor = await pairingManager.detectLocalSensor() {
-                    detectionState = .autoPairing(sensor)
-                    do {
-                        _ = try await pairingManager.autoLocalPair(sensor: sensor)
-                        onAutoPaired()
-                    } catch {
-                        detectionState = .autoPairFailed(sensor, error.localizedDescription)
-                    }
+        while !Task.isCancelled {
+            if let sensor = await pairingManager.detectLocalSensor() {
+                detectionState = .autoPairing(sensor)
+                do {
+                    _ = try await pairingManager.autoLocalPair(sensor: sensor)
+                    onAutoPaired()
+                } catch {
+                    detectionState = .autoPairFailed(
+                        sensor,
+                        error.localizedDescription
+                    )
+                }
+                return
+            }
+
+            let elapsedSeconds = max(
+                0,
+                Int(Date().timeIntervalSince(startedAt))
+            )
+            startupElapsedSeconds = elapsedSeconds
+
+            switch LocalSensorStartupPolicy.decision(
+                isInstalled: PairingManager.isLocalSensorInstalled,
+                elapsedSeconds: elapsedSeconds
+            ) {
+            case .retry:
+                detectionState = .checking
+                do {
+                    try await Task.sleep(
+                        for: LocalSensorStartupPolicy.retryInterval
+                    )
+                } catch {
                     return
                 }
+            case .timedOut:
+                detectionState = .notRunning
+                return
+            case .notInstalled:
+                detectionState = .notInstalled
+                return
             }
-            detectionState = .notRunning
-        } else {
-            detectionState = .notInstalled
         }
+    }
+
+    private var checkingMessage: String {
+        if startupElapsedSeconds == 0 {
+            return "Detecting the local sensor on this device..."
+        }
+        return "The sensor is restoring protection after the upgrade. This can take several minutes when decoys are present. This screen retries automatically."
+    }
+
+    private var formattedStartupElapsed: String {
+        let minutes = startupElapsedSeconds / 60
+        let seconds = startupElapsedSeconds % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 

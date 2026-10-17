@@ -158,7 +158,8 @@ class _MimicEndpoint:
                 await writer.wait_closed()
             except (ConnectionError, OSError, RuntimeError):
                 logger.debug("Mimic overload connection cleanup failed", exc_info=True)
-            self._notified_connections.discard(id(writer))
+            finally:
+                self._notified_connections.discard(id(writer))
             return
 
         # No await occurs between the check and increment, so this admission

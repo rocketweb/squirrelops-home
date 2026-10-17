@@ -22,9 +22,9 @@ Fake-host naming is a hybrid:
 - Generated names do not receive an IP-derived number or hexadecimal suffix.
 - If several observed real hostnames use a consistent terminal identifier,
   identifiers are permitted when needed for uniqueness.
-- When AI is enabled, at most half of a new deployment batch receives an AI
-  suggestion. The rest use the deterministic vocabulary so the network does not
-  acquire an implausibly uniform synthetic pattern.
+- When AI is enabled, suggestions are requested for half of a new deployment
+  batch, rounded up. The remaining hosts use the deterministic vocabulary so
+  the network does not acquire an implausibly uniform synthetic pattern.
 - Existing fake-host identities remain durable across restarts and upgrades.
 
 ## AI Input and Output
@@ -47,14 +47,16 @@ Choosing no provider disables both AI classification and AI naming.
 
 ## Device Classification
 
-Local OUI, mDNS, and DHCP signatures run first. For a newly unresolved or
-incomplete device, AI waits until port scanning and discovery enrichment finish.
+Local OUI and mDNS signatures run first. The classifier also supports supplied
+DHCP fingerprints, but the current scanner does not collect DHCP data. For a
+newly unresolved or incomplete device, AI waits until port scanning and
+discovery enrichment finish.
 The request may include:
 
 - The three-octet MAC OUI prefix, never the full MAC address.
 - Sanitized DNS and mDNS names.
 - Open TCP port numbers and detected service names, never banners.
-- DHCP option codes in observed order.
+- DHCP option codes in observed order, if supplied by a caller; absent from current production scans.
 - mDNS service types.
 - Available UPnP friendly name, manufacturer, model, and server metadata.
 
@@ -66,6 +68,16 @@ UPnP values take precedence; AI fills missing classification fields. Accepted
 fields are persisted so the classification survives a sensor restart.
 
 ## Failure Behavior
+
+Settings separates catalog discovery from validation. **Connect and load models**
+fills a searchable native picker; manual model IDs remain available. **Test model**
+runs the production classifier and naming parser against synthetic fixtures from
+the sensor. It makes at most two generation requests and reports latency and
+actionable failures. No real device data is used and no decoy is created.
+Cloud tests may incur a small charge; local tests may load a model into memory.
+Model discovery does not prove inference access or model suitability. A saved
+configuration change invalidates prior test results. See the [setup steps and
+provider limitations](USER_GUIDE.md#optional-ai-device-classification-and-decoy-naming).
 
 AI is never required for deployment. Timeouts, malformed responses, rejected
 names, or an unavailable provider are logged and produce the deterministic

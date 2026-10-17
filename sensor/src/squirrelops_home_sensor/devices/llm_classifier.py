@@ -13,6 +13,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import math
 import re
 
 import httpx
@@ -263,6 +264,7 @@ class OpenAICompatibleClassifier(LLMClassifier):
         model: str,
         api_key: str | None = None,
         timeout: float = 60.0,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         base = endpoint.rstrip("/")
         # Ensure /v1 suffix for OpenAI-compatible APIs
@@ -271,7 +273,7 @@ class OpenAICompatibleClassifier(LLMClassifier):
         self._endpoint = base
         self._model = model
         self._api_key = api_key
-        self._client = httpx.AsyncClient(
+        self._client = client if client is not None else httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=False,
             trust_env=False,
@@ -327,21 +329,30 @@ class OpenAICompatibleClassifier(LLMClassifier):
             content = json_match.group(0)
 
         parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            raise ValueError("Classification must be a JSON object")
 
         manufacturer = parsed["manufacturer"]
+        if not isinstance(manufacturer, str) or not manufacturer.strip() or len(manufacturer) > 128:
+            raise ValueError("Invalid classification manufacturer")
         device_type = parsed["device_type"]
         # Never trust the returned device_type verbatim: a prompt-injected model
         # can echo arbitrary text. Constrain it to the known enum.
         if not isinstance(device_type, str) or device_type not in _ALLOWED_DEVICE_TYPES:
             device_type = "unknown"
         model = parsed.get("model")
-        confidence = float(parsed.get("confidence", 0.5))
+        if model is not None and (not isinstance(model, str) or len(model) > 128):
+            raise ValueError("Invalid classification model")
+        confidence = parsed.get("confidence", 0.5)
+        if (type(confidence) not in (int, float)
+                or not math.isfinite(confidence) or not 0 <= confidence <= 1):
+            raise ValueError("Invalid classification confidence")
 
         return DeviceClassification(
             manufacturer=manufacturer,
             device_type=device_type,
             model=model,
-            confidence=confidence,
+            confidence=float(confidence),
             source="llm",
         )
 

@@ -7,8 +7,15 @@ let package = Package(
         .macOS(.v14),
     ],
     targets: [
+        .target(
+            name: "SquirrelOpsLocalEnrollment",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
         .executableTarget(
             name: "SquirrelOpsHome",
+            dependencies: ["SquirrelOpsLocalEnrollment"],
             resources: [
                 .copy("Resources/Fonts"),
                 .copy("Resources/AppIcon.icns"),
@@ -19,12 +26,22 @@ let package = Package(
         ),
         .executableTarget(
             name: "SquirrelOpsHelper",
+            dependencies: ["SquirrelOpsLocalEnrollment"],
             resources: [
                 .copy("Resources/helper-info.plist"),
                 .copy("Resources/launchd.plist"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
+            ]
+        ),
+        .executableTarget(
+            name: "SquirrelOpsDeceptionGuest",
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ],
+            linkerSettings: [
+                .linkedFramework("Virtualization"),
             ]
         ),
         .testTarget(
@@ -37,6 +54,13 @@ let package = Package(
         .testTarget(
             name: "SquirrelOpsHelperTests",
             dependencies: ["SquirrelOpsHelper"],
+            swiftSettings: [
+                .swiftLanguageMode(.v6),
+            ]
+        ),
+        .testTarget(
+            name: "SquirrelOpsDeceptionGuestTests",
+            dependencies: ["SquirrelOpsDeceptionGuest"],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

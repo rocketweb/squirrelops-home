@@ -8,6 +8,11 @@ Homebrew tap.
 Do not prepare or dispatch a Home or Sensor release until the applicable
 security review and remote controls are complete.
 
+Home 2.1 is a **macOS-only distribution release**. It includes the native
+sensor inside the Apple Silicon installer. It does not publish a Linux
+installer or container. Building the embedded decoy guest on Linux, or creating
+a signed `sensor-v*` component tag, does not change that scope.
+
 ## Current Linux release block
 
 Linux publication is explicitly blocked. The current tree gives the sensor a
@@ -24,8 +29,11 @@ caller-selected forwarding destinations, arbitrary commands, oversized
 requests, and aliases it does not own. The sensor mounts the socket volume
 read-only and cannot access the Docker socket.
 
-`.github/release-policy.json` keeps `linux_release.mode` set to `blocked`, and
-the remote-control checker enforces that sentinel before any release build.
+`.github/release-policy.json` keeps `linux_release.mode` set to `blocked`. The
+`Release Sensor` workflow invokes the Linux boundary checker before publishing
+Linux artifacts. The separate Home workflow does not publish Linux artifacts
+or invoke that checker; it still requires the protected component tags and all
+remote release controls. A component-only sensor tag is not Linux publication.
 The implementation is present but has not yet received the required independent
 boundary review. Do not change the policy merely to make the workflow pass.
 Unblocking requires one of these independently reviewed decisions:
@@ -42,9 +50,80 @@ capability and entry-point controls. An unknown mode, missing timestamp, direct
 sensor privilege, incomplete helper boundary, or lingering Linux publication
 path fails closed.
 
+## macOS release support
+
+The macOS app and native sensor support Apple Silicon (ARM64) on macOS 14
+(Sonoma) or later. Intel Macs are not supported. Home 2.1 has no supported
+Intel or universal macOS installer.
+
+Validate the final macOS installer, app, native runtime, and embedded guest as
+ARM64. Installed upgrade, restart, LAN/PF, containment, and signed/notarized
+artifact acceptance apply to this supported architecture. Intel execution is
+not a Home 2.1 release gate. Source builders retain x86_64 options and the
+workflow builds both guest architectures for build coverage; neither establishes
+Intel Mac support. Linux architecture support and its publication block are
+separate.
+
 ## Required GitHub settings
 
 Keep these settings in place for every release:
+
+The Home 2.1 package also has an indivisible guest-artifact boundary. Release
+automation builds ARM64 and x86_64 Studio Mini guests from the reviewed Alpine
+image digest. `guest/studio-mini/package-inputs.lock.json` additionally pins
+retained APK archives and each package's size and SHA-256. Archive validation
+rejects unlisted files, unsafe paths, links, duplicates, and missing inputs.
+Alpine's own signature verification remains required inside the pinned image.
+Package installation runs offline, then checks the complete installed inventory
+against `guest/studio-mini/packages.lock`. No live-repository fallback is allowed.
+Both clean guest builds are prerequisites of the required Supply Chain CI check.
+The macOS job downloads the freshly built
+private artifact, selects the exact package architecture, and rejects any
+unexpected file, symlink, writable file, digest mismatch, architecture
+mismatch, changed resource ceiling, changed containment declaration, or changed
+socket/service map. The build-time verifier also streams the initramfs and
+requires reviewed hostname, hosts and resolver files; matching hashes do not
+authorize Docker builder DNS or hostname leakage. No external DNS access or
+guest network device is added. The guest runtime is signed separately with only the
+virtualization entitlement before the outer app signature is applied. Do not
+substitute a locally cached guest, floating container tag, or pre-existing
+release asset.
+
+The failed Home 2.1.0 build showed why an inventory lock alone is insufficient:
+the pinned base image still resolved newer dependencies from a live repository.
+Its mismatch check correctly stopped publication. Home 2.1.1 adds retained
+package bytes rather than bypassing that check. Existing 2.1.0 tags remain
+unchanged. The app remains 2.1.0. The sensor advances to 2.1.1 for the macOS
+dependency marker and license metadata correction; its new component tag needs
+independent review before the Home workflow can run.
+
+Home packaging also verifies source coverage against the actual guest and
+Python payload inventories. The final Home release must include
+`THIRD-PARTY-SOURCES.tar`, `THIRD-PARTY-INVENTORY.json` and
+`THIRD-PARTY-NOTICES.txt`, covered by checksums and attestations. Missing or
+changed companion inputs stop packaging/publication. See
+[third-party distribution notes](THIRD_PARTY.md). This does not authorize
+Linux publication, alter the product license or change the immutable APK archive.
+
+Package refresh is a separate maintainer action, never part of a normal release
+build. Review inventory changes and deception behavior, run both offline builds
+and current ARM64 guest acceptance, then approve archive retention/publication.
+The 2.1.1 candidate now uses the approved, immutable
+[guest-inputs-20261003-v1 prerelease](https://github.com/rocketweb/squirrelops-home/releases/tag/guest-inputs-20261003-v1).
+The signed archive-only tag points to source baseline
+`300569ba15c375a77201cccfe7c27dc2d0da888e` and binds the asset checksum manifest;
+it is not a tag of the new build integration. GitHub release attestation and
+freshly downloaded asset checksums were verified. No Actions capture provenance
+is claimed for these locally retained inputs. Normal CI and release builds must
+use the reviewed public URLs and verify the locked bytes. Local archive overrides
+are useful for review, not evidence of public availability.
+
+The source companion and notices cover the retained APKs. Complete base-image
+and Home installer third-party source/notice coverage still needs review before
+Home publication; this archive release does not close that broader gate. It does
+not change the latest Home installer or authorize a Linux sensor publication.
+See the [guest input report](testing/2026-10-03-reproducible-guest-build.md) and
+[archive publication evidence](testing/2026-10-03-guest-input-publication.md).
 
 1. Enable **release immutability**. The workflow checks the repository setting
    before building and again immediately before publication. A published
@@ -123,9 +202,11 @@ environment ID, name, and release-reviewer User actor ID. Record the
 non-null GitHub Actions App source ID for the required supply-chain check as
 `main_ruleset.required_check_integration_id`. The live repository check source
 is the GitHub-owned GitHub Actions App, integration ID `15368`; that exact ID is
-pinned in policy. The remaining checked-in zero/null sentinels intentionally
-block releases until the repository controls are reviewed and recorded. A
-reviewer substitution or any pinned control change blocks publication.
+pinned in policy. The current policy records nonzero control IDs and reviewed
+timestamps. Those checked-in pins are not evidence that the remote controls
+still match; the checker must verify them for each release. The separate Linux
+review timestamp remains null while Linux publication is blocked. A reviewer
+substitution or any pinned control change blocks publication.
 
 The read-only App cannot see `bypass_actors`. That is deliberate. An
 administrator independently reviews the exact bypass list, then pins the
@@ -140,9 +221,10 @@ field, or a permission regression stops the release. Do not add a broad PAT or
 an unauthenticated fallback. Fix the repository setting or token permission
 instead.
 
-## Release procedure
+## Home release procedure
 
-After the release changes pass review and CI:
+After the release changes pass review, CI and the applicable live security
+acceptance gates:
 
 ```bash
 git fetch origin
@@ -182,7 +264,7 @@ independently versioned sensor with the `Release Sensor` workflow. While Linux
 publication remains blocked, do not dispatch that workflow; the signed sensor
 tag is component identity only. Release the signed macOS distribution with
 `Release Home Distribution` and a protected `home-vX.Y.Z` tag. Enter the full
-40-character commit SHA. The workflows verify that:
+40-character commit SHA. The Home workflow verifies that:
 
 - the dispatched workflow, protected `main`, typed commit, and tag all resolve
   to the same commit;
@@ -205,11 +287,10 @@ tag is component identity only. Release the signed macOS distribution with
 - every build checks out the verified commit SHA;
 - signing and notarization credentials are available only after environment
   approval;
-- the multi-platform container is built into a private OCI archive with no
-  public staging tag;
-- the Linux installer is rendered with the attested multi-platform container
-  digest;
-- the package, installer, generated `squirrelops-home.rb`, checksums, and
+- both architecture-specific deep-decoy guests are rebuilt from the pinned
+  image digest and complete package inventory for build coverage, and the
+  supported ARM64 macOS package contains the validated ARM64 guest;
+- the macOS package, generated `squirrelops-home.rb`, checksums, and
   `release-metadata.json` are attested;
 - canonical release notes and verification commands are rendered into
   `RELEASE-VERIFICATION.md`, included in `SHA256SUMS`, and attested with the
@@ -221,22 +302,37 @@ tag is component identity only. Release the signed macOS distribution with
   Git ref and tag-object APIs to the exact reviewed commit; GitHub Release
   `targetCommitish` is treated only as metadata because it is non-authoritative
   when the tag already exists;
-- immediately before publication, that archive is copied directly to the final
-  semver GHCR tag and its digest, amd64/arm64 manifests, and provenance are
-  verified;
 - the draft bytes and remote controls are then rechecked, and publication is
   accepted only after bounded checks confirm the exact tag, target commit,
   asset set, asset digests, `isDraft=false`, `isImmutable=true`, and a valid
   `gh release verify`.
 
-The workflow never publishes `latest`, major/minor, or mutable version container
-tags. The installer and metadata use the attested image digest directly. The
-workflow also refuses to overwrite an existing release or versioned container
-tag. The OCI archive remains a private Actions artifact through the build and
-draft phases. There is no public `release-build-*` staging reference. The final
-semver image exists only in the last bounded interval before GitHub publication,
-so the immutable release is never sealed before its digest-pinned dependency is
-available.
+The Home workflow has separate protected approvals for input verification,
+package building, and publication. Keep the publish job awaiting approval until
+required acceptance of the exact signed and notarized package is recorded.
+The private `macos-pkg` Actions artifact is retained for one day. A local ad-hoc
+installer is not a substitute. Home publication does not upload an OCI archive,
+publish a GHCR tag, or promote a Linux installer.
+
+## Separate Sensor release procedure (blocked)
+
+Do not dispatch `.github/workflows/release-sensor.yml` for Home 2.1. A Linux
+release needs the independently reviewed boundary decision described above
+and its own release authorization.
+
+Once that block is resolved, the Sensor workflow uses a signed `sensor-vX.Y.Z`
+tag, builds a private multi-platform OCI archive, renders `install.sh` with
+the attested image digest, and produces `sensor-release-metadata.json` and
+`SENSOR-RELEASE-VERIFICATION.md`. Its assets and image attestations identify
+`.github/workflows/release-sensor.yml`, not the Home workflow.
+
+Only that workflow promotes the exact OCI archive to the final semver GHCR
+tag immediately before Sensor publication. It verifies the digest, amd64/arm64
+manifests and provenance before sealing the immutable release. It never
+publishes `latest` or major/minor aliases, and refuses to
+overwrite an existing release or versioned container tag. There is no public
+`release-build-*` staging reference. Semver container tags are not inherently
+immutable; the installer pins the verified digest.
 
 ## Post-release website manifest
 
@@ -267,54 +363,51 @@ publication action.
 
 Download `RELEASE-VERIFICATION.md` first. Treat that attested asset as the
 canonical notes and command source; GitHub's release title and description can
-still be edited after publication. Then download the package, `install.sh`,
-and their two matching `.sha256` files from the pinned release and verify both
-provenance and bytes:
+still be edited after publication. These commands apply only to an immutable
+Home release. Use the exact version and independently reviewed tag commit,
+not a local test package. In a fresh directory, download all nine Home assets
+from that pinned release and verify provenance, bytes and the macOS signature
+before opening the installer:
 
 ```bash
+(
+set -e
 RELEASE_TAG=home-vX.Y.Z
-RELEASE_COMMIT="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+RELEASE_COMMIT=REVIEWED_40_CHARACTER_COMMIT
+test "${#RELEASE_COMMIT}" -eq 40
 gh release verify "$RELEASE_TAG" --repo rocketweb/squirrelops-home
-gh attestation verify RELEASE-VERIFICATION.md \
-  --repo rocketweb/squirrelops-home \
-  --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
-  --signer-digest "$RELEASE_COMMIT" \
-  --source-digest "$RELEASE_COMMIT" \
-  --source-ref refs/heads/main
-gh attestation verify SquirrelOpsHome-X.Y.Z.pkg \
-  --repo rocketweb/squirrelops-home \
-  --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
-  --signer-digest "$RELEASE_COMMIT" \
-  --source-digest "$RELEASE_COMMIT" \
-  --source-ref refs/heads/main
-gh attestation verify install.sh \
-  --repo rocketweb/squirrelops-home \
-  --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
-  --signer-digest "$RELEASE_COMMIT" \
-  --source-digest "$RELEASE_COMMIT" \
-  --source-ref refs/heads/main
-gh attestation verify squirrelops-home.rb \
-  --repo rocketweb/squirrelops-home \
-  --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
-  --signer-digest "$RELEASE_COMMIT" \
-  --source-digest "$RELEASE_COMMIT" \
-  --source-ref refs/heads/main
-gh attestation verify release-metadata.json \
-  --repo rocketweb/squirrelops-home \
-  --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
-  --signer-digest "$RELEASE_COMMIT" \
-  --source-digest "$RELEASE_COMMIT" \
-  --source-ref refs/heads/main
-shasum -a 256 -c SquirrelOpsHome-X.Y.Z.pkg.sha256
-shasum -a 256 -c install.sh.sha256
-gh attestation verify \
-  oci://ghcr.io/rocketweb/squirrelops-sensor@sha256:RELEASE_DIGEST \
-  --repo rocketweb/squirrelops-home \
-  --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
-  --signer-digest "$RELEASE_COMMIT" \
-  --source-digest "$RELEASE_COMMIT" \
-  --source-ref refs/heads/main
+gh release download "$RELEASE_TAG" --repo rocketweb/squirrelops-home \
+  --pattern RELEASE-VERIFICATION.md \
+  --pattern SquirrelOpsHome-X.Y.Z.pkg \
+  --pattern SquirrelOpsHome-X.Y.Z.pkg.sha256 \
+  --pattern squirrelops-home.rb \
+  --pattern release-metadata.json \
+  --pattern SHA256SUMS \
+  --pattern THIRD-PARTY-SOURCES.tar \
+  --pattern THIRD-PARTY-INVENTORY.json \
+  --pattern THIRD-PARTY-NOTICES.txt
+for ASSET in RELEASE-VERIFICATION.md SquirrelOpsHome-X.Y.Z.pkg \
+  SquirrelOpsHome-X.Y.Z.pkg.sha256 squirrelops-home.rb \
+  release-metadata.json SHA256SUMS THIRD-PARTY-SOURCES.tar \
+  THIRD-PARTY-INVENTORY.json THIRD-PARTY-NOTICES.txt; do
+  gh attestation verify "$ASSET" \
+    --repo rocketweb/squirrelops-home \
+    --signer-workflow rocketweb/squirrelops-home/.github/workflows/release.yml \
+    --signer-digest "$RELEASE_COMMIT" \
+    --source-digest "$RELEASE_COMMIT" \
+    --source-ref refs/heads/main || exit 1
+done
+shasum -a 256 -c SHA256SUMS
+pkgutil --check-signature SquirrelOpsHome-X.Y.Z.pkg
+spctl --assess --type install --verbose=2 SquirrelOpsHome-X.Y.Z.pkg
+)
 ```
+
+Home assets contain no Linux installer or container digest. For a separately
+authorized, published Sensor release, use its attested
+`SENSOR-RELEASE-VERIFICATION.md`, `sensor-release-metadata.json` and
+`release-sensor.yml` provenance instead. A component-only sensor tag is not
+a downloadable Linux release.
 
 The checksum catches accidental corruption. The attestation binds the artifact
 to this repository, workflow, and protected source ref. Neither proves that the
@@ -332,7 +425,7 @@ anchor.
 `release-metadata.json`, `RELEASE-VERIFICATION.md`, and the generated
 `squirrelops-home.rb` are the only promotion handoff. The metadata contains
 the exact release commit, package URL and SHA-256, verification-document
-SHA-256, cask SHA-256, and container digest. The cask contains the same
+SHA-256 and cask SHA-256. It contains no container digest. The cask contains the same
 versioned package URL and SHA-256.
 
 After the immutable release is published:
@@ -364,7 +457,8 @@ uploaded assets, and logs as forensic evidence. After an independent review,
 delete only that draft manually before retrying the same reviewed commit.
 Never request tag cleanup and never reuse or overwrite draft assets in place.
 
-If image promotion or verification fails while GitHub still authoritatively
+In the separate Sensor workflow, if image promotion or verification fails while
+GitHub still authoritatively
 reports a draft, the workflow re-resolves the final semver tag and deletes it
 only when it still equals this run's expected digest. It preserves the draft
 for forensic review. If GitHub state is ambiguous or published, or if the

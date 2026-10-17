@@ -69,9 +69,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 APP_ENTITLEMENTS="$REPO_ROOT/app/entitlements/app.entitlements"
 HELPER_ENTITLEMENTS="$REPO_ROOT/app/entitlements/helper.entitlements"
+DECEPTION_RUNTIME_ENTITLEMENTS="$REPO_ROOT/app/entitlements/deception-guest.entitlements"
 
 HELPER_BUNDLE_ID="com.squirrelops.helper"
 HELPER_PATH="$APP_BUNDLE/Contents/Library/LaunchServices/$HELPER_BUNDLE_ID"
+DECEPTION_RUNTIME_BUNDLE_ID="com.squirrelops.deception-guest"
+DECEPTION_RUNTIME_PATH="$APP_BUNDLE/Contents/Library/Helpers/$DECEPTION_RUNTIME_BUNDLE_ID"
 
 # ---------------------------------------------------------------------------
 # Validate inputs
@@ -89,6 +92,12 @@ if [ ! -f "$HELPER_ENTITLEMENTS" ]; then
 fi
 if [ ! -x "$HELPER_PATH" ]; then
     error "Required helper binary is missing or not executable: $HELPER_PATH"
+fi
+if [ ! -f "$DECEPTION_RUNTIME_ENTITLEMENTS" ]; then
+    error "Deception runtime entitlements not found: $DECEPTION_RUNTIME_ENTITLEMENTS"
+fi
+if [ ! -x "$DECEPTION_RUNTIME_PATH" ]; then
+    error "Required deception runtime is missing or not executable: $DECEPTION_RUNTIME_PATH"
 fi
 
 # ---------------------------------------------------------------------------
@@ -140,6 +149,36 @@ if ! grep -Fxq "Identifier=${HELPER_BUNDLE_ID}" <<< "$HELPER_SIGNATURE"; then
     error "Helper signature identifier is not ${HELPER_BUNDLE_ID}."
 fi
 info "Helper signed successfully."
+
+info "Signing deception runtime: $DECEPTION_RUNTIME_PATH"
+DECEPTION_RUNTIME_SIGN_ARGS=(
+    codesign --force
+    --options runtime
+    --identifier "$DECEPTION_RUNTIME_BUNDLE_ID"
+    --entitlements "$DECEPTION_RUNTIME_ENTITLEMENTS"
+    --sign "$IDENTITY"
+)
+if [ "$USE_TIMESTAMP" = "1" ]; then
+    DECEPTION_RUNTIME_SIGN_ARGS+=(--timestamp)
+fi
+DECEPTION_RUNTIME_SIGN_ARGS+=("$DECEPTION_RUNTIME_PATH")
+"${DECEPTION_RUNTIME_SIGN_ARGS[@]}"
+if ! DECEPTION_RUNTIME_SIGNATURE="$(codesign -d --verbose=4 "$DECEPTION_RUNTIME_PATH" 2>&1)"; then
+    error "Could not read the deception runtime signature."
+fi
+if ! grep -Fxq "Identifier=${DECEPTION_RUNTIME_BUNDLE_ID}" <<< "$DECEPTION_RUNTIME_SIGNATURE"; then
+    error "Deception runtime signature identifier is not ${DECEPTION_RUNTIME_BUNDLE_ID}."
+fi
+if ! DECEPTION_RUNTIME_SIGNED_ENTITLEMENTS="$(
+    codesign -d --entitlements :- "$DECEPTION_RUNTIME_PATH" 2>&1
+)"; then
+    error "Could not read the deception runtime entitlements."
+fi
+if ! grep -Fq '<key>com.apple.security.virtualization</key>' \
+    <<< "$DECEPTION_RUNTIME_SIGNED_ENTITLEMENTS"; then
+    error "Deception runtime signature is missing the virtualization entitlement."
+fi
+info "Deception runtime signed successfully."
 
 # ---------------------------------------------------------------------------
 # Step 2: Sign the app bundle

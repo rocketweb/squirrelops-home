@@ -32,7 +32,35 @@ public enum KeychainError: Error, LocalizedError {
 // MARK: - KeychainStore
 
 public struct KeychainStore {
-    private static let service = "io.squirrelops.home"
+    private static let productionService = "io.squirrelops.home"
+    private static let localTestMarkerName = "com.squirrelops.local-test-build"
+    private static let service = serviceName(
+        localTestMarker: localTestMarkerContents()
+    )
+    private static let operationLock = NSRecursiveLock()
+
+    static func serviceName(localTestMarker: String?) -> String {
+        guard let marker = localTestMarker?.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ),
+        let buildID = UUID(uuidString: marker) else {
+            return productionService
+        }
+        let compactBuildID = buildID.uuidString
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+        return "\(productionService).local-test.\(compactBuildID)"
+    }
+
+    private static func localTestMarkerContents() -> String? {
+        guard let resourceURL = Bundle.main.resourceURL else {
+            return nil
+        }
+        return try? String(
+            contentsOf: resourceURL.appendingPathComponent(localTestMarkerName),
+            encoding: .utf8
+        )
+    }
 
     private static func certificateDERData(from data: Data) -> Data? {
         guard let pem = String(data: data, encoding: .utf8),
@@ -57,6 +85,9 @@ public struct KeychainStore {
     /// Store DER-encoded certificate data in the Keychain as a generic password item.
     /// On duplicate, updates the existing item.
     public static func storeCertificate(_ derData: Data, label: String) throws {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         // Store as generic password for reliability in testing/CI
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -87,6 +118,9 @@ public struct KeychainStore {
 
     /// Load certificate DER data from the Keychain by label.
     public static func loadCertificateData(label: String) throws -> Data {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service + ".cert",
@@ -114,6 +148,9 @@ public struct KeychainStore {
     /// Delete a certificate from the Keychain by label.
     /// Silently ignores itemNotFound errors.
     public static func deleteCertificate(label: String) throws {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service + ".cert",
@@ -132,6 +169,9 @@ public struct KeychainStore {
     /// Generate and store a P-256 client private key that can later be paired
     /// with the signed client certificate as a SecIdentity.
     public static func createClientPrivateKey(privateKeyLabel: String) throws -> SecKey {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         let keyTag = keyApplicationTag(privateKeyLabel)
         let keyQuery: [String: Any] = [
             kSecClass as String: kSecClassKey,
@@ -167,6 +207,9 @@ public struct KeychainStore {
         certificateLabel: String,
         privateKeyLabel: String
     ) throws -> SecIdentity {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         let keyLookupQuery: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrApplicationTag as String: keyApplicationTag(privateKeyLabel),
@@ -215,6 +258,9 @@ public struct KeychainStore {
         certificateLabel: String,
         privateKeyLabel: String
     ) throws -> SecIdentity {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         let certificateData = try loadCertificateData(label: certificateLabel)
         return try storeClientIdentity(
             certificateData: certificateData,
@@ -228,6 +274,9 @@ public struct KeychainStore {
         certificateLabel: String,
         privateKeyLabel: String
     ) throws {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         let certificateQuery: [String: Any] = [
             kSecClass as String: kSecClassCertificate,
             kSecAttrLabel as String: certificateLabel,
@@ -252,6 +301,9 @@ public struct KeychainStore {
     /// Store a generic password in the Keychain.
     /// On duplicate, updates the existing item.
     public static func storePassword(_ password: String, account: String) throws {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         guard let passwordData = password.data(using: .utf8) else {
             throw KeychainError.invalidData
         }
@@ -285,6 +337,9 @@ public struct KeychainStore {
 
     /// Load a generic password from the Keychain.
     public static func loadPassword(account: String) throws -> String {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -313,6 +368,9 @@ public struct KeychainStore {
     /// Delete a generic password from the Keychain.
     /// Silently ignores itemNotFound errors.
     public static func deletePassword(account: String) throws {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

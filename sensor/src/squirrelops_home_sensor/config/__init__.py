@@ -57,6 +57,7 @@ class DecoyConfig(StrictConfigModel):
     health_check_interval: int = Field(default=1800, ge=1, le=86400)
     restart_max_attempts: int = Field(default=3, ge=0, le=20)
     restart_window_seconds: int = Field(default=300, ge=1, le=86400)
+    deep_enabled: bool = True
 
 
 class AlertMethodsConfig(StrictConfigModel):
@@ -128,9 +129,10 @@ class LearningModeConfig(StrictConfigModel):
 
 
 class PairingConfig(StrictConfigModel):
-    """Development-only local pairing transport settings.
+    """Local enrollment and development pairing transport settings.
 
-    Production never starts the local setup-key socket because file-descriptor
+    Production uses a separate root-helper enrollment socket. It never starts
+    the local setup-key socket because file-descriptor
     passing can separate the process using a connected stream from the process
     identity captured by peer-credential checks. ``allow_unsigned_local`` is an
     explicit source-development escape hatch only.
@@ -142,6 +144,7 @@ class PairingConfig(StrictConfigModel):
         'certificate leaf[subject.OU] = "PSQ5HK5U65"'
     )
     allow_unsigned_local: bool = False
+    local_enrollment_enabled: bool = False
 
 
 class ProfileLimits(StrictConfigModel):

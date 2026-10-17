@@ -1,6 +1,7 @@
 """Pairing routes: challenge-response protocol, cert exchange, unpair."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac as hmac_mod
 import logging
@@ -22,12 +23,18 @@ from cryptography.hazmat.primitives.asymmetric.ec import (
 )
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from cryptography.x509.oid import NameOID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from squirrelops_home_sensor.api.deps import get_config, get_db, verify_client_cert
+from squirrelops_home_sensor.api.pairing_authority import (
+    cert_fingerprint,
+    sign_client_cert,
+)
+from squirrelops_home_sensor.api.pairing_validation import validated_client_name
 from squirrelops_home_sensor.secure_io import atomic_write_private_text
+from squirrelops_home_sensor.tls_client_auth import client_cert_fingerprint_from_scope
 
 router = APIRouter(prefix="/pairing", tags=["pairing"])
 
@@ -59,6 +66,11 @@ class VerifyRequest(BaseModel):
     client_nonce: str  # hex-encoded 32 random bytes
     client_name: str
 
+    @field_validator("client_name")
+    @classmethod
+    def validate_client_name(cls, value: str) -> str:
+        return validated_client_name(value)
+
 
 class VerifyResponse(BaseModel):
     encrypted_ca_cert: str  # hex-encoded nonce + AES-GCM ciphertext
@@ -78,6 +90,25 @@ class CompleteResponse(BaseModel):
 class UnpairResponse(BaseModel):
     id: int
     status: str
+
+
+class LocalEnrollmentConfirmRequest(BaseModel):
+    request_id: str
+
+
+class LocalEnrollmentConfirmResponse(BaseModel):
+    pairing_id: int
+    status: str
+
+
+async def _require_local_enrollment_client_cert(request: Request) -> str:
+    fingerprint = client_cert_fingerprint_from_scope(request.scope)
+    if fingerprint is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Local enrollment confirmation requires a client certificate.",
+        )
+    return fingerprint
 
 
 # ---------- Helpers ----------
@@ -175,33 +206,6 @@ def _generate_ca(sensor_name: str) -> tuple[EllipticCurvePrivateKey, x509.Certif
     return ca_key, ca_cert
 
 
-def _sign_client_cert(
-    csr: x509.CertificateSigningRequest,
-    ca_key: EllipticCurvePrivateKey,
-    ca_cert: x509.Certificate,
-) -> x509.Certificate:
-    """Sign a client CSR with the CA key."""
-    client_cert = (
-        x509.CertificateBuilder()
-        .subject_name(csr.subject)
-        .issuer_name(ca_cert.subject)
-        .public_key(csr.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(UTC))
-        .not_valid_after(datetime.now(UTC) + timedelta(days=3650))
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
-        .sign(ca_key, hashes.SHA256())
-    )
-    return client_cert
-
-
-def _get_cert_fingerprint(cert: x509.Certificate) -> str:
-    """Compute SHA-256 fingerprint of a certificate."""
-    digest = cert.fingerprint(hashes.SHA256())
-    return f"sha256:{digest.hex()}"
-
-
 def _init_pairing_state(app_state, config: dict) -> dict:
     """Initialize or return existing pairing state on app.state."""
     if not hasattr(app_state, "pairing_state") or app_state.pairing_state is None:
@@ -220,6 +224,7 @@ def _init_pairing_state(app_state, config: dict) -> dict:
             "code_invalidated": False,
             "code_file": Path(data_dir) / "pairing-key" if data_dir else None,
             "sessions": {},
+            "lifecycle_lock": asyncio.Lock(),
             "challenge_requests": {},
             "ca_key": ca_key,
             "ca_cert": ca_cert,
@@ -243,6 +248,34 @@ def _maybe_regenerate_code(ps: dict) -> None:
 
 class LocalCodeResponse(BaseModel):
     code: str
+
+
+@router.post(
+    "/local/confirm",
+    response_model=LocalEnrollmentConfirmResponse,
+)
+async def confirm_local_enrollment(
+    body: LocalEnrollmentConfirmRequest,
+    request: Request,
+    fingerprint: str = Depends(_require_local_enrollment_client_cert),
+):
+    """Activate a pending local pairing after its Keychain key proves mTLS possession."""
+    authority = getattr(request.app.state, "local_enrollment_authority", None)
+    if authority is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Local enrollment is unavailable.",
+        )
+    pairing_id = await authority.confirm(
+        request_id=body.request_id,
+        cert_fingerprint=fingerprint,
+    )
+    if pairing_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Pending local enrollment was not found or has expired.",
+        )
+    return LocalEnrollmentConfirmResponse(pairing_id=pairing_id, status="active")
 
 
 @router.get("/local/code", response_model=LocalCodeResponse)
@@ -270,6 +303,11 @@ async def get_challenge(
 ):
     """Issue a random challenge for the pairing protocol. No auth required."""
     ps = _init_pairing_state(request.app.state, config)
+    async with ps["lifecycle_lock"]:
+        return _get_challenge(request, config, ps)
+
+
+def _get_challenge(request: Request, config: dict, ps: dict) -> ChallengeResponse:
     _maybe_regenerate_code(ps)
 
     source = request.client.host if request.client else "unknown"
@@ -314,6 +352,11 @@ async def verify_pairing(
 ):
     """Verify HMAC response, derive shared key, return encrypted CA cert. No auth required."""
     ps = _init_pairing_state(request.app.state, config)
+    async with ps["lifecycle_lock"]:
+        return _verify_pairing(body, config, ps)
+
+
+def _verify_pairing(body: VerifyRequest, config: dict, ps: dict) -> VerifyResponse:
     _maybe_regenerate_code(ps)
 
     session = ps["sessions"].get(body.challenge_id)
@@ -333,7 +376,14 @@ async def verify_pairing(
         hashlib.sha256,
     ).hexdigest()
 
-    if not hmac_mod.compare_digest(body.response, expected):
+    # compare_digest(str, str) rejects non-ASCII text with TypeError. Treat a
+    # malformed proof as the same counted authentication failure as a wrong
+    # proof, and compare only the bounded canonical hex representation.
+    if (
+        len(body.response) != 64
+        or any(character not in "0123456789abcdef" for character in body.response)
+        or not hmac_mod.compare_digest(body.response, expected)
+    ):
         session["failed_attempts"] += 1
         if session["failed_attempts"] >= MAX_FAILED_ATTEMPTS:
             del ps["sessions"][body.challenge_id]
@@ -353,7 +403,7 @@ async def verify_pairing(
     ).derive(ikm)
 
     session["shared_key"] = shared_key
-    session["client_name"] = body.client_name[:200]
+    session["client_name"] = body.client_name
     session["verified"] = True
 
     # Encrypt CA cert with shared key
@@ -379,6 +429,17 @@ async def complete_pairing(
 ):
     """Decrypt CSR, sign client cert, store pairing, return encrypted cert. No auth required."""
     ps = _init_pairing_state(request.app.state, config)
+    # One setup key covers all outstanding challenges, not just this request.
+    # Keep lookup, certificate persistence, and key consumption in the same
+    # critical section. Verify/challenge cannot mutate the session while DB
+    # operations yield, and a queued completion revalidates after acquiring it.
+    async with ps["lifecycle_lock"]:
+        return await _complete_pairing(body, request, db, ps)
+
+
+async def _complete_pairing(
+    body: CompleteRequest, request: Request, db: aiosqlite.Connection, ps: dict,
+) -> CompleteResponse:
     _maybe_regenerate_code(ps)
 
     session = ps["sessions"].get(body.challenge_id)
@@ -429,8 +490,20 @@ async def complete_pairing(
         )
 
     # Sign client cert
-    client_cert = _sign_client_cert(csr, ps["ca_key"], ps["ca_cert"])
-    fingerprint = _get_cert_fingerprint(client_cert)
+    client_cert = sign_client_cert(csr, ps["ca_key"], ps["ca_cert"])
+    fingerprint = cert_fingerprint(client_cert)
+
+    # Consume before the first database await. Cancellation or a lost commit
+    # acknowledgement must not make an already-issued certificate's setup key
+    # reusable. Invalid proofs/CSRs return above without consuming the key.
+    ps["code_invalidated"] = True
+    ps["sessions"].clear()
+    code_file = ps.get("code_file")
+    if code_file is not None:
+        try:
+            Path(code_file).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Failed to remove consumed pairing setup key")
 
     # Store pairing record — mark as local if the request came from localhost
     now = datetime.now(UTC).isoformat()
@@ -448,16 +521,6 @@ async def complete_pairing(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to store pairing.",
         )
-
-    # Invalidate the one-time setup key and every outstanding challenge.
-    ps["code_invalidated"] = True
-    ps["sessions"].clear()
-    code_file = ps.get("code_file")
-    if code_file is not None:
-        try:
-            Path(code_file).unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Failed to remove consumed pairing setup key")
 
     # Encrypt client cert with shared key
     client_cert_pem = client_cert.public_bytes(serialization.Encoding.PEM)

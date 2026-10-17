@@ -148,15 +148,16 @@ async def insert_alert(
     device_id: int | None = None,
     decoy_id: int | None = None,
     event_seq: int | None = None,
+    issue_key: str | None = None,
 ) -> int:
     """Insert an alert and return its id."""
     cursor = await db.execute(
         """INSERT INTO home_alerts
            (incident_id, alert_type, severity, title, detail, source_ip,
-            source_mac, device_id, decoy_id, event_seq, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            source_mac, device_id, decoy_id, event_seq, created_at, issue_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (incident_id, alert_type, severity, title, detail, source_ip,
-         source_mac, device_id, decoy_id, event_seq, created_at),
+         source_mac, device_id, decoy_id, event_seq, created_at, issue_key),
     )
     await db.commit()
     return _lastrowid(cursor, "Alert insert")
@@ -454,15 +455,20 @@ async def insert_decoy_connection(
     credential_used: str | None = None,
     credential_id: int | None = None,
     event_seq: int | None = None,
+    intruder_intent: str | None = None,
+    narrative_stage: int | None = None,
+    interaction_type: str | None = None,
 ) -> int:
     """Insert a decoy connection record and return its id."""
     cursor = await db.execute(
         """INSERT INTO decoy_connections
            (decoy_id, source_ip, source_mac, port, protocol, request_path,
-            credential_used, credential_id, event_seq, timestamp)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            credential_used, credential_id, event_seq, timestamp,
+            intruder_intent, narrative_stage, interaction_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (decoy_id, source_ip, source_mac, port, protocol, request_path,
-         credential_used, credential_id, event_seq, timestamp),
+         credential_used, credential_id, event_seq, timestamp,
+         intruder_intent, narrative_stage, interaction_type),
     )
     await db.commit()
     return _lastrowid(cursor, "Decoy connection insert")

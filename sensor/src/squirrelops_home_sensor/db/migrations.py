@@ -1991,6 +1991,73 @@ async def _apply_v10(db: aiosqlite.Connection) -> None:
         raise
 
 
+async def _apply_v11(db: aiosqlite.Connection) -> None:
+    """V11: Add pending local enrollment lifecycle to paired clients."""
+    columns = (
+        ("status", "TEXT NOT NULL DEFAULT 'active'"),
+        ("enrollment_request_id", "TEXT"),
+        ("enrollment_csr_fingerprint", "TEXT"),
+        ("enrollment_client_cert_pem", "TEXT"),
+        ("enrollment_expires_at", "TEXT"),
+    )
+    for name, declaration in columns:
+        if not await _column_exists(db, "pairing", name):
+            await db.execute(f"ALTER TABLE pairing ADD COLUMN {name} {declaration}")
+    await db.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_pairing_enrollment_request
+           ON pairing(enrollment_request_id)
+           WHERE enrollment_request_id IS NOT NULL"""
+    )
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+        (11, now),
+    )
+    await db.commit()
+
+
+async def _apply_v12(db: aiosqlite.Connection) -> None:
+    """V12: Persist one monotonic deep-deception narrative per source and host."""
+    connection_columns = (
+        ("intruder_intent", "TEXT"),
+        ("narrative_stage", "INTEGER"),
+        ("interaction_type", "TEXT"),
+    )
+    for name, declaration in connection_columns:
+        if not await _column_exists(db, "decoy_connections", name):
+            await db.execute(
+                f"ALTER TABLE decoy_connections ADD COLUMN {name} {declaration}"
+            )
+    await db.execute(
+        """CREATE TABLE IF NOT EXISTS deception_campaigns (
+               decoy_id INTEGER NOT NULL REFERENCES decoys(id) ON DELETE CASCADE,
+               source_ip TEXT NOT NULL,
+               persona_id TEXT NOT NULL,
+               intent TEXT NOT NULL CHECK(intent IN (
+                   'unknown', 'scanner', 'credential_hunter', 'ransomware',
+                   'developer_agent', 'human_operator'
+               )),
+               stage INTEGER NOT NULL CHECK(stage BETWEEN 0 AND 4),
+               scores_json TEXT NOT NULL,
+               observation_count INTEGER NOT NULL DEFAULT 0
+                   CHECK(observation_count >= 0),
+               first_seen_at TEXT NOT NULL,
+               last_seen_at TEXT NOT NULL,
+               PRIMARY KEY (decoy_id, source_ip)
+           )"""
+    )
+    await db.execute(
+        """CREATE INDEX IF NOT EXISTS idx_deception_campaigns_last_seen
+           ON deception_campaigns(last_seen_at)"""
+    )
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+        (12, now),
+    )
+    await db.commit()
+
+
 # Ordered list of migration functions. Index 0 = migration to version 1.
 _MIGRATIONS: list[tuple[int, callable]] = [
     (1, _apply_v1),
@@ -2003,6 +2070,8 @@ _MIGRATIONS: list[tuple[int, callable]] = [
     (8, _apply_v8),
     (9, _apply_v9),
     (10, _apply_v10),
+    (11, _apply_v11),
+    (12, _apply_v12),
 ]
 
 

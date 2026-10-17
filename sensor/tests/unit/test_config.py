@@ -40,6 +40,7 @@ class TestSettingsModels:
     def test_pairing_config_fails_closed_by_default(self) -> None:
         cfg = PairingConfig()
         assert cfg.allow_unsigned_local is False
+        assert cfg.local_enrollment_enabled is False
         assert cfg.socket_path is None
 
     @pytest.mark.parametrize("port", [0, 65536])

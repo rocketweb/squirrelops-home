@@ -9,8 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from squirrelops_home_sensor.profiles import PROFILE_SETTINGS, ResourceProfile
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
@@ -1433,6 +1431,119 @@ deprovisioning_records_match_id 309
             assert check(mode).returncode != 0, (relative_path, mode)
 
 
+@pytest.mark.parametrize("relative_path", [
+    "scripts/pkg/app-scripts/preinstall",
+    "scripts/pkg/postinstall",
+    "scripts/pkg/uninstall.sh",
+])
+@pytest.mark.parametrize("display_name", ["SquirrelOps Sensor", "_squirrelops"])
+def test_account_teardown_accepts_existing_service_display_names(
+    relative_path: str, display_name: str,
+) -> None:
+    """Run the real DS text parsers, not a mock that approves every attribute."""
+    script = (REPO_ROOT / relative_path).read_text()
+    functions = "\n".join(_shell_function(script, name) for name in (
+        "directory_service_value", "directory_service_text_value",
+        "record_value_matches_or_is_missing", "record_attribute_is_empty_or_missing",
+        "deprovisioning_records_match_id",
+    )).replace("/usr/bin/dscl", "mock_dscl")
+    harness = r'''
+set -euo pipefail
+SENSOR_USER="_squirrelops"
+SENSOR_GROUP="_squirrelops"
+DISPLAY_NAME="$1"
+MODE="$2"
+mock_dscl() {
+    case "$2:$3" in
+        -read:/Users/_squirrelops)
+            case "${4:-}" in
+                "") return 0 ;;
+                RealName) printf 'RealName: %s\n' "$DISPLAY_NAME" ;;
+                UserShell)
+                    if [ "$MODE" = "login-shell" ]; then
+                        printf 'UserShell: /bin/zsh\n'
+                    else
+                        printf 'UserShell: /usr/bin/false\n'
+                    fi ;;
+                UniqueID) printf 'UniqueID: 309\n' ;;
+                PrimaryGroupID) printf 'PrimaryGroupID: 309\n' ;;
+                NFSHomeDirectory) printf 'NFSHomeDirectory: /var/empty\n' ;;
+                IsHidden) printf 'dsAttrTypeNative:IsHidden: 1\n' ;;
+                *) return 1 ;;
+            esac ;;
+        -read:/Groups/_squirrelops)
+            case "${4:-}" in
+                "") return 0 ;;
+                PrimaryGroupID) printf 'PrimaryGroupID: 309\n' ;;
+                GroupMembership)
+                    if [ "$MODE" = "has-member" ]; then
+                        printf 'GroupMembership: matt\n'
+                    else
+                        printf 'No such key: GroupMembership\n' >&2
+                    fi ;;
+                GroupMembers) printf 'No such key: GroupMembers\n' >&2 ;;
+                *) return 1 ;;
+            esac ;;
+        -list:/Users)
+            printf '_squirrelops 309\n'
+            if [ "$MODE" = "duplicate-uid" ]; then printf 'other 309\n'; fi ;;
+        -list:/Groups) printf '_squirrelops 309\n' ;;
+        *) return 1 ;;
+    esac
+}
+'''
+    harness += functions + '\ndeprovisioning_records_match_id 309\n'
+    for name, mode, expected in (
+        (display_name, "valid", 0),
+        (display_name, "login-shell", 1),
+        (display_name, "has-member", 1),
+        (display_name, "duplicate-uid", 1),
+        ("Someone Else", "valid", 1),
+        ("_squirrelops_other", "valid", 1),
+    ):
+        result = subprocess.run(
+            ["/bin/bash", "-c", harness, "account-display-name", name, mode],
+            capture_output=True, text=True, check=False,
+        )
+        assert (result.returncode == 0) == (expected == 0), (
+            relative_path, name, mode, result.stdout, result.stderr,
+        )
+
+
+@pytest.mark.parametrize("relative_path", [
+    "scripts/pkg/app-scripts/preinstall", "scripts/pkg/postinstall", "scripts/pkg/uninstall.sh",
+])
+def test_empty_membership_recognizes_exact_macos_missing_key_response(relative_path: str) -> None:
+    function = _shell_function((REPO_ROOT / relative_path).read_text(),
+                               "record_attribute_is_empty_or_missing").replace('/usr/bin/dscl', 'mock_dscl')
+    harness = r'''
+MODE="$1"
+mock_dscl() {
+    if [ "$#" -eq 3 ]; then
+        [ "$MODE" != "record-gone" ]
+        return
+    fi
+    case "$MODE" in
+        missing|record-gone) printf 'No such key: GroupMembers\n' >&2 ;;
+        missing-nonzero) printf 'No such key: GroupMembers\n' >&2; return 1 ;;
+        failure) printf 'Permission denied\n' >&2; return 1 ;;
+        nonempty) printf 'GroupMembers: some-user-guid\n' ;;
+        empty) printf 'GroupMembers:\n' ;;
+        silent) return 0 ;;
+        wrong-key) printf 'No such key: GroupMembership\n' >&2 ;;
+        mixed) printf 'GroupMembers: some-user-guid\n'; printf 'No such key: GroupMembers\n' >&2 ;;
+        *) return 1 ;;
+    esac
+}
+'''
+    harness += function + '\nrecord_attribute_is_empty_or_missing /Groups/_squirrelops GroupMembers\n'
+    for mode in ('missing', 'missing-nonzero', 'record-gone', 'nonempty', 'empty',
+                 'silent', 'wrong-key', 'mixed', 'failure'):
+        result = subprocess.run(['/bin/bash', '-c', harness, 'missing-field', mode],
+                                text=True, capture_output=True, check=False)
+        assert (result.returncode == 0) == (mode in ('missing', 'missing-nonzero', 'empty')), (relative_path, mode)
+
+
 def test_staged_account_recovery_accepts_marker_authorized_missing_ids() -> None:
     for relative_path in (
         "scripts/pkg/postinstall",
@@ -1795,33 +1906,35 @@ def test_upgrade_snapshots_strip_and_verify_extended_acls() -> None:
     assert complete < strip < verify
 
 
-def test_sensor_postinstall_uses_bounded_full_profile_readiness_window() -> None:
+def test_sensor_postinstall_hands_long_recovery_back_to_launchd() -> None:
     script = (REPO_ROOT / "scripts/pkg/postinstall").read_text()
 
     bootstrap = script.index('launchctl bootstrap system "$PLIST_DEST"')
-    deadline = script.index("HEALTH_DEADLINE=")
-    health_wait = script.index("if wait_for_sensor_health; then")
+    deadline = script.index("STARTUP_HANDOFF_DEADLINE=")
+    readiness_wait = script.index("if wait_for_sensor_handoff; then")
 
-    assert bootstrap < deadline < health_wait
-    # Nine persisted mimics took more than four minutes to restore on a real
-    # upgrade. The Full profile supports up to 10, so the bounded package
-    # readiness window must cover that supported recovery path.
+    assert bootstrap < deadline < readiness_wait
+    # PackageKit terminates a component script at 600 seconds. Persisted mimic
+    # recovery can exceed that limit, so the package proves a stable launchd
+    # handoff and lets initialization continue under the service supervisor.
     timeout = int(
         next(
             line.partition("=")[2]
             for line in script.splitlines()
-            if line.startswith("HEALTH_TIMEOUT_SECONDS=")
+            if line.startswith("STARTUP_HANDOFF_TIMEOUT_SECONDS=")
         )
     )
-    assert timeout == 1200
-    assert (
-        timeout
-        >= PROFILE_SETTINGS[ResourceProfile.FULL].max_mimic_decoys * 40
-    )
+    assert timeout == 45
+    assert timeout < 600
+    assert "SENSOR_STABILITY_REQUIRED_SECONDS=10" in script
     assert "HEALTH_PROBE_TIMEOUT_SECONDS=3" in script
-    assert "HEALTH_INTERVAL_SECONDS=2" in script
+    assert "STARTUP_HANDOFF_INTERVAL_SECONDS=1" in script
     assert '/bin/date "+%s"' in script
-    assert 'while [ "$(/bin/date "+%s")" -lt "$HEALTH_DEADLINE" ]; do' in script
+    assert (
+        'while [ "$(/bin/date "+%s")" -lt "$STARTUP_HANDOFF_DEADLINE" ]; do'
+        in script
+    )
+    assert "Sensor initialization continues under launchd" in script
     assert "TIMEOUT=30" not in script
 
 
@@ -1848,7 +1961,7 @@ def test_sensor_postinstall_requires_exact_healthy_response() -> None:
     assert 'if sensor_health_is_ready; then' in script
     assert "HEALTH_REQUIRED_SUCCESSES=2" in script
     assert 'SENSOR_HEALTHY=1' in script
-    assert 'if [ "$SENSOR_HEALTHY" -ne 1 ]; then' in script
+    assert 'if [ "$SENSOR_HEALTHY" -eq 1 ]; then' in script
 
 
 def test_uninstaller_removes_runtime_but_preserves_user_state_by_default() -> None:
