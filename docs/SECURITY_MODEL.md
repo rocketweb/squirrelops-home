@@ -115,9 +115,11 @@ the API or app therefore does not establish automatic behavioral monitoring.
 Classic decoys and Scout mimics emulate selected HTTP routes and protocol
 banners. Only Studio's guest provides real SSH/SFTP and SMB. Recognized bait
 submitted to a supported HTTP handler can produce a Critical alert; bait-file
-retrieval alone is ordinary decoy activity. Opaque guest relays cannot identify
-SSH/SMB authentication, commands, or file access. A decoy alert is evidence to
-investigate, and can also be caused by an operator or scanner. Automatic IPP
+retrieval alone is ordinary decoy activity. The guest relays stay opaque, but
+the guest's own `sshd` and `smbd` report each accepted and failed login to the
+runtime, and an accepted login with the planted password is a Critical alert.
+Commands and file access inside the guest remain unobserved. A decoy alert is
+evidence to investigate, and can also be caused by an operator or scanner. Automatic IPP
 printer-discovery requests are retained without an intrusion alert.
 
 SSDP and Scout probes may connect to self-signed HTTPS services. Certificate
@@ -168,6 +170,19 @@ the guest. The guest cannot read the sensor's filesystem or initiate a LAN or
 internet connection. SSH and SMB listeners are opaque byte relays to two fixed
 guest socket ports, under the same connection ceiling as the VM. Neither the
 sensor nor runtime parses attacker-controlled SSH or SMB messages.
+
+Before relaying, the runtime writes one line to the guest side of each
+connection: a TCP source port it allocated from a fixed pool. A guest shim
+binds that port toward `sshd` or `smbd`, so the daemons' own authentication
+logs name the connection and the runtime maps it back to the LAN peer exactly.
+A connection the runtime cannot attribute is refused rather than relayed. The
+guest's syslog ring reaches the runtime over a third fixed socket port that
+carries only `logread` output; the runtime bounds each line, matches two fixed
+daemon log formats, and emits a structured record with the attributed peer or
+an explicit unresolved marker. Attacker-chosen fields in those records, such as
+usernames, are bounded and restricted to printable ASCII before the sensor
+stores them. Readiness requires this channel, so a guest without it never
+publishes its ports.
 
 The shared host ceiling remains 16 connections. A guest socket must connect
 within 10 seconds; a missed callback invalidates that VM's connector and stops

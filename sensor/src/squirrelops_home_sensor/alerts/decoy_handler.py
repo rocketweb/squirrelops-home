@@ -689,6 +689,14 @@ class DecoyAlertHandler:
             detail_obj["detection_method"] = payload["detection_method"]
         if payload.get("decoy_name"):
             detail_obj["decoy_name"] = payload["decoy_name"]
+        # Guest logins say who authenticated, how, and whether the peer was
+        # resolved exactly. Username and method are attacker-influenced text
+        # from the guest's own daemons, so they are bounded here as well.
+        for key, limit in (("username", 64), ("auth_method", 32), ("attribution", 16),
+                           ("interaction_type", 64)):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                detail_obj[key] = value[:limit]
         # Add device info to detail JSON so the app can display it
         if device:
             if device["hostname"]:

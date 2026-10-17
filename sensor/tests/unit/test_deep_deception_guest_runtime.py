@@ -547,3 +547,103 @@ async def test_requested_runtime_stop_does_not_report_a_crash(tmp_path: Path) ->
     await asyncio.sleep(0)
 
     assert exit_codes == []
+
+
+# ---------------------------------------------------------------------------
+# Authentication telemetry
+# ---------------------------------------------------------------------------
+
+
+def _auth_line(**changes):
+    payload = {
+        "event": "authentication", "service": "ssh", "outcome": "accepted",
+        "username": "buildbot", "method": "password", "source_ip": "192.0.2.44",
+        "source_port": 51000, "dest_port": 22, "attribution": "exact",
+        "timestamp": "2026-10-17T16:12:21Z",
+    }
+    payload.update(changes)
+    return json.dumps(payload)
+
+
+def test_host_ready_budget_covers_the_auth_channel_too():
+    from squirrelops_home_sensor.decoys.deep.guest_runtime import _READY_TIMEOUT_SECONDS
+
+    # Persona, SSH, SMB, and now the auth channel each get 240 x 250 ms.
+    assert _READY_TIMEOUT_SECONDS >= 4 * 240 * 0.25 + 30
+
+
+@pytest.mark.asyncio
+async def test_runtime_delivers_attributed_authentication_telemetry(tmp_path: Path) -> None:
+    from squirrelops_home_sensor.decoys.deep.guest_runtime import GuestAuthenticationTelemetry
+
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    unresolved = _auth_line(service="smb", outcome="failed", method="NTLMv2",
+                            source_ip=None, source_port=None, dest_port=445,
+                            attribution="unresolved")
+    runtime.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' '{\"status\":\"ready\",\"persona_id\":\"studio-mini-v1\","
+        "\"services\":{\"22\":49122,\"445\":49445}}'\n"
+        f"printf '%s\\n' '{_auth_line()}'\n"
+        f"printf '%s\\n' '{unresolved}'\n"
+        "while true; do sleep 1; done\n",
+        encoding="utf-8",
+    )
+    runtime.chmod(0o755)
+    received: list[GuestAuthenticationTelemetry] = []
+    done = asyncio.Event()
+
+    def capture(event: GuestAuthenticationTelemetry) -> None:
+        received.append(event)
+        if len(received) == 2:
+            done.set()
+
+    controller = GuestRuntimeController(
+        executable=runtime, bundle_root=bundle, state_dir=state,
+        bind_address="127.0.0.1", trusted_uids={os.getuid()}, persona=_persona(),
+        on_authentication=capture,
+    )
+    await controller.start()
+    try:
+        await asyncio.wait_for(done.wait(), timeout=2)
+    finally:
+        await controller.stop()
+    assert received == [
+        GuestAuthenticationTelemetry(
+            service="ssh", accepted=True, username="buildbot", method="password",
+            source_ip="192.0.2.44", source_port=51000, dest_port=22,
+            attribution="exact", timestamp=datetime(2026, 10, 17, 16, 12, 21, tzinfo=UTC),
+        ),
+        GuestAuthenticationTelemetry(
+            service="smb", accepted=False, username="buildbot", method="NTLMv2",
+            source_ip=None, source_port=None, dest_port=445,
+            attribution="unresolved", timestamp=datetime(2026, 10, 17, 16, 12, 21, tzinfo=UTC),
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"service": "ftp"},
+        {"outcome": "maybe"},
+        {"dest_port": 445},                       # service/port mismatch
+        {"attribution": "guessed"},
+        {"attribution": "exact", "source_ip": None},  # exact requires a peer
+        {"source_ip": "not-an-ip"},
+        {"source_port": 0},
+        {"username": "a" * 65},
+        {"username": "bad name"},
+        {"method": "x" * 33},
+        {"timestamp": "yesterday"},
+        {"extra": 1},
+    ],
+)
+def test_malformed_authentication_events_are_rejected(changes):
+    from squirrelops_home_sensor.decoys.deep.guest_runtime import GuestRuntimeController
+
+    with pytest.raises(ValueError):
+        GuestRuntimeController._parse_authentication_event(_auth_line(**changes).encode())

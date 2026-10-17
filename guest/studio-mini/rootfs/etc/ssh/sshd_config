@@ -8,6 +8,9 @@ KbdInteractiveAuthentication no
 PermitEmptyPasswords no
 PermitRootLogin no
 UsePAM no
+# Every accepted and failed login is attributed on the host from the relay port.
+SyslogFacility AUTH
+LogLevel VERBOSE
 PrintMotd no
 PrintLastLog yes
 TCPKeepAlive yes

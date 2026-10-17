@@ -49,6 +49,8 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
     private let virtualMachine: VZVirtualMachine
     private var socketDevice: VZVirtioSocketDevice?
     private let connector = GuestSocketConnector()
+    private let attribution = RelayAttributionTable()
+    private var authenticationChannel: GuestAuthenticationChannel?
     private var listeners: [UInt16: TCPListener] = [:]
     private var stopContinuation: CheckedContinuation<Void, Never>?
     private var stopped = false
@@ -94,6 +96,20 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
         for service in manifest.manifest.services {
             try await waitForGuestService(service.guestVSOCKPort, device: device)
         }
+        // Readiness includes the auth stream. Without it every login would be
+        // silently invisible, which is the gap the channel exists to close.
+        let channel = GuestAuthenticationChannel(attribution: attribution, output: output) { [weak self] in
+            guard let self, let device = self.socketDevice else {
+                throw GuestConnectFailure.unavailable
+            }
+            return try await self.connect(device: device, port: GuestAuthenticationChannel.guestVSOCKPort)
+        }
+        do {
+            try await channel.start()
+        } catch {
+            throw GuestRuntimeFailure.guestServiceUnavailable(GuestAuthenticationChannel.guestVSOCKPort)
+        }
+        authenticationChannel = channel
 
         var ports: [UInt16: UInt16] = [:]
         for service in manifest.manifest.services {
@@ -111,10 +127,11 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
                         "timestamp": ISO8601DateFormatter().string(from: Date()),
                     ])
                 },
-                onAccepted: { [weak self] connection, _ in
+                onAccepted: { [weak self] connection, peer in
                     guard let self else { return .guestConnectFailed }
                     return await self.accept(
                         connection: connection,
+                        peer: peer,
                         service: service
                     )
                 }
@@ -144,7 +161,7 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
         }
     }
 
-    private func writeAll(_ data: Data, to descriptor: Int32) throws {
+    private func writeAll(_ data: Data, to descriptor: Int32, label: String = "persona transfer") throws {
         try data.withUnsafeBytes { rawBuffer in
             guard let baseAddress = rawBuffer.baseAddress else {
                 throw GuestRuntimeFailure.invalidPersonaArchive
@@ -158,10 +175,10 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
                 )
                 if result < 0 {
                     if errno == EINTR { continue }
-                    throw GuestRuntimeFailure.listenerFailure("persona transfer")
+                    throw GuestRuntimeFailure.listenerFailure(label)
                 }
                 if result == 0 {
-                    throw GuestRuntimeFailure.listenerFailure("persona transfer")
+                    throw GuestRuntimeFailure.listenerFailure(label)
                 }
                 written += result
             }
@@ -204,6 +221,7 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
 
     private func accept(
         connection: RelayConnection,
+        peer: PeerEndpoint,
         service: GuestManifest.Service
     ) async -> RelayOutcome {
         // The connection owns its fd and allowance even if this guard fails.
@@ -218,9 +236,39 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
                 port: service.guestVSOCKPort
             )
             connection.diagnostic?.record(.guestConnected)
+            // The guest shim reads one line before relaying: the TCP source
+            // port it must bind toward sshd/smbd. That port is what their auth
+            // logs record, so choosing it here is what makes a login line name
+            // this peer exactly. A relay that cannot be attributed is refused
+            // rather than served blind.
+            guard let relayService = RelayService(advertisedPort: service.advertisedPort),
+                  let sourcePort = attribution.allocate(
+                      peer: RelayPeer(address: peer.address, port: peer.port),
+                      service: relayService
+                  )
+            else {
+                guestConnection.close()
+                connection.close()
+                connection.diagnostic?.record(.guestConnectFailed)
+                return .guestConnectFailed
+            }
+            do {
+                try writeAll(
+                    Data("\(sourcePort)\n".utf8),
+                    to: guestConnection.fileDescriptor,
+                    label: "relay preamble"
+                )
+            } catch {
+                attribution.release(sourcePort)
+                guestConnection.close()
+                connection.close()
+                connection.diagnostic?.record(.guestConnectFailed)
+                return .guestConnectFailed
+            }
             SocketRelay(
                 client: connection,
-                guestConnection: guestConnection
+                guestConnection: guestConnection,
+                onClosed: { [attribution] in attribution.release(sourcePort) }
             ).start()
             return .guestConnected
         } catch {
@@ -249,6 +297,8 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
         guard !stopped, !stopping else { return }
         stopping = true
         connector.invalidate()
+        authenticationChannel?.stop()
+        authenticationChannel = nil
         for listener in listeners.values {
             listener.stop()
         }

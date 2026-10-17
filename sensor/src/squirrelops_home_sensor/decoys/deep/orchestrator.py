@@ -19,6 +19,7 @@ from typing import Any
 from squirrelops_home_sensor.decoys.deep.ai_workbench import AIWorkbenchDecoy
 from squirrelops_home_sensor.decoys.deep.campaign_store import NarrativeStore
 from squirrelops_home_sensor.decoys.deep.guest_runtime import (
+    GuestAuthenticationTelemetry,
     GuestConnectionTelemetry,
     GuestRuntimeController,
 )
@@ -432,6 +433,9 @@ class DeepDecoyOrchestrator:
             "bind_address": bind_address,
             "persona": persona,
             "on_connection": self._guest_connection_callback(primary_id, persona, campaigns),
+            "on_authentication": self._guest_authentication_callback(
+                primary_id, persona, campaigns
+            ),
             "on_exit": self._guest_exit_callback(primary_id),
         }
         if self._trusted_uids is not None:
@@ -491,6 +495,19 @@ class DeepDecoyOrchestrator:
         def callback(telemetry: GuestConnectionTelemetry) -> None:
             self._schedule(
                 self._handle_guest_connection(primary_id, persona, campaigns, telemetry)
+            )
+
+        return callback
+
+    def _guest_authentication_callback(
+        self,
+        primary_id: int,
+        persona: StudioMiniPersona,
+        campaigns: NarrativeStore,
+    ) -> Callable[[GuestAuthenticationTelemetry], None]:
+        def callback(telemetry: GuestAuthenticationTelemetry) -> None:
+            self._schedule(
+                self._handle_guest_authentication(primary_id, persona, campaigns, telemetry)
             )
 
         return callback
@@ -568,10 +585,70 @@ class DeepDecoyOrchestrator:
         service_id = None if active is None else active.service_ids.get(event.dest_port)
         await self._publish_trip(event, service_id)
 
+    async def _handle_guest_authentication(
+        self,
+        primary_id: int,
+        persona: StudioMiniPersona,
+        campaigns: NarrativeStore,
+        telemetry: GuestAuthenticationTelemetry,
+    ) -> None:
+        """Turn a guest login into evidence, and into a credential trip when it used the bait.
+
+        The guest has exactly one account, and its password is a planted
+        credential. An accepted login as that account therefore is the
+        credential-use event the HTTP decoys already raise, delivered here
+        from the daemon that actually checked the password rather than from
+        any inspection of the SSH or SMB stream.
+        """
+        # "unknown" is deliberate: a Critical alert with an honest blank is
+        # better than silence, and better than pinning it on a guessed peer.
+        source_ip = telemetry.source_ip or "unknown"
+        outcome = "accepted" if telemetry.accepted else "failed"
+        campaign = await campaigns.observe(
+            decoy_id=primary_id,
+            source_ip=source_ip,
+            persona_id=persona.persona_id,
+            evidence=InteractionEvidence(
+                method="auth",
+                path="",
+                protocol=telemetry.service,
+                operation=f"auth_{outcome}",
+            ),
+        )
+        credential_used = (
+            persona.login_password
+            if telemetry.accepted and telemetry.username == persona.username
+            else None
+        )
+        event = DecoyConnectionEvent(
+            source_ip=source_ip,
+            source_port=telemetry.source_port or 0,
+            dest_port=telemetry.dest_port,
+            protocol="tcp",
+            timestamp=telemetry.timestamp,
+            credential_used=credential_used,
+            intruder_intent=campaign.intent.value,
+            narrative_stage=int(campaign.stage),
+            interaction_type=f"{telemetry.service}.auth_{outcome}",
+        )
+        active = self._active
+        service_id = None if active is None else active.service_ids.get(event.dest_port)
+        await self._publish_trip(
+            event,
+            service_id,
+            extra={
+                "username": telemetry.username,
+                "auth_method": telemetry.method,
+                "attribution": telemetry.attribution,
+            },
+        )
+
     async def _publish_trip(
         self,
         event: DecoyConnectionEvent,
         service_id: int | None,
+        *,
+        extra: dict[str, Any] | None = None,
     ) -> None:
         if service_id is None:
             logger.error(
@@ -594,6 +671,7 @@ class DeepDecoyOrchestrator:
                 "timestamp": event.timestamp.isoformat(),
                 "decoy_id": service_id,
                 "decoy_name": "Studio Build Mac",
+                **(extra or {}),
             },
         )
         if event.credential_used is not None:
@@ -612,6 +690,7 @@ class DeepDecoyOrchestrator:
                     "detection_method": "deep_decoy",
                     "decoy_id": service_id,
                     "decoy_name": "Studio Build Mac",
+                    **(extra or {}),
                 },
             )
 
