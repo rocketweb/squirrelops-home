@@ -21,7 +21,7 @@ COPY rootfs/ /
 COPY network/ /tmp/squirrelops-network/
 
 RUN --network=none test ! -e /package-inputs \
-    && chmod 0755 /sbin/init /usr/local/bin/macos-shim \
+    && chmod 0755 /sbin/init /usr/local/bin/macos-shim /usr/local/bin/relay-shim \
     && for command in sw_vers system_profiler scutil launchctl dscl defaults security xcodebuild brew uname; do \
         ln -sf macos-shim "/usr/local/bin/$command"; \
     done \

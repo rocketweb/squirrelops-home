@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -463,3 +464,126 @@ async def test_runtime_crash_quarantines_and_withdraws_the_complete_host(tmp_pat
             if event_type == "decoy.status_changed" and payload["status"] == "degraded"
         ]
         assert len(degraded) == 5
+
+
+# ---------------------------------------------------------------------------
+# Guest authentication events
+# ---------------------------------------------------------------------------
+
+
+def _auth(**changes):
+    from squirrelops_home_sensor.decoys.deep.guest_runtime import GuestAuthenticationTelemetry
+
+    fields = {
+        "service": "ssh", "accepted": True, "username": "buildbot", "method": "password",
+        "source_ip": "192.0.2.44", "source_port": 51000, "dest_port": 22,
+        "attribution": "exact", "timestamp": datetime(2026, 10, 17, 16, 12, 21, tzinfo=UTC),
+    }
+    fields.update(changes)
+    return GuestAuthenticationTelemetry(**fields)
+
+
+async def _started_with_guest(db, calls):
+    guests: list[_Guest] = []
+
+    def factory(**kwargs):
+        guest = _Guest(calls, **kwargs)
+        guests.append(guest)
+        return guest
+
+    orchestrator, events = await _orchestrator(db, calls, guest_factory=factory)
+    assert await orchestrator.start()
+    return orchestrator, events, guests[0]
+
+
+async def _settle():
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+
+
+async def _planted_password(db) -> str:
+    cursor = await db.execute(
+        "SELECT credential_value FROM planted_credentials WHERE credential_type = 'password'"
+    )
+    return (await cursor.fetchone())[0]
+
+
+@pytest.mark.asyncio
+async def test_guest_login_with_the_planted_password_is_a_credential_trip(tmp_path) -> None:
+    calls: list[str] = []
+    async with aiosqlite.connect(tmp_path / "auth.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, events, guest = await _started_with_guest(db, calls)
+        password = await _planted_password(db)
+
+        guest.kwargs["on_authentication"](_auth())
+        await _settle()
+
+        trips = [p for kind, p in events.items if kind == "decoy.trip"]
+        creds = [p for kind, p in events.items if kind == "decoy.credential_trip"]
+        assert len(trips) == 1 and len(creds) == 1
+        assert trips[0]["interaction_type"] == "ssh.auth_accepted"
+        assert trips[0]["source_ip"] == "192.0.2.44"
+        assert creds[0]["credential_used"] == password
+        assert creds[0]["dest_port"] == 22
+        assert creds[0]["detection_method"] == "deep_decoy"
+        assert creds[0]["attribution"] == "exact"
+        # A successful login is credential access, whatever came before it.
+        cursor = await db.execute(
+            "SELECT stage FROM deception_campaigns WHERE source_ip = '192.0.2.44'"
+        )
+        assert (await cursor.fetchone())["stage"] >= 2
+        await orchestrator.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_failed_guest_login_is_evidence_not_a_credential_trip(tmp_path) -> None:
+    calls: list[str] = []
+    async with aiosqlite.connect(tmp_path / "auth.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, events, guest = await _started_with_guest(db, calls)
+
+        guest.kwargs["on_authentication"](_auth(accepted=False, service="smb", dest_port=445, method="NTLMv2"))
+        await _settle()
+
+        trips = [p for kind, p in events.items if kind == "decoy.trip"]
+        assert [p["interaction_type"] for p in trips] == ["smb.auth_failed"]
+        assert trips[0]["credential_used"] is None
+        assert not [kind for kind, _ in events.items if kind == "decoy.credential_trip"]
+        await orchestrator.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_unresolved_login_still_raises_without_inventing_a_peer(tmp_path) -> None:
+    calls: list[str] = []
+    async with aiosqlite.connect(tmp_path / "auth.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, events, guest = await _started_with_guest(db, calls)
+
+        guest.kwargs["on_authentication"](_auth(source_ip=None, source_port=None, attribution="unresolved"))
+        await _settle()
+
+        creds = [p for kind, p in events.items if kind == "decoy.credential_trip"]
+        assert len(creds) == 1
+        assert creds[0]["source_ip"] == "unknown"
+        assert creds[0]["attribution"] == "unresolved"
+        await orchestrator.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_login_as_an_unplanted_account_is_not_a_credential_trip(tmp_path) -> None:
+    calls: list[str] = []
+    async with aiosqlite.connect(tmp_path / "auth.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, events, guest = await _started_with_guest(db, calls)
+
+        guest.kwargs["on_authentication"](_auth(username="root"))
+        await _settle()
+
+        assert [p["interaction_type"] for kind, p in events.items if kind == "decoy.trip"] == ["ssh.auth_accepted"]
+        assert not [kind for kind, _ in events.items if kind == "decoy.credential_trip"]
+        await orchestrator.stop_all()

@@ -13,6 +13,7 @@ import pytest
 import smbclient
 
 from squirrelops_home_sensor.decoys.deep.guest_runtime import (
+    GuestAuthenticationTelemetry,
     GuestConnectionTelemetry,
     GuestRuntimeController,
 )
@@ -254,6 +255,7 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
         datetime(2026, 8, 31, 16, 30, tzinfo=UTC),
     )
     telemetry: list[GuestConnectionTelemetry] = []
+    logins: list[GuestAuthenticationTelemetry] = []
     controller = GuestRuntimeController(
         executable=runtime,
         bundle_root=guest_bundle,
@@ -264,6 +266,7 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
         # inputs. The release runtime independently requires root-owned guest bytes.
         trusted_uids={0, os.getuid()},
         on_connection=telemetry.append,
+        on_authentication=logins.append,
     )
 
     ports = await controller.start()
@@ -324,6 +327,13 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
                 ) == "reconnected\n"
                 await asyncio.sleep(0.02)
 
+            # The guest's own daemons reported every login above over the auth
+            # channel. Give the syslog ring a moment to drain before stopping.
+            for _ in range(200):
+                if any(e.service == "smb" and e.accepted for e in logins):
+                    break
+                await asyncio.sleep(0.05)
+
             # Stop this disposable VM with both protocol relays still open.
             peers = [await asyncio.open_connection("127.0.0.1", ports[p]) for p in (22, 445)]
             process = controller._process
@@ -358,3 +368,20 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
             assert any(f"stage={stage} service={port} " in message for message in checkpoints)
     assert all(controller._diagnostic_nonce not in message for message in checkpoints)
     assert all(persona.login_password not in message for message in checkpoints)
+
+    # Login attribution: the host chose each relay's guest-side source port, so
+    # every accepted login must map back to a real client connection, exactly.
+    accepted_ssh = [e for e in logins if e.service == "ssh" and e.accepted]
+    failed_ssh = [e for e in logins if e.service == "ssh" and not e.accepted]
+    accepted_smb = [e for e in logins if e.service == "smb" and e.accepted]
+    assert len(accepted_ssh) >= 4, logins       # sw_vers, containment, layout, 10 reconnects, sftp
+    assert len(failed_ssh) >= 5, logins         # the five deliberately wrong passwords
+    assert len(accepted_smb) >= 1, logins
+    assert {e.username for e in logins} == {"buildbot"}
+    assert {e.method for e in accepted_ssh} == {"password"}
+    assert {e.method for e in accepted_smb} == {"NTLMv2"}
+    assert all(e.attribution == "exact" and e.source_ip == "127.0.0.1" for e in logins), logins
+    client_ports = {e.source_port for e in telemetry}
+    assert all(e.source_port in client_ports for e in logins), (logins, client_ports)
+    assert all(persona.login_password not in message for message in
+               (record.getMessage() for record in caplog.records))

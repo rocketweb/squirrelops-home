@@ -715,10 +715,16 @@ Expected results:
 7. **Clear** acknowledges the current active alert. The next connection then
    creates a new alert. **History** shows previously acknowledged alerts.
 
-SSH and SMB are opaque encrypted relays. Successful SSH or SMB authentication
-creates connection evidence, but it cannot produce a Credential Trip because
-the sensor does not inspect encrypted protocol contents. Use the agent API test
-above to verify the explicit credential-detection path.
+SSH and SMB are opaque encrypted relays: the sensor never inspects the
+protocol bytes. Logins are still visible, because the guest's own `sshd` and
+`smbd` log every accepted and failed authentication and the runtime reads those
+log lines over a dedicated channel. A login as `buildbot` with the planted
+password produces a Critical Credential Trip naming the account, the method
+(`password` or `NTLMv2`), and the source device. A failed login is recorded as
+decoy activity. The relay chooses each connection's guest-side source port, so
+the attribution is exact rather than inferred from timing; in the rare case the
+runtime cannot resolve it, the alert still fires with the source shown as
+unknown and `attribution: unresolved`.
 
 New SSH/SMB records in **Recent Connections** also show whether the guest was
 connected, was at capacity, failed to connect, or timed out. A rejected attempt
@@ -906,7 +912,7 @@ Every individual connection is still retained in the decoy's forensic log.
 
 | Type | Severity | Meaning |
 |------|----------|---------|
-| Credential Trip | Critical | A supported HTTP decoy recognized submitted planted credentials; guest SSH/SMB login is not inspected |
+| Credential Trip | Critical | A supported HTTP decoy recognized submitted planted credentials, or the Studio guest's `sshd`/`smbd` accepted a login with the planted password |
 | Decoy Trip | High | Unexpected decoy activity; automatic printer discovery is retained without an intrusion alert |
 | Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
 | ARP Ownership Conflict | High | The scan cannot establish a unique IP/MAC owner |
@@ -1058,8 +1064,10 @@ SSH files, which use their own persona content and synthetic credentials.
 Synthetic credentials are exposed on supported HTTP decoy routes. Requesting
 `/.env` or `/passwords.txt` records ordinary decoy activity. A **Critical**
 credential alert requires a supported handler to recognize a planted value
-submitted in the request. Banner-only services do not implement authentication;
-Studio's opaque SSH/SMB relays do not inspect credential use.
+submitted in the request. Banner-only services do not implement authentication.
+Studio's SSH/SMB relays stay opaque, but an accepted guest login with the
+planted password is reported by the guest's own daemons and raises the same
+Critical alert.
 
 ### DNS Canary Status
 

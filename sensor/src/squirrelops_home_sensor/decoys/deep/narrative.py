@@ -107,6 +107,16 @@ def advance_campaign(
 
     if method in {"get", "head", "connect"}:
         add(IntruderIntent.SCANNER, 1)
+
+    # Guest sshd/smbd logins arrive as method "auth". An accepted login with
+    # the planted password is credential access by definition; a failed one is
+    # guessing. Neither is scanning, so neither touches the scanner score.
+    if method == "auth":
+        if operation.startswith("auth_accepted"):
+            add(IntruderIntent.CREDENTIAL_HUNTER, 8)
+            stage = max(stage, NarrativeStage.CREDENTIAL_ACCESS)
+        elif operation.startswith("auth_failed"):
+            add(IntruderIntent.CREDENTIAL_HUNTER, 3)
     if any(term in user_agent.casefold() for term in ("nmap", "masscan", "zgrab")):
         add(IntruderIntent.SCANNER, 5)
     elif "curl/" in user_agent.casefold() and path in {"/", "/health", "/v1/models"}:
@@ -122,7 +132,9 @@ def advance_campaign(
     if credential_evidence:
         add(IntruderIntent.CREDENTIAL_HUNTER, 6)
         stage = max(stage, NarrativeStage.CREDENTIAL_ACCESS)
-    elif path not in {"/", "/health", "/api/version", "/v1/models"}:
+    elif method != "auth" and path not in {"/", "/health", "/api/version", "/v1/models"}:
+        # Auth evidence has no path. A failed login is guessing, not browsing;
+        # an accepted one already advanced to credential access above.
         stage = max(stage, NarrativeStage.BROWSING)
 
     if agent_evidence:

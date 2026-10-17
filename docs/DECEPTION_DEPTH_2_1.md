@@ -44,6 +44,10 @@ machine configuration has:
 - fixed CPU and memory ceilings;
 - a fresh memory-only guest on every start;
 - fixed host listeners that relay only to allowlisted guest socket ports;
+- one host-chosen source port per relayed connection, sent to the guest as a
+  single preamble line, so the guest's own auth logs identify the LAN peer;
+- a read-only vsock channel carrying the guest's syslog ring (`sshd`/`smbd`
+  authentication lines) to the runtime; no client bytes travel on it;
 - bounded connection concurrency and an operator kill switch;
 - an anonymous, one-use pipe carrying the bounded persona archive from the
   dedicated sensor account.
@@ -88,10 +92,13 @@ The intent label is evidence-based and sticky. Simple service discovery stays
 boring. Credential searches reveal synthetic rotation notes and planted
 tokens. Developer and agent behavior discovers projects, MCP tools, model
 configuration, and build runbooks. HTTP/MCP write-like requests can advance
-the narrative. SSH/SMB telemetry records connection and relay outcomes only;
-it does not inspect authentication, shell commands, or SMB file operations.
-Guest file changes remain in memory and do not advance the host's campaign
-from observed SMB writes. A visitor sees Finder-friendly names and familiar
+the narrative. SSH/SMB telemetry records connection and relay outcomes, plus
+each accepted or failed authentication as the guest's own `sshd` and `smbd`
+logged it, attributed to the LAN peer through the host-chosen relay port. An
+accepted login with the planted password is a credential trip. The relays do
+not parse the protocols: shell commands and SMB file operations remain
+uninspected. Guest file changes remain in memory and do not advance the host's
+campaign from observed SMB writes. A visitor sees Finder-friendly names and familiar
 Mac development artifacts on an underlying Linux guest.
 
 No response instructs a visitor to contact real infrastructure. Any hostnames,
