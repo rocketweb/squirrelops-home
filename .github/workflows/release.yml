@@ -35,7 +35,7 @@ jobs:
       commit_sha: ${{ steps.release.outputs.commit_sha }}
     steps:
       - name: Checkout dispatched commit
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -129,7 +129,7 @@ jobs:
 
       - name: Mint narrow release-policy token
         id: release-policy-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.RELEASE_POLICY_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_POLICY_APP_PRIVATE_KEY }}
@@ -165,17 +165,17 @@ jobs:
       ALPINE_IMAGE: alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
     steps:
       - name: Checkout immutable release commit
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify-release.outputs.commit_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Enable cross-architecture guest builds
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
       - name: Set up isolated Docker builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build digest-pinned guests
         run: |
@@ -184,7 +184,7 @@ jobs:
           bash guest/studio-mini/build-guest.sh x86_64
 
       - name: Upload immutable guest inputs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: studio-mini-guests
           path: guest/studio-mini/build
@@ -210,7 +210,7 @@ jobs:
       HAS_NOTARY_CREDENTIALS: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
     steps:
       - name: Checkout immutable release commit
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify-release.outputs.commit_sha }}
           fetch-depth: 1
@@ -354,18 +354,18 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
       - name: Install pinned uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.10.2"
           enable-cache: false
 
       - name: Download verified Studio Mini guest inputs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: studio-mini-guests
           path: guest/studio-mini/build
@@ -388,7 +388,7 @@ jobs:
           spctl --assess --type install --verbose=2 "$PKG"
 
       - name: Upload .pkg artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: macos-pkg
           path: |
@@ -431,14 +431,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout immutable release commit
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify-release.outputs.commit_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Download .pkg artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: macos-pkg
           path: release-input
@@ -481,7 +481,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" release-assets/*
 
       - name: Attest release assets
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             release-assets/SquirrelOpsHome-*.pkg
@@ -502,7 +502,7 @@ jobs:
 
       - name: Mint final-gate token
         id: release-policy-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.RELEASE_POLICY_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_POLICY_APP_PRIVATE_KEY }}
