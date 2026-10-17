@@ -647,3 +647,33 @@ def test_malformed_authentication_events_are_rejected(changes):
 
     with pytest.raises(ValueError):
         GuestRuntimeController._parse_authentication_event(_auth_line(**changes).encode())
+
+
+@pytest.mark.asyncio
+async def test_runtime_that_dies_before_reading_its_persona_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child that exits before draining stdin must still be a GuestRuntimeError.
+
+    On Linux the persona write races the child's exit: if the reader is gone,
+    drain() raises ConnectionResetError. That surfaced on CI as a raw transport
+    error escaping start(), so the failure is forced here deterministically.
+    """
+    bundle = tmp_path / "guest"
+    state = tmp_path / "state"
+    runtime = tmp_path / "SquirrelOpsDeceptionGuest"
+    _write_bundle(bundle)
+    _write_runtime(runtime, '{"status":"starting"}', keep_running=False)
+
+    async def lost(self):
+        raise ConnectionResetError("Connection lost")
+
+    monkeypatch.setattr(asyncio.StreamWriter, "drain", lost)
+    controller = GuestRuntimeController(
+        executable=runtime, bundle_root=bundle, state_dir=state,
+        bind_address="127.0.0.1", trusted_uids={os.getuid()}, persona=_persona(),
+    )
+
+    with pytest.raises(GuestRuntimeError, match="ready"):
+        await controller.start()
+    assert controller.is_running is False

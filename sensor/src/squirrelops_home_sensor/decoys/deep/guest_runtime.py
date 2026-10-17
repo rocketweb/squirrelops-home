@@ -576,9 +576,18 @@ class GuestRuntimeController:
         )
         try:
             persona_archive = build_persona_archive(self._persona)
-            process.stdin.write(len(persona_archive).to_bytes(4, "big") + persona_archive)
-            await process.stdin.drain()
-            process.stdin.close()
+            try:
+                process.stdin.write(len(persona_archive).to_bytes(4, "big") + persona_archive)
+                await process.stdin.drain()
+                process.stdin.close()
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                # The child closed its stdin or exited before taking the persona.
+                # On Linux that races the write and surfaces as a transport
+                # error; it is the same failure as exiting before readiness and
+                # must fail closed the same way, not leak a raw socket error.
+                raise GuestRuntimeError(
+                    "Guest runtime exited before it became ready"
+                ) from exc
             line = await asyncio.wait_for(
                 process.stdout.readline(),
                 timeout=_READY_TIMEOUT_SECONDS,
