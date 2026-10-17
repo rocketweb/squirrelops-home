@@ -281,7 +281,15 @@ final class VirtualMachineRuntime: NSObject, @preconcurrency VZVirtualMachineDel
                 Task { @MainActor [weak self] in await self?.stop() }
                 return .guestConnectTimeout
             }
-            connection.diagnostic?.record(.guestConnectFailed)
+            // Carry the Virtualization error code so a refused guest connect is
+            // distinguishable from a host-side failure in the diagnostics.
+            // The sensor accepts 0...4096 in this field; anything outside is
+            // reported as 4096 rather than making the whole checkpoint invalid.
+            let code = (error as NSError).code
+            connection.diagnostic?.record(
+                .guestConnectFailed,
+                errno: Int32(min(max(code, 0), 4096))
+            )
             return .guestConnectFailed
         }
     }

@@ -19,8 +19,13 @@ struct GuestAuthenticationEvent: Equatable, Sendable {
 /// Formats were captured from OpenSSH 10.3 and Samba 4.23.8 in the pinned
 /// Alpine image (`guest/studio-mini/packages.lock`), not written from memory:
 ///
-///     sshd[123]: Accepted password for buildbot from 127.0.0.1 port 23456 ssh2
-///     sshd[123]: Failed password for invalid user root from 127.0.0.1 port 23458 ssh2
+///     sshd-session[25]: Accepted password for buildbot from 127.0.0.1 port 60488 ssh2
+///     sshd-session[37]: Failed password for invalid user root from 127.0.0.1 port 60512 ssh2
+///
+/// OpenSSH 9.8 and later run each connection in `sshd-session`, so that is the
+/// tag the live guest actually emits; a bare `sshd` tag is accepted for older
+/// builds. The first live run against the rebuilt guest caught exactly this:
+/// SMB logins attributed, SSH logins silently unmatched.
 ///     smbd[28]:   Auth: [SMB2,(null)] user [HAWTHORN]\[buildbot] at [...] with [NTLMv2]
 ///                 status [NT_STATUS_OK] workstation [X] remote host [ipv4:127.0.0.1:24000] ...
 enum GuestAuthenticationParser {
@@ -36,7 +41,7 @@ enum GuestAuthenticationParser {
         // Regex values are not Sendable, so they live here rather than in
         // static storage. Only the relay address is a legitimate origin: a
         // line naming any other address did not come through the host.
-        let ssh = /sshd\[\d{1,10}\]: (Accepted|Failed) (password|publickey|keyboard-interactive(?:\/pam)?|none) for (?:invalid user )?(\S{1,64}) from 127\.0\.0\.1 port (\d{1,5}) ssh2\b/
+        let ssh = /sshd(?:-session)?\[\d{1,10}\]: (Accepted|Failed) (password|publickey|keyboard-interactive(?:\/pam)?|none) for (?:invalid user )?(\S{1,64}) from 127\.0\.0\.1 port (\d{1,5}) ssh2\b/
         let smb = /\ Auth: \[SMB2,[^\]]{0,64}\] user \[[^\]]{0,64}\]\\\[([^\]]{1,64})\] at \[[^\]]{0,96}\] with \[([^\]]{1,32})\] status \[([A-Z0-9_]{1,64})\] workstation \[[^\]]{0,64}\] remote host \[ipv4:127\.0\.0\.1:(\d{1,5})\]/
 
         if let match = line.firstMatch(of: ssh) {

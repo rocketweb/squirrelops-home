@@ -23,7 +23,7 @@ struct GuestAuthenticationTests {
 
     @Test("sshd accepted password login is parsed with its relay port")
     func parsesAcceptedSSH() {
-        let line = "Oct 17 16:12:21 studio-mini auth.info sshd[123]: Accepted password for buildbot from 127.0.0.1 port 23456 ssh2"
+        let line = "Oct 17 19:14:14 studio-mini auth.info sshd-session[25]: Accepted password for buildbot from 127.0.0.1 port 23456 ssh2"
         #expect(GuestAuthenticationParser.parse(line) == GuestAuthenticationEvent(
             service: .ssh, accepted: true, username: "buildbot", method: "password", localPort: 23456
         ))
@@ -31,8 +31,8 @@ struct GuestAuthenticationTests {
 
     @Test("sshd failed login, including an invalid user, is parsed")
     func parsesFailedSSH() {
-        let known = "Oct 17 16:12:21 studio-mini auth.info sshd[123]: Failed password for buildbot from 127.0.0.1 port 23457 ssh2"
-        let invalid = "Oct 17 16:12:21 studio-mini auth.info sshd[123]: Failed password for invalid user root from 127.0.0.1 port 23458 ssh2"
+        let known = "Oct 17 19:14:14 studio-mini auth.info sshd-session[32]: Failed password for buildbot from 127.0.0.1 port 23457 ssh2"
+        let invalid = "Oct 17 19:14:14 studio-mini auth.info sshd-session[37]: Failed password for invalid user root from 127.0.0.1 port 23458 ssh2"
         #expect(GuestAuthenticationParser.parse(known)?.accepted == false)
         #expect(GuestAuthenticationParser.parse(known)?.username == "buildbot")
         #expect(GuestAuthenticationParser.parse(invalid) == GuestAuthenticationEvent(
@@ -52,8 +52,17 @@ struct GuestAuthenticationTests {
         ))
     }
 
+    @Test("Legacy single-process sshd tag is still accepted")
+    func acceptsLegacySSHTag() {
+        let line = "Oct 17 16:12:21 studio-mini auth.info sshd[123]: Accepted password for buildbot from 127.0.0.1 port 23456 ssh2"
+        #expect(GuestAuthenticationParser.parse(line)?.accepted == true)
+    }
+
     @Test("Unrelated, oversized, and non-loopback lines are ignored")
     func ignoresNoise() {
+        // Real neighbours of the auth lines in the guest ring, captured live.
+        #expect(GuestAuthenticationParser.parse("Oct 17 19:14:14 studio-mini auth.info sshd-session[27]: Disconnected from user buildbot 127.0.0.1 port 60488") == nil)
+        #expect(GuestAuthenticationParser.parse("Oct 17 19:14:14 studio-mini auth.info sshd-session[32]: Connection closed by authenticating user buildbot 127.0.0.1 port 60500 [preauth]") == nil)
         #expect(GuestAuthenticationParser.parse("Oct 17 16:12:19 studio-mini daemon.notice smbd[28]: [2026/10/17 16:12:19.160151,  3] ../../auth/gensec/gensec_start.c:1052(gensec_register)") == nil)
         #expect(GuestAuthenticationParser.parse(#"{"timestamp": "2026-10-17T16:12:19+0000", "type": "Authentication", "Authentication": {"status": "NT_STATUS_OK"}}"#) == nil)
         // Only the relay address is a valid origin; anything else is not ours.
