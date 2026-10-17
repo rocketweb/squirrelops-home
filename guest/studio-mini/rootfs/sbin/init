@@ -95,18 +95,29 @@ printf '%s\n%s\n' "$password" "$password" | smbpasswd -s -a buildbot >/dev/null 
 unset password
 rm -f "$persona"
 
-syslogd
-/usr/sbin/sshd -D -e &
+# Auth lines live in the syslog memory ring and leave the guest only over the
+# dedicated vsock channel below. sshd must not run with -e, which would send
+# them to the console instead of syslog.
+syslogd -C256
+/usr/sbin/sshd -D &
 sshd_pid=$!
 /usr/sbin/smbd --foreground --no-process-group &
 smbd_pid=$!
 
-socat VSOCK-LISTEN:10022,reuseaddr,fork,max-children=16 TCP:127.0.0.1:22 &
+# Each relay reads one preamble line from the host, the TCP source port to
+# bind toward the daemon, so sshd/smbd auth logs identify the LAN peer.
+socat VSOCK-LISTEN:10022,reuseaddr,fork,max-children=16 EXEC:"/usr/local/bin/relay-shim 22" &
 ssh_relay_pid=$!
-socat VSOCK-LISTEN:10445,reuseaddr,fork,max-children=16 TCP:127.0.0.1:445 &
+socat VSOCK-LISTEN:10445,reuseaddr,fork,max-children=16 EXEC:"/usr/local/bin/relay-shim 445" &
 smb_relay_pid=$!
 
-while kill -0 "$sshd_pid" "$smbd_pid" "$ssh_relay_pid" "$smb_relay_pid" 2>/dev/null; do
+# Bidirectional on purpose: socat must read the vsock side to notice the host
+# leaving, or a stale logread would hold the slot. -f is new-lines-only so a
+# reconnect never replays earlier logins.
+socat VSOCK-LISTEN:10514,reuseaddr,fork,max-children=2 EXEC:"logread -f" &
+auth_channel_pid=$!
+
+while kill -0 "$sshd_pid" "$smbd_pid" "$ssh_relay_pid" "$smb_relay_pid" "$auth_channel_pid" 2>/dev/null; do
     sleep 2
 done
 fail "service exited"

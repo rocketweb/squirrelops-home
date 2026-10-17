@@ -190,17 +190,23 @@ final class SocketRelay: @unchecked Sendable {
     private var lastProgress: TimeInterval
     private var halfClosed = false
     private var watchdog: DispatchSourceTimer?
+    /// Runs exactly once, after both descriptors are closed. The runtime uses
+    /// it to return the relay's host-chosen source port to the attribution
+    /// table, which is why it must not fire while a worker could still write.
+    private let onClosed: (@Sendable () -> Void)?
 
     init(
         client: RelayConnection,
         guestConnection: any RelayGuestConnection,
         timeoutPolicy: RelayTimeoutPolicy = RelayTimeoutPolicy(),
-        now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+        now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        onClosed: (@Sendable () -> Void)? = nil
     ) {
         self.client = client
         self.guestConnection = guestConnection
         self.timeoutPolicy = timeoutPolicy
         self.now = now
+        self.onClosed = onClosed
         lastProgress = now()
     }
 
@@ -344,6 +350,7 @@ final class SocketRelay: @unchecked Sendable {
             closed = true
             client.close()
             guestConnection.close()
+            onClosed?()
         }
     }
 
@@ -360,5 +367,6 @@ final class SocketRelay: @unchecked Sendable {
         watchdog = nil
         client.close()
         guestConnection.close()
+        onClosed?()
     }
 }

@@ -22,10 +22,11 @@ from squirrelops_home_sensor.decoys.deep.guest_bundle import (
 from squirrelops_home_sensor.decoys.deep.persona import StudioMiniPersona
 from squirrelops_home_sensor.decoys.deep.persona_archive import build_persona_archive
 
-# Persona transfer, SSH, and SMB each permit 240 x 250ms retry backoff in the
-# Swift runtime. Include 30 seconds for VM start/scheduling, while retaining an
-# outer deadline for stalled Virtualization callbacks or persona writes.
-_READY_TIMEOUT_SECONDS = 210.0
+# Persona transfer, SSH, SMB, and the auth log channel each permit 240 x 250ms
+# retry backoff in the Swift runtime. Include 30 seconds for VM
+# start/scheduling, while retaining an outer deadline for stalled
+# Virtualization callbacks or persona writes.
+_READY_TIMEOUT_SECONDS = 270.0
 _STOP_TIMEOUT_SECONDS = 8.0
 _MAX_READY_LINE_BYTES = 16 * 1024
 _MAX_EVENT_LINE_BYTES = 16 * 1024
@@ -56,6 +57,33 @@ class GuestConnectionTelemetry:
     protocol: str
     interaction_type: str
     timestamp: datetime
+
+
+@dataclass(frozen=True)
+class GuestAuthenticationTelemetry:
+    """One login the guest's own sshd/smbd logged, attributed by the runtime.
+
+    The runtime chooses every relay's TCP source port and the guest binds it,
+    so the daemon's own ``from 127.0.0.1 port N`` names the LAN peer exactly.
+    ``attribution`` is ``"exact"`` when that lookup succeeded and
+    ``"unresolved"`` when it did not, in which case ``source_ip`` and
+    ``source_port`` are ``None`` rather than a guess.
+    """
+
+    service: str
+    accepted: bool
+    username: str
+    method: str
+    source_ip: str | None
+    source_port: int | None
+    dest_port: int
+    attribution: str
+    timestamp: datetime
+
+
+_AUTH_SERVICES = {"ssh": 22, "smb": 445}
+_AUTH_OUTCOMES = {"accepted": True, "failed": False}
+_AUTH_ATTRIBUTIONS = frozenset({"exact", "unresolved"})
 
 
 def _trusted_executable(path: Path, trusted_uids: set[int]) -> None:
@@ -104,6 +132,7 @@ class GuestRuntimeController:
         trusted_uids: set[int] | None = None,
         state_uids: set[int] | None = None,
         on_connection: Callable[[GuestConnectionTelemetry], None] | None = None,
+        on_authentication: Callable[[GuestAuthenticationTelemetry], None] | None = None,
         on_exit: Callable[[int], None] | None = None,
     ) -> None:
         self._executable = executable
@@ -114,6 +143,7 @@ class GuestRuntimeController:
         self._state_uids = {os.getuid()} if state_uids is None else set(state_uids)
         self._persona = persona
         self._on_connection = on_connection
+        self._on_authentication = on_authentication
         self._on_exit = on_exit
         self._process: asyncio.subprocess.Process | None = None
         self._bundle: GuestBundle | None = None
@@ -293,22 +323,100 @@ class GuestRuntimeController:
         interaction_type = payload["interaction_type"]
         if not isinstance(interaction_type, str) or interaction_type not in allowed_interactions:
             raise ValueError("runtime interaction type does not match its service")
-        timestamp_value = payload["timestamp"]
-        if not isinstance(timestamp_value, str) or len(timestamp_value) > 64:
-            raise ValueError("runtime event timestamp is invalid")
-        try:
-            timestamp = datetime.fromisoformat(timestamp_value.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("runtime event timestamp is invalid") from exc
-        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-            raise ValueError("runtime event timestamp must include a timezone")
         return GuestConnectionTelemetry(
             source_ip=source_ip,
             source_port=source_port,
             dest_port=dest_port,
             protocol="tcp",
             interaction_type=interaction_type,
-            timestamp=timestamp.astimezone(UTC),
+            timestamp=GuestRuntimeController._parse_timestamp(payload["timestamp"]),
+        )
+
+    @staticmethod
+    def _parse_timestamp(value: object) -> datetime:
+        if not isinstance(value, str) or len(value) > 64:
+            raise ValueError("runtime event timestamp is invalid")
+        try:
+            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("runtime event timestamp is invalid") from exc
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError("runtime event timestamp must include a timezone")
+        return timestamp.astimezone(UTC)
+
+    @staticmethod
+    def _printable_token(value: object, *, limit: int, name: str) -> str:
+        """Bounded printable ASCII with no whitespace or brackets.
+
+        Usernames are attacker-chosen. The runtime already filters them, but
+        this process is the one that persists and displays them, so it does
+        not trust that filtering either.
+        """
+        if not isinstance(value, str) or not 1 <= len(value) <= limit:
+            raise ValueError(f"runtime {name} is invalid")
+        for character in value:
+            if not 0x21 <= ord(character) <= 0x7E or character in "[]\\":
+                raise ValueError(f"runtime {name} is invalid")
+        return value
+
+    @staticmethod
+    def _parse_authentication_event(line: bytes) -> GuestAuthenticationTelemetry:
+        if not line or len(line) > _MAX_EVENT_LINE_BYTES:
+            raise ValueError("runtime event line is outside the reviewed limit")
+        try:
+            payload = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("runtime event is not valid JSON") from exc
+        expected = {
+            "event", "service", "outcome", "username", "method",
+            "source_ip", "source_port", "dest_port", "attribution", "timestamp",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected:
+            raise ValueError("runtime event shape is not reviewed")
+        if payload["event"] != "authentication":
+            raise ValueError("runtime event kind is not reviewed")
+        service = payload["service"]
+        if service not in _AUTH_SERVICES or payload["dest_port"] != _AUTH_SERVICES[service]:
+            raise ValueError("runtime authentication service is not reviewed")
+        outcome = payload["outcome"]
+        if outcome not in _AUTH_OUTCOMES:
+            raise ValueError("runtime authentication outcome is not reviewed")
+        attribution = payload["attribution"]
+        if attribution not in _AUTH_ATTRIBUTIONS:
+            raise ValueError("runtime authentication attribution is not reviewed")
+        source_ip = payload["source_ip"]
+        source_port = payload["source_port"]
+        if attribution == "exact":
+            try:
+                source_ip = str(ipaddress.IPv4Address(source_ip))
+            except (ValueError, TypeError) as exc:
+                raise ValueError("runtime source address is invalid") from exc
+            if (
+                not isinstance(source_port, int)
+                or isinstance(source_port, bool)
+                or not 1 <= source_port <= 65535
+            ):
+                raise ValueError("runtime event port is invalid")
+        elif source_ip is not None or source_port is not None:
+            # Unresolved means unresolved. A peer the runtime could not pin
+            # down must not arrive as a half-filled guess.
+            raise ValueError("unresolved authentication must not carry a peer")
+        username = GuestRuntimeController._printable_token(
+            payload["username"], limit=64, name="username"
+        )
+        method = GuestRuntimeController._printable_token(
+            payload["method"], limit=32, name="authentication method"
+        )
+        return GuestAuthenticationTelemetry(
+            service=service,
+            accepted=_AUTH_OUTCOMES[outcome],
+            username=username,
+            method=method,
+            source_ip=source_ip,
+            source_port=source_port,
+            dest_port=_AUTH_SERVICES[service],
+            attribution=attribution,
+            timestamp=GuestRuntimeController._parse_timestamp(payload["timestamp"]),
         )
 
     def _consume_diagnostic(self, line: bytes) -> bool:
@@ -341,6 +449,11 @@ class GuestRuntimeController:
             )
         return True
 
+    @staticmethod
+    def _is_authentication_record(line: bytes) -> bool:
+        """Cheap kind check; the strict parse happens afterwards."""
+        return b'"authentication"' in line and b'"event"' in line
+
     async def _drain_output(self, stream: asyncio.StreamReader) -> None:
         discarding = False
         while True:
@@ -365,6 +478,15 @@ class GuestRuntimeController:
                 continue
             try:
                 if self._consume_diagnostic(line):
+                    continue
+                if self._is_authentication_record(line):
+                    auth_callback = self._on_authentication
+                    auth_event = self._parse_authentication_event(line)
+                    if auth_callback is not None:
+                        try:
+                            auth_callback(auth_event)
+                        except Exception:
+                            logger.exception("Deep-decoy authentication callback failed")
                     continue
                 event = self._parse_connection_event(line)
             except ValueError:
@@ -454,9 +576,18 @@ class GuestRuntimeController:
         )
         try:
             persona_archive = build_persona_archive(self._persona)
-            process.stdin.write(len(persona_archive).to_bytes(4, "big") + persona_archive)
-            await process.stdin.drain()
-            process.stdin.close()
+            try:
+                process.stdin.write(len(persona_archive).to_bytes(4, "big") + persona_archive)
+                await process.stdin.drain()
+                process.stdin.close()
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                # The child closed its stdin or exited before taking the persona.
+                # On Linux that races the write and surfaces as a transport
+                # error; it is the same failure as exiting before readiness and
+                # must fail closed the same way, not leak a raw socket error.
+                raise GuestRuntimeError(
+                    "Guest runtime exited before it became ready"
+                ) from exc
             line = await asyncio.wait_for(
                 process.stdout.readline(),
                 timeout=_READY_TIMEOUT_SECONDS,

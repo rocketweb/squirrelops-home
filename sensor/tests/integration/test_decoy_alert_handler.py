@@ -187,6 +187,37 @@ class TestCredentialTrip:
         assert detail["request_path"] == "/passwords.txt"
 
     @pytest.mark.asyncio
+    async def test_guest_login_detail_names_the_account_and_attribution(self, handler, bus, db):
+        """A Studio login arrives with who logged in and how it was attributed.
+
+        Those three fields are what make the alert actionable: the operator
+        sees "buildbot via password, exact" rather than a bare port number.
+        They are attacker-influenced, so they are bounded on the way in.
+        """
+        await bus.deliver("decoy.credential_trip", {
+            "source_ip": "10.0.0.99",
+            "source_port": 51000,
+            "dest_port": 22,
+            "credential_used": "Secret1234abcd",
+            "request_path": None,
+            "interaction_type": "ssh.auth_accepted",
+            "timestamp": "2026-10-17T16:12:21Z",
+            "detection_method": "deep_decoy",
+            "decoy_name": "Studio Build Mac",
+            "username": "buildbot" + "x" * 100,
+            "auth_method": "password",
+            "attribution": "exact",
+        })
+
+        async with db.execute("SELECT detail FROM home_alerts") as cur:
+            detail = json.loads((await cur.fetchone())["detail"])
+
+        assert detail["username"] == ("buildbot" + "x" * 100)[:64]
+        assert detail["auth_method"] == "password"
+        assert detail["attribution"] == "exact"
+        assert detail["interaction_type"] == "ssh.auth_accepted"
+
+    @pytest.mark.asyncio
     async def test_publishes_alert_new_critical(self, handler, bus, db):
         await bus.deliver("decoy.credential_trip", {
             "source_ip": "10.0.0.99",

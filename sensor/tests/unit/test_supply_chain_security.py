@@ -640,7 +640,8 @@ def test_guest_macos_home_is_traversable_before_services_start() -> None:
 
     users_mode = init.index('chmod 0755 /Users || fail "macOS users directory"')
     user_creation = init.index("adduser -D -u 501")
-    ssh_start = init.index("/usr/sbin/sshd -D -e")
+    # The ordering is the invariant; sshd now logs to syslog instead of -e.
+    ssh_start = init.index("/usr/sbin/sshd -D")
     samba_start = init.index("/usr/sbin/smbd --foreground")
 
     assert users_mode < user_creation < ssh_start

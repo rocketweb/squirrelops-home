@@ -1,0 +1,20 @@
+#!/bin/sh
+# Relay one vsock connection to a local daemon on a host-chosen source port.
+#
+# sshd and smbd only ever see this relay at 127.0.0.1, so the one identity
+# they can log is the source port of this connection. The host picks that
+# port, sends it as a single line before any client bytes, and this shim binds
+# it. An auth log line naming the port then names the LAN peer exactly.
+#
+# Nothing here reads past the preamble. The client's protocol bytes reach the
+# daemon untouched, and a malformed preamble ends the connection rather than
+# relaying something the host could never attribute.
+set -eu
+
+target="$1"
+IFS= read -r port || exit 1
+case "$port" in
+    ""|*[!0-9]*) exit 1 ;;
+esac
+[ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || exit 1
+exec socat STDIO "TCP:127.0.0.1:$target,sourceport=$port,reuseaddr"

@@ -11,6 +11,8 @@ from squirrelops_home_sensor.decoys.deep.agent_protocols import (
 )
 from squirrelops_home_sensor.decoys.deep.narrative import (
     InteractionEvidence,
+    IntruderIntent,
+    NarrativeStage,
     advance_campaign,
     new_campaign,
 )
@@ -272,3 +274,22 @@ def test_explicit_nonstreaming_response_snapshots() -> None:
         import hashlib
         expected = NONSTREAMING_SHA256[path]
         assert hashlib.sha256(response.body).hexdigest() == expected
+
+
+def test_guest_login_evidence_scores_credential_access_not_scanning() -> None:
+    """A guest login is neither a GET nor a connect: it must not look like a scan."""
+    campaign = new_campaign(decoy_id=41, source_ip="192.0.2.44")
+
+    failed = advance_campaign(
+        campaign, InteractionEvidence(method="auth", path="", protocol="ssh", operation="auth_failed")
+    )
+    assert failed.scores.get(IntruderIntent.SCANNER, 0) == 0
+    assert failed.scores[IntruderIntent.CREDENTIAL_HUNTER] == 3
+    assert failed.stage == NarrativeStage.DISCOVERY
+
+    accepted = advance_campaign(
+        failed, InteractionEvidence(method="auth", path="", protocol="smb", operation="auth_accepted")
+    )
+    assert accepted.scores[IntruderIntent.CREDENTIAL_HUNTER] == 11
+    assert accepted.intent is IntruderIntent.CREDENTIAL_HUNTER
+    assert accepted.stage == NarrativeStage.CREDENTIAL_ACCESS
