@@ -293,3 +293,13 @@ def test_guest_login_evidence_scores_credential_access_not_scanning() -> None:
     assert accepted.scores[IntruderIntent.CREDENTIAL_HUNTER] == 11
     assert accepted.intent is IntruderIntent.CREDENTIAL_HUNTER
     assert accepted.stage == NarrativeStage.CREDENTIAL_ACCESS
+
+
+def test_write_evidence_scores_the_same_on_every_protocol() -> None:
+    """The old SMB-specific write weight was unreachable: the relay never
+    reports a file operation. One weight, honestly reachable, replaces it."""
+    campaign = new_campaign(decoy_id=41, source_ip="192.0.2.44")
+    http = advance_campaign(campaign, InteractionEvidence(method="PUT", path="/api/x", protocol="http"))
+    smb = advance_campaign(campaign, InteractionEvidence(method="write", path="", protocol="smb", operation="write"))
+    assert http.scores[IntruderIntent.RANSOMWARE] == smb.scores[IntruderIntent.RANSOMWARE] == 8
+    assert smb.stage is NarrativeStage.WRITE_ACTIVITY

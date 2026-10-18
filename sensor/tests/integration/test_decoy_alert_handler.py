@@ -741,6 +741,119 @@ class TestNoIncidentGrouper:
 
 
 # ---------------------------------------------------------------------------
+# Intent-driven severity and titles (#62)
+# ---------------------------------------------------------------------------
+
+
+def _studio_trip(**changes):
+    payload = {
+        "source_ip": "10.0.0.9", "source_port": 51000, "dest_port": 445, "protocol": "tcp",
+        "timestamp": "2026-10-18T03:00:00Z", "decoy_name": "Studio Build Mac",
+        "intruder_intent": "scanner", "narrative_stage": 0, "interaction_type": "smb.guest_connected",
+    }
+    payload.update(changes)
+    return payload
+
+
+class TestIntentDrivenTrips:
+    """The campaign's intent and stage already ride on the event; the alert must show them."""
+
+    @pytest.mark.asyncio
+    async def test_write_activity_is_critical_and_says_so(self, handler, bus, db):
+        await bus.deliver("decoy.trip", _studio_trip(intruder_intent="ransomware", narrative_stage=4))
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            row = (await cur.fetchall())[0]
+        assert row["severity"] == "critical"
+        assert row["title"] == "Write activity on Studio Build Mac from 10.0.0.9"
+        detail = json.loads(row["detail"])
+        assert detail["intruder_intent"] == "ransomware"
+        assert detail["narrative_stage"] == 4
+        assert detail["max_narrative_stage"] == 4
+        announced = bus.events_of_type("alert.new")[0]
+        assert announced["severity"] == "critical"
+        assert announced["intruder_intent"] == "ransomware"
+        assert announced["narrative_stage"] == 4
+        assert "ransomware" in announced["summary"] and "write activity" in announced["summary"]
+
+    @pytest.mark.asyncio
+    async def test_agent_and_credential_hunting_get_their_own_titles(self, handler, bus, db):
+        await bus.deliver("decoy.trip", _studio_trip(
+            source_ip="10.0.0.10", dest_port=8765, intruder_intent="developer_agent", narrative_stage=3,
+        ))
+        await bus.deliver("decoy.trip", _studio_trip(
+            source_ip="10.0.0.11", intruder_intent="credential_hunter", narrative_stage=2,
+        ))
+
+        async with db.execute("SELECT severity, title FROM home_alerts ORDER BY id") as cur:
+            rows = [(r["severity"], r["title"]) for r in await cur.fetchall()]
+        assert rows == [
+            ("high", "AI agent probing Studio Build Mac from 10.0.0.10"),
+            ("high", "Credential hunting on Studio Build Mac from 10.0.0.11"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_plain_scanner_trip_keeps_the_existing_title(self, handler, bus, db):
+        await bus.deliver("decoy.trip", _studio_trip())
+
+        async with db.execute("SELECT severity, title FROM home_alerts") as cur:
+            row = (await cur.fetchone())
+        assert (row["severity"], row["title"]) == ("high", "Decoy connection from 10.0.0.9 on port 445")
+
+    @pytest.mark.asyncio
+    async def test_a_folded_alert_escalates_when_the_campaign_turns_destructive(self, handler, bus, db):
+        await bus.deliver("decoy.trip", _studio_trip())
+        await bus.deliver("decoy.trip", _studio_trip(
+            source_port=51001, intruder_intent="ransomware", narrative_stage=4,
+            interaction_type="smb.guest_connected",
+        ))
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+        assert len(rows) == 1
+        assert rows[0]["severity"] == "critical"
+        assert rows[0]["title"] == "Write activity on Studio Build Mac from 10.0.0.9"
+        updated = bus.events_of_type("alert.updated")
+        assert len(updated) == 1
+        # Severity and title both changed, which is exactly what the dispatcher
+        # re-notifies on, so the Slack message says Critical, not High.
+        assert updated[0]["severity"] == "critical"
+        assert updated[0]["title"].startswith("Write activity")
+        assert updated[0]["intruder_intent"] == "ransomware"
+
+    @pytest.mark.asyncio
+    async def test_severity_and_stage_never_downgrade(self, handler, bus, db):
+        await bus.deliver("decoy.trip", _studio_trip(intruder_intent="ransomware", narrative_stage=4))
+        await bus.deliver("decoy.trip", _studio_trip(source_port=51002, intruder_intent="scanner", narrative_stage=0))
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            row = (await cur.fetchall())[0]
+        assert row["severity"] == "critical"
+        assert row["title"] == "Write activity on Studio Build Mac from 10.0.0.9"
+        detail = json.loads(row["detail"])
+        assert detail["max_narrative_stage"] == 4
+        assert detail["intruder_intent"] == "scanner", "latest observation is still recorded"
+
+    @pytest.mark.asyncio
+    async def test_intent_outranks_the_port_scan_label(self, handler, bus, db):
+        await bus.deliver("decoy.trip", _studio_trip(
+            dest_port=11434, decoy_id=None, intruder_intent="developer_agent", narrative_stage=3,
+        ))
+        await bus.deliver("decoy.trip", _studio_trip(
+            source_port=51003, dest_port=8765, intruder_intent="developer_agent", narrative_stage=3,
+        ))
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            row = (await cur.fetchall())[0]
+        # An agent enumerating the MCP and model endpoints always touches
+        # several ports. "Port scan" would be true and useless.
+        assert row["title"] == "AI agent probing Studio Build Mac from 10.0.0.9"
+        detail = json.loads(row["detail"])
+        assert detail["detection_method"] == "decoy_port_scan"
+        assert len(detail["endpoints"]) == 2
+
+
+# ---------------------------------------------------------------------------
 # Trusted scanners (#64)
 # ---------------------------------------------------------------------------
 
