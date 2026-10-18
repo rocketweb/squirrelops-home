@@ -94,7 +94,6 @@ def advance_campaign(
     path = evidence.path[:2048]
     user_agent = evidence.user_agent[:1024]
     body = evidence.body[:8192]
-    protocol = evidence.protocol[:32].casefold()
     operation = evidence.operation[:128]
     combined = "\n".join((path, user_agent, body, operation))
 
@@ -142,7 +141,10 @@ def advance_campaign(
         stage = max(stage, NarrativeStage.AGENT_TOOL_USE)
 
     if write_evidence:
-        add(IntruderIntent.RANSOMWARE, 12 if protocol == "smb" else 8)
+        # One weight for every protocol. The old SMB-specific bonus was
+        # unreachable: the relay reports connections and logins, never file
+        # operations, so no SMB evidence can carry a write operation today.
+        add(IntruderIntent.RANSOMWARE, 8)
         stage = NarrativeStage.WRITE_ACTIVITY
 
     if any(term in user_agent.casefold() for term in ("mozilla/", "safari/", "finder")):

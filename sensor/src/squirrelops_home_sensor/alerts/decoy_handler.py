@@ -25,6 +25,7 @@ import aiosqlite
 
 from squirrelops_home_sensor.alerts.types import (
     AlertType,
+    Severity,
     severity_for_alert_type,
 )
 from squirrelops_home_sensor.db.queries import (
@@ -251,16 +252,26 @@ class DecoyAlertHandler:
         now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         detail = self._merged_trip_detail(existing, payload, observed_at=now)
         endpoint_count = len(detail["endpoints"])
-        title = (
-            f"Port scan detected from {source_ip}"
-            if endpoint_count >= 2
-            else str(existing["title"])
+        new_severity, title = trip_presentation(
+            source_ip=source_ip,
+            dest_port=payload.get("dest_port", detail.get("dest_port", "?")),
+            decoy_name=detail.get("decoy_name") or payload.get("decoy_name"),
+            strongest_intent=_clean_intent(detail.get("strongest_intent")),
+            max_stage=_clean_stage(detail.get("max_narrative_stage")),
+            endpoint_count=endpoint_count,
         )
+        # Severity only ever rises. A row that reached write activity stays
+        # Critical even if the next connection is a plain probe.
+        try:
+            prior_severity = Severity(str(existing["severity"]))
+        except ValueError:
+            prior_severity = Severity.HIGH
+        severity = max(prior_severity, new_severity, key=lambda s: s._rank)
         detail_json = json.dumps(detail)
 
         update_cursor = await self._db.execute(
             """UPDATE home_alerts
-               SET title = ?, detail = ?
+               SET title = ?, detail = ?, severity = ?
                WHERE id = ?
                  AND read_at IS NULL
                  AND actioned_at IS NULL
@@ -273,6 +284,7 @@ class DecoyAlertHandler:
             (
                 title,
                 detail_json,
+                severity.value,
                 int(existing["id"]),
                 source_event_seq,
             ),
@@ -310,7 +322,7 @@ class DecoyAlertHandler:
             {
                 "id": int(existing["id"]),
                 "alert_type": AlertType.DECOY_TRIP.value,
-                "severity": existing["severity"],
+                "severity": severity.value,
                 "title": title,
                 "source_ip": source_ip,
                 "source_mac": existing["source_mac"],
@@ -322,6 +334,9 @@ class DecoyAlertHandler:
                 "connection_count": int(detail["connection_count"]),
                 "ports": detail["ports"],
                 "service_counts": detail["service_counts"],
+                "intruder_intent": detail.get("intruder_intent"),
+                "narrative_stage": detail.get("narrative_stage"),
+                "summary": trip_summary(detail),
                 "source_event_seq": source_event_seq,
             },
             source_id=source_ip,
@@ -466,6 +481,17 @@ class DecoyAlertHandler:
         )
         if len(endpoints) >= 2:
             detail["detection_method"] = "decoy_port_scan"
+        latest_intent = _clean_intent(payload.get("intruder_intent"))
+        latest_stage = _clean_stage(payload.get("narrative_stage"))
+        if latest_intent is not None:
+            detail["intruder_intent"] = latest_intent
+            detail["strongest_intent"] = _stronger_intent(
+                _clean_intent(detail.get("strongest_intent")), latest_intent
+            )
+        if latest_stage is not None:
+            detail["narrative_stage"] = latest_stage
+            prior_max = _clean_stage(detail.get("max_narrative_stage"))
+            detail["max_narrative_stage"] = max(latest_stage, prior_max or 0)
         if payload.get("request_path"):
             detail["latest_request_path"] = payload["request_path"]
         if payload.get("decoy_name"):
@@ -646,15 +672,30 @@ class DecoyAlertHandler:
         source_mac = device["mac_address"] if device else None
         device_id = device["device_id"] if device else None
 
+        intent = _clean_intent(payload.get("intruder_intent"))
+        stage = _clean_stage(payload.get("narrative_stage"))
         if alert_type == AlertType.DECOY_CREDENTIAL_TRIP:
             title = f"Credential stolen from {source_ip} on port {dest_port}"
         else:
-            title = f"Decoy connection from {source_ip} on port {dest_port}"
+            severity, title = trip_presentation(
+                source_ip=str(source_ip),
+                dest_port=dest_port,
+                decoy_name=payload.get("decoy_name"),
+                strongest_intent=intent,
+                max_stage=stage,
+                endpoint_count=1,
+            )
 
         detail_obj: dict[str, Any] = {
             "dest_port": dest_port,
             "protocol": payload.get("protocol", "tcp"),
         }
+        if intent is not None:
+            detail_obj["intruder_intent"] = intent
+            detail_obj["strongest_intent"] = intent
+        if stage is not None:
+            detail_obj["narrative_stage"] = stage
+            detail_obj["max_narrative_stage"] = stage
         if alert_type == AlertType.DECOY_TRIP:
             trip_port = self._coerce_int(dest_port)
             observed_at = (
@@ -755,6 +796,9 @@ class DecoyAlertHandler:
                 "connection_count": detail_obj.get("connection_count"),
                 "ports": detail_obj.get("ports"),
                 "service_counts": detail_obj.get("service_counts"),
+                "intruder_intent": detail_obj.get("intruder_intent"),
+                "narrative_stage": detail_obj.get("narrative_stage"),
+                "summary": trip_summary(detail_obj) if alert_type == AlertType.DECOY_TRIP else None,
                 "source_event_seq": source_event_seq,
             },
             source_id=source_ip,
@@ -765,3 +809,87 @@ class DecoyAlertHandler:
             severity.value, alert_id, source_ip, dest_port,
         )
         return alert_id
+
+
+# -- Intent-driven presentation ------------------------------------------------
+
+# Strongest first. A campaign that was ever destructive stays destructive in
+# the title; the latest observation is still recorded separately.
+_INTENT_RANK = {
+    "ransomware": 5,
+    "developer_agent": 4,
+    "credential_hunter": 3,
+    "human_operator": 2,
+    "scanner": 1,
+}
+_STAGE_NAMES = {
+    0: "discovery",
+    1: "browsing",
+    2: "credential access",
+    3: "agent tool use",
+    4: "write activity",
+}
+_WRITE_STAGE = 4
+_CREDENTIAL_STAGE = 2
+
+
+def _clean_intent(value: object) -> str | None:
+    return value if isinstance(value, str) and value in _INTENT_RANK else None
+
+
+def _clean_stage(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 0 <= value <= _WRITE_STAGE else None
+
+
+def _stronger_intent(a: str | None, b: str | None) -> str | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if _INTENT_RANK[a] >= _INTENT_RANK[b] else b
+
+
+def trip_presentation(
+    *,
+    source_ip: str,
+    dest_port: object,
+    decoy_name: object,
+    strongest_intent: str | None,
+    max_stage: int | None,
+    endpoint_count: int,
+) -> tuple[Severity, str]:
+    """Severity and title for a decoy-trip alert from what the campaign knows.
+
+    Intent outranks the port-scan label on purpose. An AI agent enumerating
+    the model and MCP endpoints always touches several ports, so "port scan"
+    would be true and useless. Write activity is the one state that escalates
+    severity: everything else a decoy sees is reconnaissance of some kind.
+    """
+    name = decoy_name if isinstance(decoy_name, str) and decoy_name else "decoy"
+    stage = max_stage or 0
+    if stage >= _WRITE_STAGE or strongest_intent == "ransomware":
+        return Severity.CRITICAL, f"Write activity on {name} from {source_ip}"
+    if strongest_intent == "developer_agent":
+        return Severity.HIGH, f"AI agent probing {name} from {source_ip}"
+    if strongest_intent == "credential_hunter" or stage >= _CREDENTIAL_STAGE:
+        return Severity.HIGH, f"Credential hunting on {name} from {source_ip}"
+    if endpoint_count >= 2:
+        return Severity.HIGH, f"Port scan detected from {source_ip}"
+    return Severity.HIGH, f"Decoy connection from {source_ip} on port {dest_port}"
+
+
+def trip_summary(detail: dict[str, Any]) -> str:
+    """One line for Slack and push: intent, stage, and volume."""
+    parts: list[str] = []
+    intent = _clean_intent(detail.get("strongest_intent"))
+    if intent:
+        parts.append(f"{intent.replace('_', ' ')} intent")
+    stage = _clean_stage(detail.get("max_narrative_stage"))
+    if stage is not None:
+        parts.append(f"{_STAGE_NAMES[stage]} stage")
+    count = detail.get("connection_count")
+    if isinstance(count, int) and count > 0:
+        parts.append(f"{count} connection{'' if count == 1 else 's'}")
+    return ", ".join(parts)

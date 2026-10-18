@@ -913,7 +913,7 @@ Every individual connection is still retained in the decoy's forensic log.
 | Type | Severity | Meaning |
 |------|----------|---------|
 | Credential Trip | Critical | A supported HTTP decoy recognized submitted planted credentials, or the Studio guest's `sshd`/`smbd` accepted a login with the planted password |
-| Decoy Trip | High | Unexpected decoy activity; automatic printer discovery is retained without an intrusion alert |
+| Decoy Trip | High, Critical on write activity | Unexpected decoy activity. On the Studio Build Mac the title names what the campaign has shown so far (credential hunting, AI agent probing, write activity), the alert escalates to Critical when write activity is reached and never steps back down, and Slack and push messages carry the intent and stage. Automatic printer discovery is retained without an intrusion alert |
 | Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
 | ARP Ownership Conflict | High | The scan cannot establish a unique IP/MAC owner |
 | Sensor Disconnected | Medium | The Mac app has been disconnected for five minutes; this alert is local to the app |
