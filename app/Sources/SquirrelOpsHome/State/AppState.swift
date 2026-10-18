@@ -247,7 +247,7 @@ public final class AppState {
                 id: old.id, ipAddress: old.ipAddress, macAddress: old.macAddress,
                 hostname: old.hostname, vendor: old.vendor, deviceType: old.deviceType,
                 modelName: old.modelName, area: old.area, customName: old.customName,
-                trustStatus: old.trustStatus,
+                trustStatus: old.trustStatus, trustedScanner: old.trustedScanner,
                 isOnline: online, firstSeen: old.firstSeen, lastSeen: old.lastSeen
             )
             devices = items

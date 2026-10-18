@@ -10,6 +10,7 @@ struct DeviceDetailView: View {
     @State private var isRejecting = false
     @State private var isIgnoring = false
     @State private var isVerifying = false
+    @State private var isTogglingTrustedScanner = false
     @State private var actionError: String?
     @State private var fingerprint: FingerprintEntry?
     @State private var isFingerprintLoading = true
@@ -72,10 +73,15 @@ struct DeviceDetailView: View {
                             .foregroundStyle(Theme.textSecondary(colorScheme))
                     }
 
-                    StatusBadge(
-                        label: device.trustStatus,
-                        style: device.trustBadgeStyle
-                    )
+                    HStack(spacing: Spacing.sm) {
+                        StatusBadge(
+                            label: device.trustStatus,
+                            style: device.trustBadgeStyle
+                        )
+                        if device.isTrustedScanner {
+                            StatusBadge(label: "Trusted Scanner", style: .active)
+                        }
+                    }
                 }
             }
 
@@ -444,7 +450,7 @@ struct DeviceDetailView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Theme.statusSuccess(colorScheme))
-                    .disabled(isApproving || isRejecting || isIgnoring || isVerifying)
+                    .disabled(isApproving || isRejecting || isIgnoring || isVerifying || isTogglingTrustedScanner)
                 }
 
                 if device.trustStatus != "rejected" {
@@ -465,7 +471,7 @@ struct DeviceDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     .tint(Theme.statusError(colorScheme))
-                    .disabled(isApproving || isRejecting || isIgnoring || isVerifying)
+                    .disabled(isApproving || isRejecting || isIgnoring || isVerifying || isTogglingTrustedScanner)
                 }
 
                 if device.trustStatus != "unknown" {
@@ -485,7 +491,7 @@ struct DeviceDetailView: View {
                         Label("Reset to Unknown", systemImage: "questionmark.circle")
                     }
                     .buttonStyle(.bordered)
-                    .disabled(isApproving || isRejecting || isIgnoring || isVerifying)
+                    .disabled(isApproving || isRejecting || isIgnoring || isVerifying || isTogglingTrustedScanner)
                 }
 
                 Button {
@@ -503,7 +509,32 @@ struct DeviceDetailView: View {
                     Label("Request Verification", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .buttonStyle(.bordered)
-                .disabled(isApproving || isRejecting || isIgnoring || isVerifying)
+                .disabled(isApproving || isRejecting || isIgnoring || isVerifying || isTogglingTrustedScanner)
+
+                Button {
+                    let trusted = !device.isTrustedScanner
+                    isTogglingTrustedScanner = true
+                    actionError = nil
+                    Task {
+                        do {
+                            try await appState.sensorClient?.request(
+                                .updateDevice(id: device.id, body: DeviceUpdateRequest(trustedScanner: trusted))
+                            )
+                            updateDeviceTrustedScanner(trusted)
+                        } catch {
+                            actionError = "Trusted scanner update failed: \(error.localizedDescription)"
+                        }
+                        isTogglingTrustedScanner = false
+                    }
+                } label: {
+                    Label(
+                        device.isTrustedScanner ? "Unmark Trusted Scanner" : "Mark as Trusted Scanner",
+                        systemImage: device.isTrustedScanner ? "eye.slash" : "eye"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .help("Decoy activity from a trusted scanner is kept as evidence without raising alerts. Credential use still alerts.")
+                .disabled(isApproving || isRejecting || isIgnoring || isVerifying || isTogglingTrustedScanner)
             }
 
             if let actionError {
@@ -530,7 +561,7 @@ struct DeviceDetailView: View {
                     hostname: d.hostname, vendor: d.vendor, deviceType: d.deviceType,
                     modelName: d.modelName, area: d.area,
                     customName: editName.isEmpty ? nil : editName,
-                    trustStatus: d.trustStatus,
+                    trustStatus: d.trustStatus, trustedScanner: d.trustedScanner,
                     isOnline: d.isOnline, firstSeen: d.firstSeen, lastSeen: d.lastSeen
                 ))
                 isEditing = false
@@ -547,7 +578,18 @@ struct DeviceDetailView: View {
             id: d.id, ipAddress: d.ipAddress, macAddress: d.macAddress,
             hostname: d.hostname, vendor: d.vendor, deviceType: d.deviceType,
             modelName: d.modelName, area: d.area, customName: d.customName,
-            trustStatus: newStatus,
+            trustStatus: newStatus, trustedScanner: d.trustedScanner,
+            isOnline: d.isOnline, firstSeen: d.firstSeen, lastSeen: d.lastSeen
+        ))
+    }
+
+    private func updateDeviceTrustedScanner(_ trusted: Bool) {
+        let d = device
+        appState.updateDevice(DeviceSummary(
+            id: d.id, ipAddress: d.ipAddress, macAddress: d.macAddress,
+            hostname: d.hostname, vendor: d.vendor, deviceType: d.deviceType,
+            modelName: d.modelName, area: d.area, customName: d.customName,
+            trustStatus: d.trustStatus, trustedScanner: trusted,
             isOnline: d.isOnline, firstSeen: d.firstSeen, lastSeen: d.lastSeen
         ))
     }

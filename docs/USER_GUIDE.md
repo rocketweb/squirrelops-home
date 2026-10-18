@@ -382,6 +382,7 @@ Click any device to open its detail sheet, which shows:
   - **Reject Device** — Flag as unauthorized
   - **Reset to Unknown** — Remove approval or rejection
   - **Request Verification** — Trigger a fingerprint re-check
+  - **Mark as Trusted Scanner**: Declare this device your own scanner (a media server, a monitoring box, your laptop running a port scan). Decoy connections from it are still recorded in the decoy's forensic log and still count toward its connection total, but they no longer raise or feed Decoy Trip alerts. Credential use from a trusted scanner is still a Critical alert. The flag is independent of trust status, takes effect on the next connection, and changes nothing about how the decoy answers that device. A **Trusted Scanner** badge appears in the header while it is set; the same button unmarks it.
 
 ### Editing a Device
 
@@ -913,7 +914,7 @@ Every individual connection is still retained in the decoy's forensic log.
 | Type | Severity | Meaning |
 |------|----------|---------|
 | Credential Trip | Critical | A supported HTTP decoy recognized submitted planted credentials, or the Studio guest's `sshd`/`smbd` accepted a login with the planted password |
-| Decoy Trip | High, Critical on write activity | Unexpected decoy activity. On the Studio Build Mac the title names what the campaign has shown so far (credential hunting, AI agent probing, write activity), the alert escalates to Critical when write activity is reached and never steps back down, and Slack and push messages carry the intent and stage. Automatic printer discovery is retained without an intrusion alert |
+| Decoy Trip | High, Critical on write activity | Unexpected decoy activity. On the Studio Build Mac the title names what the campaign has shown so far (credential hunting, AI agent probing, write activity), the alert escalates to Critical when write activity is reached and never steps back down, and Slack and push messages carry the intent and stage. Automatic printer discovery and activity from devices you marked as trusted scanners are retained as evidence without an alert |
 | Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
 | ARP Ownership Conflict | High | The scan cannot establish a unique IP/MAC owner |
 | New Device | Medium | A device not already approved joined the LAN; one alert per device |

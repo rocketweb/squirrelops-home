@@ -118,6 +118,7 @@ class DecoyAlertHandler:
         async with self._event_lock:
             try:
                 is_new_alert = False
+                suppressed_as_trusted = False
                 if event_type == "decoy.credential_trip":
                     alert_id = await self._create_alert(
                         AlertType.DECOY_CREDENTIAL_TRIP,
@@ -130,6 +131,18 @@ class DecoyAlertHandler:
                         alert_id = None
                         logger.debug(
                             "Recorded automatic service discovery from %s "
+                            "on port %s without raising an alert",
+                            payload.get("source_ip", "unknown"),
+                            payload.get("dest_port", "?"),
+                        )
+                    elif await self._is_trusted_scanner(payload):
+                        # The operator said this device is theirs. Keep the
+                        # forensic record and the decoy counters, skip the
+                        # alert. Credential use never takes this branch.
+                        alert_id = None
+                        suppressed_as_trusted = True
+                        logger.info(
+                            "Recorded decoy activity from trusted scanner %s "
                             "on port %s without raising an alert",
                             payload.get("source_ip", "unknown"),
                             payload.get("dest_port", "?"),
@@ -154,6 +167,7 @@ class DecoyAlertHandler:
 
                 if (
                     alert_id is None
+                    and not suppressed_as_trusted
                     and not self._is_discovery_probe(payload)
                     and not payload.get("credential_used")
                 ):
@@ -181,6 +195,23 @@ class DecoyAlertHandler:
                 await self._persist_event(event_type, payload)
             except Exception:
                 logger.exception("Failed to persist decoy %s record", event_type)
+
+    async def _is_trusted_scanner(self, payload: dict[str, Any]) -> bool:
+        """Whether the source is a device the operator marked as their own scanner.
+
+        Read at event time, not cached: flipping the flag in the app takes
+        effect on the next connection, in either direction.
+        """
+        source_ip = payload.get("source_ip")
+        if not isinstance(source_ip, str) or not source_ip:
+            return False
+        async with self._db.execute(
+            "SELECT trusted_scanner FROM devices WHERE ip_address = ? "
+            "ORDER BY last_seen DESC LIMIT 1",
+            (source_ip,),
+        ) as cur:
+            row = await cur.fetchone()
+        return bool(row and row["trusted_scanner"])
 
     @staticmethod
     def _is_discovery_probe(payload: dict[str, Any]) -> bool:

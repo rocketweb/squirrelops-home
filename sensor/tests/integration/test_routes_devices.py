@@ -406,3 +406,37 @@ class TestDeviceArea:
         response = client.get(f"/devices/{ids[0]}")
         data = response.json()
         assert data["area"] is None
+
+
+class TestTrustedScanner:
+    """An operator-marked trusted scanner files decoy trips as evidence, not alerts.
+
+    The flag is the operator's own statement about a device they run
+    (a media server, a monitoring box, their own laptop). It changes only what
+    the operator is told. The decoy's response to that device is unchanged.
+    """
+
+    def test_defaults_to_false_and_is_returned_on_detail_and_list(self, client, db):
+        ids = asyncio.get_event_loop().run_until_complete(seed_devices(db, count=1))
+        detail = client.get(f"/devices/{ids[0]}").json()
+        listing = client.get("/devices").json()["items"][0]
+        assert detail["trusted_scanner"] is False
+        assert listing["trusted_scanner"] is False
+
+    def test_put_sets_and_clears_the_flag(self, client, db):
+        ids = asyncio.get_event_loop().run_until_complete(seed_devices(db, count=1))
+        response = client.put(f"/devices/{ids[0]}", json={"trusted_scanner": True})
+        assert response.status_code == 200
+        assert response.json()["trusted_scanner"] is True
+        assert client.get("/devices").json()["items"][0]["trusted_scanner"] is True
+
+        response = client.put(f"/devices/{ids[0]}", json={"trusted_scanner": False})
+        assert response.json()["trusted_scanner"] is False
+
+    def test_flag_is_independent_of_trust_status(self, client, db):
+        ids = asyncio.get_event_loop().run_until_complete(seed_devices(db, count=1))
+        client.put(f"/devices/{ids[0]}", json={"trusted_scanner": True})
+        client.post(f"/devices/{ids[0]}/reject")
+        detail = client.get(f"/devices/{ids[0]}").json()
+        assert detail["trusted_scanner"] is True
+        assert detail["trust_status"] == "rejected"

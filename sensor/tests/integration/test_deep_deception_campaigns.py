@@ -32,8 +32,11 @@ async def test_schema_v12_adds_campaign_table() -> None:
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'deception_campaigns'"
         )
         assert await cursor.fetchone() is not None
+        # V12 is recorded, and later migrations build on top of it.
+        cursor = await db.execute("SELECT 1 FROM schema_version WHERE version = 12")
+        assert await cursor.fetchone() is not None
         cursor = await db.execute("SELECT MAX(version) FROM schema_version")
-        assert (await cursor.fetchone())[0] == SCHEMA_VERSION == 12
+        assert (await cursor.fetchone())[0] == SCHEMA_VERSION >= 12
 
         cursor = await db.execute("PRAGMA table_info(decoy_connections)")
         columns = {row[1] for row in await cursor.fetchall()}
