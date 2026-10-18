@@ -43,6 +43,13 @@ public final class SensorConnectionService: @unchecked Sendable {
     private let appState: AppState?
     private let localSensorProbe: @Sendable () async -> Bool
     private let onEvent: @Sendable (WSFrame) -> Void
+    /// How long an outage lasts before the app raises its own alert.
+    private let offlineAlertDelay: Duration
+    /// Out-of-band delivery for the one alert the sensor cannot send about itself.
+    private let offlineDelivery: @Sendable (AlertSummary) async -> Void
+    /// Whether this session has ever reached `.live`. Losing a sensor that was
+    /// working is High; never finding one is Medium.
+    private var hasBeenLive = false
     private var reconnectTask: Task<Void, Never>?
     private var listenTask: Task<Void, Never>?
     private var learningPollTask: Task<Void, Never>?
@@ -58,12 +65,16 @@ public final class SensorConnectionService: @unchecked Sendable {
         webSocketManager: any WebSocketManagerProtocol,
         appState: AppState? = nil,
         localSensorProbe: @escaping @Sendable () async -> Bool = { false },
+        offlineAlertDelay: Duration = .seconds(300),
+        offlineDelivery: @escaping @Sendable (AlertSummary) async -> Void = { _ in },
         onEvent: @escaping @Sendable (WSFrame) -> Void
     ) {
         self.sensorClient = sensorClient
         self.webSocketManager = webSocketManager
         self.appState = appState
         self.localSensorProbe = localSensorProbe
+        self.offlineAlertDelay = offlineAlertDelay
+        self.offlineDelivery = offlineDelivery
         self.onEvent = onEvent
     }
 
@@ -71,15 +82,17 @@ public final class SensorConnectionService: @unchecked Sendable {
 
     @MainActor private static var syntheticIdCounter: Int = -1
 
-    /// Creates a synthetic "Sensor Disconnected" alert for local display.
-    @MainActor public static func makeDisconnectAlert() -> AlertSummary {
+    /// Creates a synthetic "Sensor Disconnected" alert. It is local to the app
+    /// (the sensor cannot report its own absence) and is also what the app
+    /// hands to out-of-band delivery.
+    @MainActor public static func makeDisconnectAlert(previouslyConnected: Bool = false) -> AlertSummary {
         let id = syntheticIdCounter
         syntheticIdCounter -= 1
         return AlertSummary(
             id: id,
             incidentId: nil,
             alertType: "system.sensor_offline",
-            severity: "medium",
+            severity: previouslyConnected ? "high" : "medium",
             title: "Sensor Disconnected",
             sourceIp: nil,
             readAt: nil,
@@ -242,6 +255,7 @@ public final class SensorConnectionService: @unchecked Sendable {
 
         // Go live
         state = .live
+        hasBeenLive = true
         await syncStateAsync()
         disconnectAlertTask?.cancel()
         disconnectAlertTask = nil
@@ -405,19 +419,46 @@ public final class SensorConnectionService: @unchecked Sendable {
             await self.connect(baseURL: baseURL, certFingerprint: certFingerprint)
         }
 
-        // Start 5-minute alert timer if not already running
+        // Start the outage timer if not already running. It is cancelled only
+        // by going live or by an explicit disconnect, so one outage raises one
+        // alert.
         if disconnectAlertTask == nil {
             disconnectAlertTask = Task { [weak self] in
                 do {
-                    try await Task.sleep(for: .seconds(300))
+                    try await self?.sleepForOfflineAlert()
                 } catch { return }
-                guard let self, self.state == .disconnected else { return }
-                await MainActor.run {
-                    let alert = SensorConnectionService.makeDisconnectAlert()
-                    self.appState?.addAlert(alert)
-                }
+                guard let self else { return }
+                await self.raiseOfflineAlert()
             }
         }
+    }
+
+    private func sleepForOfflineAlert() async throws {
+        try await Task.sleep(for: offlineAlertDelay)
+    }
+
+    /// States in which the sensor is not answering. A reconnect attempt that is
+    /// mid-flight when the timer fires is still an outage; `authFailed` and
+    /// `incompatible` mean the sensor answered and are not.
+    static func isOffline(_ state: ConnectionState) -> Bool {
+        switch state {
+        case .disconnected, .connecting: return true
+        case .connected, .syncing, .live, .authFailed, .incompatible: return false
+        }
+    }
+
+    private func raiseOfflineAlert() async {
+        guard Self.isOffline(state) else { return }
+        let previouslyConnected = hasBeenLive
+        let alert = await MainActor.run {
+            let alert = SensorConnectionService.makeDisconnectAlert(previouslyConnected: previouslyConnected)
+            self.appState?.addAlert(alert)
+            // Same path WebSocket alerts take to Notification Center, so the
+            // banner shows even when the window is closed.
+            self.appState?.onAlertNotificationsRequested?([alert])
+            return alert
+        }
+        await offlineDelivery(alert)
     }
 
     private func reconnectDelay() -> Int {

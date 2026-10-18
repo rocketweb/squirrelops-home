@@ -127,6 +127,9 @@ final class MockWSManager: WebSocketManagerProtocol, @unchecked Sendable {
     var requestedReplaySeq: Int? { lock.withLock { _requestedReplaySeq } }
 
     var framesToDeliver: [WSFrame] = []
+    /// When set, the stream ends after the queued frames, which the service
+    /// treats as a lost connection.
+    var finishStreamAfterFrames = false
 
     func connect() { lock.withLock { _isConnected = true } }
     func disconnect() { lock.withLock { _isConnected = false } }
@@ -148,6 +151,7 @@ final class MockWSManager: WebSocketManagerProtocol, @unchecked Sendable {
             for frame in frames { continuation.yield(frame) }
             // A live WebSocket remains open after replay completes. Individual
             // tests disconnect the service, which cancels the consumer task.
+            if finishStreamAfterFrames { continuation.finish() }
         }
     }
 }
@@ -535,5 +539,109 @@ struct DisconnectAlertTests {
         let alert1 = SensorConnectionService.makeDisconnectAlert()
         let alert2 = SensorConnectionService.makeDisconnectAlert()
         #expect(alert1.id != alert2.id)
+    }
+}
+
+
+// MARK: - Offline alert delivery
+
+/// Collects what the service hands to the out-of-band delivery hook.
+private final class OfflineDeliveryRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _alerts: [AlertSummary] = []
+    var alerts: [AlertSummary] { lock.withLock { _alerts } }
+    func record(_ alert: AlertSummary) { lock.withLock { _alerts.append(alert) } }
+}
+
+@MainActor
+private func waitUntil(timeout: Duration = .seconds(3), _ condition: @MainActor () -> Bool) async {
+    let deadline = ContinuousClock.now + timeout
+    while !condition() && ContinuousClock.now < deadline {
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+}
+
+@Suite("Offline alert out of band")
+struct OfflineAlertOutOfBandTests {
+
+    @Test("Never-connected outage is Medium and goes to Notification Center and the delivery hook")
+    @MainActor
+    func neverConnectedIsMedium() async {
+        let client = MockSensorClient()
+        client.shouldFail = true
+        let appState = AppState()
+        let notified = OfflineDeliveryRecorder()
+        let delivered = OfflineDeliveryRecorder()
+        appState.onAlertNotificationsRequested = { alerts in alerts.forEach(notified.record) }
+
+        let service = SensorConnectionService(
+            sensorClient: client,
+            webSocketManager: MockWSManager(),
+            appState: appState,
+            offlineAlertDelay: .milliseconds(50),
+            offlineDelivery: { alert in delivered.record(alert) },
+            onEvent: { _ in }
+        )
+        defer { service.disconnect() }
+
+        await service.connect(baseURL: URL(string: "https://192.168.1.50:8443")!, certFingerprint: "sha256:test")
+        #expect(service.state == .disconnected)
+
+        await waitUntil { !delivered.alerts.isEmpty }
+
+        let alert = appState.alerts.first { $0.alertType == "system.sensor_offline" }
+        #expect(alert?.severity == "medium")
+        #expect(notified.alerts.map(\.id) == [alert?.id])
+        #expect(delivered.alerts.map(\.id) == [alert?.id])
+    }
+
+    @Test("Losing a live sensor is High")
+    @MainActor
+    func previouslyLiveIsHigh() async {
+        let client = MockSensorClient()
+        let wsManager = MockWSManager()
+        wsManager.framesToDeliver = [.replayComplete(lastSeq: 0)]
+        wsManager.finishStreamAfterFrames = true
+        let appState = AppState()
+        let delivered = OfflineDeliveryRecorder()
+
+        let service = SensorConnectionService(
+            sensorClient: client,
+            webSocketManager: wsManager,
+            appState: appState,
+            offlineAlertDelay: .milliseconds(50),
+            offlineDelivery: { alert in delivered.record(alert) },
+            onEvent: { _ in }
+        )
+        defer { service.disconnect() }
+
+        await service.connect(baseURL: URL(string: "https://192.168.1.50:8443")!, certFingerprint: "sha256:test")
+        // The stream ends right after replay, which the listener treats as a lost connection.
+        await waitUntil { !delivered.alerts.isEmpty }
+
+        #expect(service.state == .disconnected)
+        #expect(delivered.alerts.first?.severity == "high")
+        #expect(appState.alerts.first { $0.alertType == "system.sensor_offline" }?.severity == "high")
+    }
+
+    @Test("A reconnect attempt in flight at the deadline still raises the alert")
+    @MainActor
+    func connectingAtDeadlineStillAlerts() async {
+        // Reconnects run every 30 s and a health check can be mid-flight when the
+        // five-minute timer fires. The old guard required exactly .disconnected
+        // and silently dropped the alert for the rest of the outage.
+        #expect(SensorConnectionService.isOffline(.connecting))
+        #expect(SensorConnectionService.isOffline(.disconnected))
+        #expect(!SensorConnectionService.isOffline(.live))
+        #expect(!SensorConnectionService.isOffline(.authFailed))
+        #expect(!SensorConnectionService.isOffline(.incompatible))
+    }
+
+    @Test("Synthetic alert severity follows prior connectivity")
+    @MainActor
+    func syntheticSeverity() {
+        #expect(SensorConnectionService.makeDisconnectAlert(previouslyConnected: false).severity == "medium")
+        #expect(SensorConnectionService.makeDisconnectAlert(previouslyConnected: true).severity == "high")
+        #expect(SensorConnectionService.makeDisconnectAlert().severity == "medium")
     }
 }
