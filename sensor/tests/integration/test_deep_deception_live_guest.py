@@ -210,8 +210,16 @@ async def _capacity_and_guest_eof(ports, telemetry) -> None:
         writer.write(b"NOT-AN-SSH-CLIENT\r\n")
         await writer.drain()
         await asyncio.wait_for(reader.read(), 5)  # Guest closes, client sends no FIN.
-        for _ in range(15):
-            peers.append(await asyncio.open_connection("127.0.0.1", ports[445]))
+        # Concurrent on purpose (#66): the host connects admitted relays in
+        # parallel, and the guest listener must queue the whole burst. With
+        # socat's default backlog of 5, 15 to 20 percent of these connects were
+        # reset by the guest kernel (code 54) and their slots freed, which let a
+        # 17th connection through below.
+        peers.extend(
+            await asyncio.gather(
+                *(asyncio.open_connection("127.0.0.1", ports[445]) for _ in range(15))
+            )
+        )
         rejected_reader, rejected_writer = await asyncio.open_connection("127.0.0.1", ports[22])
         rejected_port = rejected_writer.get_extra_info("sockname")[1]
         try:
@@ -226,6 +234,8 @@ async def _capacity_and_guest_eof(ports, telemetry) -> None:
         assert [e.interaction_type for e in telemetry if e.source_port == rejected_port] == [
             "ssh.capacity_rejected"
         ]
+        failed = [e for e in telemetry if e.interaction_type.endswith(".guest_connect_failed")]
+        assert failed == [], f"guest refused relays during the burst: {failed}"
         # Exact production half-close policy, not a test-only timeout override.
         await asyncio.sleep(32)
         resumed_reader, resumed_writer = await asyncio.open_connection("127.0.0.1", ports[22])

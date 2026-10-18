@@ -85,3 +85,28 @@ def test_swift_runtime_and_guest_agree_on_the_channel_port_and_pool() -> None:
     low, high = (int(value.replace("_", "")) for value in pool.groups())
     assert 1024 <= low < high <= 65535
     assert high < 32768, "stay below Linux's default ephemeral range to avoid bind collisions"
+
+
+def test_relay_listeners_queue_a_full_burst_before_accept() -> None:
+    """#66: the host admits up to 16 relays and connects them concurrently.
+
+    socat's default listen backlog is 5, and Linux vsock resets a connect
+    that arrives while the accept queue is full (the host sees ECONNRESET,
+    code 54). Each relay listener must queue the whole admission ceiling.
+    """
+    init = _read("sbin/init")
+    ceiling = 16
+    for port in (10022, 10445):
+        listener = re.search(
+            rf"socat VSOCK-LISTEN:{port},(?P<options>[^ ]+) EXEC:", init
+        )
+        assert listener, f"relay listener on {port} missing"
+        options = dict(
+            option.split("=", 1) if "=" in option else (option, "")
+            for option in listener.group("options").split(",")
+        )
+        assert options.get("max-children") == str(ceiling)
+        assert options.get("backlog") == str(ceiling), (
+            f"listener {port} must queue {ceiling} pending connects; a burst "
+            "larger than the default backlog is reset by the guest kernel"
+        )
