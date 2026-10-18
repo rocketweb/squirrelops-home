@@ -24,6 +24,14 @@ updates:
       time: "09:15"
       timezone: America/Indiana/Indianapolis
     open-pull-requests-limit: 5
+    # Python stays on 3.11 until the runtime migration tracked in #67, which
+    # moves the Docker image and the standalone native Python together.
+    # Digest refreshes of 3.11 are still wanted; new minors and majors are not.
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
     groups:
       sensor-docker:
         patterns:
