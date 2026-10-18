@@ -99,6 +99,17 @@ struct EndpointTests {
         #expect(json["deviceType"] == nil)
     }
 
+    @Test("UpdateDevice sends only the trusted-scanner flag when that is all that changed")
+    func updateDeviceTrustedScannerOnly() throws {
+        let endpoint = Endpoint.updateDevice(id: 42, body: DeviceUpdateRequest(trustedScanner: true))
+        let json = try JSONSerialization.jsonObject(with: endpoint.body!) as! [String: Any]
+
+        #expect(json["trusted_scanner"] as? Bool == true)
+        #expect(json["custom_name"] == nil)
+        #expect(json["notes"] == nil)
+        #expect(json["device_type"] == nil)
+    }
+
     // MARK: - Approve / Reject device
 
     @Test("ApproveDevice produces POST /devices/{id}/approve")

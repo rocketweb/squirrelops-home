@@ -8,7 +8,7 @@ observations, and event logging.
 from __future__ import annotations
 
 # Current schema version -- increment when adding migrations
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # All table names managed by this schema (does NOT include Pingting's tables)
 _TABLE_NAMES: list[str] = [
@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS devices (
     notes TEXT,
     is_online INTEGER NOT NULL DEFAULT 1,
     first_seen TEXT NOT NULL,
-    last_seen TEXT NOT NULL
+    last_seen TEXT NOT NULL,
+    trusted_scanner INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_devices_mac ON devices(mac_address);
 CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip_address);

@@ -283,6 +283,9 @@ class TestDeviceManagerPipeline:
 
         updated_events = [e for e in received_events if e["event_type"] == "device.updated"]
         assert updated_events[-1]["payload"]["trust_status"] == "approved"
+        # The operator's own-scanner flag rides on every device payload so the
+        # app's live inventory shows it without a refetch.
+        assert updated_events[-1]["payload"]["trusted_scanner"] is False
 
     @pytest.mark.asyncio
     async def test_active_mimic_decoy_ip_is_not_registered_as_device(

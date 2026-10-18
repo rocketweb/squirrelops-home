@@ -84,6 +84,51 @@ struct ModelsTests {
         #expect(device.isOnline == false)
     }
 
+    @Test("DeviceSummary carries the operator's trusted-scanner flag")
+    func decodeDeviceSummaryTrustedScanner() throws {
+        let json = """
+        {
+            "id": 7,
+            "ip_address": "192.168.1.50",
+            "mac_address": null,
+            "hostname": "plex",
+            "vendor": null,
+            "device_type": "media",
+            "custom_name": null,
+            "trust_status": "approved",
+            "trusted_scanner": true,
+            "is_online": true,
+            "first_seen": "2026-10-01T00:00:00Z",
+            "last_seen": "2026-10-18T00:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let device = try JSONDecoder().decode(DeviceSummary.self, from: json)
+        #expect(device.isTrustedScanner == true)
+    }
+
+    @Test("DeviceSummary from a sensor without the flag is not a trusted scanner")
+    func decodeDeviceSummaryWithoutTrustedScannerKey() throws {
+        let json = """
+        {
+            "id": 8,
+            "ip_address": "192.168.1.51",
+            "mac_address": null,
+            "hostname": null,
+            "vendor": null,
+            "device_type": "unknown",
+            "custom_name": null,
+            "trust_status": "unknown",
+            "is_online": true,
+            "first_seen": "2026-10-01T00:00:00Z",
+            "last_seen": "2026-10-18T00:00:00Z"
+        }
+        """.data(using: .utf8)!
+
+        let device = try JSONDecoder().decode(DeviceSummary.self, from: json)
+        #expect(device.isTrustedScanner == false)
+    }
+
     // MARK: - PaginatedDevices decoding
 
     @Test("Decode PaginatedDevices with items array")
