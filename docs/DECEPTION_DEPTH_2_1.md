@@ -88,8 +88,11 @@ advance the campaign through these monotonic stages:
 4. agent tool use;
 5. write activity.
 
-The intent label is evidence-based and sticky. Simple service discovery stays
-boring. Credential searches reveal synthetic rotation notes and planted
+The intent label is evidence-based and sticky, and it now reaches the operator:
+a decoy-trip alert's title and severity follow the strongest intent and highest
+stage the campaign has shown, with write activity the one state that escalates
+to Critical. Severity never steps back down on a later, quieter connection.
+Simple service discovery stays boring. Credential searches reveal synthetic rotation notes and planted
 tokens. Developer and agent behavior discovers projects, MCP tools, model
 configuration, and build runbooks. HTTP/MCP write-like requests can advance
 the narrative. SSH/SMB telemetry records connection and relay outcomes, plus
@@ -98,7 +101,8 @@ logged it, attributed to the LAN peer through the host-chosen relay port. An
 accepted login with the planted password is a credential trip. The relays do
 not parse the protocols: shell commands and SMB file operations remain
 uninspected. Guest file changes remain in memory and do not advance the host's
-campaign from observed SMB writes. A visitor sees Finder-friendly names and familiar
+campaign from observed SMB writes, so write evidence carries one weight on
+every protocol rather than an SMB bonus nothing could reach. A visitor sees Finder-friendly names and familiar
 Mac development artifacts on an underlying Linux guest.
 
 No response instructs a visitor to contact real infrastructure. Any hostnames,

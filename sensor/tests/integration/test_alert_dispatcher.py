@@ -572,3 +572,40 @@ class TestApnsStub:
 
         # Should complete without error
         await handler(alert_payload)
+
+
+def test_slack_payload_prefers_a_summary_and_never_renders_a_detail_dict():
+    """Producers that carry structured detail send a one-line summary alongside.
+
+    Rendering the dict would reach the operator as a Python repr.
+    """
+    from squirrelops_home_sensor.alerts.dispatcher import format_slack_payload
+
+    message = format_slack_payload({
+        "alert_type": "decoy.trip",
+        "severity": "critical",
+        "title": "Write activity on Studio Build Mac from 10.0.0.9",
+        "source_ip": "10.0.0.9",
+        "created_at": "2026-10-18T03:00:00Z",
+        "detail": {"ports": [445], "connection_count": 3},
+        "summary": "ransomware intent, write activity stage, 3 connections",
+        "intruder_intent": "ransomware",
+        "narrative_stage": 4,
+    })
+
+    rendered = json.dumps(message)
+    assert "ransomware intent, write activity stage, 3 connections" in rendered
+    assert "{'ports'" not in rendered and "connection_count" not in rendered
+    assert "*Intent:* ransomware" in rendered
+    assert "*Stage:* write activity" in rendered
+
+
+def test_slack_payload_falls_back_to_a_string_detail():
+    from squirrelops_home_sensor.alerts.dispatcher import format_slack_payload
+
+    message = format_slack_payload({
+        "alert_type": "decoy.trip", "severity": "high", "title": "Decoy connection",
+        "created_at": "2026-10-18T03:00:00Z", "detail": "Connection to fake-nas:8445",
+    })
+    assert "Connection to fake-nas:8445" in json.dumps(message)
+    assert "Intent" not in json.dumps(message)
