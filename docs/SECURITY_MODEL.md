@@ -196,7 +196,11 @@ polls let workers observe cancellation even if socket shutdown misses a wakeup.
 
 Guest sshd exempts `127.0.0.1/32` from per-source penalties because every Virtio
 relay appears at that address. Its `MaxStartups 16` matches the host ceiling.
-This prevents one visitor's scan from penalizing all later SSH visitors.
+This prevents one visitor's scan from penalizing all later SSH visitors. The
+guest's two relay listeners queue 16 pending connects for the same reason: the
+host connects admitted relays concurrently, and a vsock listener whose accept
+queue is full resets the connect, which the host would otherwise record as a
+failed relay and release the admission slot.
 Connection evidence distinguishes guest-connected, capacity-rejected,
 guest-connect-failed, and guest-connect-timeout outcomes. Rejected attempts
 remain decoy hits; a connected guest channel is not proof of authentication.

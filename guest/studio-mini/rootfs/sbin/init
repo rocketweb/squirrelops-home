@@ -106,9 +106,12 @@ smbd_pid=$!
 
 # Each relay reads one preamble line from the host, the TCP source port to
 # bind toward the daemon, so sshd/smbd auth logs identify the LAN peer.
-socat VSOCK-LISTEN:10022,reuseaddr,fork,max-children=16 EXEC:"/usr/local/bin/relay-shim 22" &
+# backlog matches the host's 16-relay ceiling: admitted relays connect
+# concurrently, and vsock resets any connect that finds the accept queue
+# full (socat's default is 5), which the host reports as ECONNRESET.
+socat VSOCK-LISTEN:10022,reuseaddr,fork,max-children=16,backlog=16 EXEC:"/usr/local/bin/relay-shim 22" &
 ssh_relay_pid=$!
-socat VSOCK-LISTEN:10445,reuseaddr,fork,max-children=16 EXEC:"/usr/local/bin/relay-shim 445" &
+socat VSOCK-LISTEN:10445,reuseaddr,fork,max-children=16,backlog=16 EXEC:"/usr/local/bin/relay-shim 445" &
 smb_relay_pid=$!
 
 # Bidirectional on purpose: socat must read the vsock side to notice the host
