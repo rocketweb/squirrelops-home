@@ -334,6 +334,31 @@ class ConfigurableAlertDispatcher(AlertDispatcher):
 
 # -- Slack payload formatter -----------------------------------------
 
+_STAGE_LABELS = {
+    0: "discovery",
+    1: "browsing",
+    2: "credential access",
+    3: "agent tool use",
+    4: "write activity",
+}
+
+
+def _outbound_detail(alert_payload: AlertPayload) -> str:
+    """The one line an outbound channel shows under the title.
+
+    Producers that carry structured detail send a ``summary`` string
+    alongside it. The dict is for the row and the app; rendered here it would
+    reach an operator as a Python repr, so it is never used as text.
+    """
+    summary = alert_payload.get("summary")
+    if isinstance(summary, str) and summary:
+        return summary[:512]
+    detail = alert_payload.get("detail")
+    if isinstance(detail, str):
+        return detail[:512]
+    return ""
+
+
 def format_slack_payload(
     alert_payload: AlertPayload,
     *,
@@ -347,7 +372,7 @@ def format_slack_payload(
     severity = Severity(severity_str)
     emoji = severity_emoji(severity)
     title = alert_payload["title"]
-    detail = alert_payload.get("detail", "")
+    detail = _outbound_detail(alert_payload)
     source_ip = alert_payload.get("source_ip")
     created_at = alert_payload.get("created_at", "")
     alert_type = alert_payload.get("alert_type", "")
@@ -420,6 +445,19 @@ def format_slack_payload(
                 },
             }
         )
+
+    # Campaign context from the deep decoys, when the producer supplied it.
+    intent = alert_payload.get("intruder_intent")
+    stage = alert_payload.get("narrative_stage")
+    context_fields: list[dict[str, Any]] = []
+    if isinstance(intent, str) and intent:
+        context_fields.append(
+            {"type": "mrkdwn", "text": f"*Intent:* {intent.replace('_', ' ')[:32]}"}
+        )
+    if isinstance(stage, int) and not isinstance(stage, bool) and stage in _STAGE_LABELS:
+        context_fields.append({"type": "mrkdwn", "text": f"*Stage:* {_STAGE_LABELS[stage]}"})
+    if context_fields:
+        blocks.append({"type": "section", "fields": context_fields})
 
     # Device identifiers (only if opted in)
     if include_device_info:
@@ -542,7 +580,7 @@ def create_apns_handler(
         push_body = {
             "device_token": device_token,
             "title": alert_payload.get("title", "SquirrelOps Alert"),
-            "body": alert_payload.get("detail", ""),
+            "body": _outbound_detail(alert_payload),
             "category": alert_payload.get("alert_type", "ALERT"),
             "severity": alert_payload.get("severity", "low"),
         }
