@@ -15,16 +15,7 @@ enum MacNotificationPolicy {
         isSilenced: Bool
     ) -> Bool {
         guard enabled, !isSilenced, alert.readAt == nil else { return false }
-        return severityRank(alert.severity) >= severityRank(minimumSeverity)
-    }
-
-    private static func severityRank(_ severity: String) -> Int {
-        switch severity.lowercased() {
-        case "critical": return 3
-        case "high": return 2
-        case "medium": return 1
-        default: return 0
-        }
+        return AlertSeverityRank.rank(alert.severity) >= AlertSeverityRank.rank(minimumSeverity)
     }
 }
 

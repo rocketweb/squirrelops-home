@@ -920,7 +920,7 @@ Every individual connection is still retained in the decoy's forensic log.
 | New Device | Medium | A device not already approved joined the LAN; one alert per device |
 | Device Needs Verification | Medium | The fingerprint matcher is unsure a device is the one it matched and the device is not approved; a dismissed alert returns if it recurs |
 | MAC Address Changed | High | A known device answered from a different hardware address; raised regardless of trust, folded per device, and reactivated on every further change |
-| Sensor Disconnected | Medium | The Mac app has been disconnected for five minutes; this alert is local to the app |
+| Sensor Disconnected | Medium or High | The Mac app has not reached the sensor for five minutes. High when the sensor was connected earlier in this app session, Medium when it never was. Raised by the app, not the sensor, and delivered by the app to Notification Center and to your Slack webhook (see Alert Methods) |
 
 Device alerts are gated on trust: approving a device in its detail view stops
 new-device and verification alerts for it. MAC changes still alert for approved
@@ -1037,6 +1037,18 @@ app. APNs delivery is not a ready-to-enable iPhone/Mac feature in Settings.
 **Menu Bar Alerts** — The menu bar icon changes color to indicate alert status.
 
 **Slack Webhook** — Posts alert summaries to a Slack channel via an incoming webhook URL.
+
+**Where deliveries come from.** The sensor sends every alert it raises (decoy
+trips, credential trips, security insights, device alerts) through the methods
+above. One alert cannot come from the sensor: that the sensor itself is
+unreachable. The app sends that one (**Sensor Disconnected**) itself, to
+Notification Center and to the same Slack webhook, honoring the Slack minimum
+severity. To make that possible the app keeps a copy of the webhook URL in its
+own macOS Keychain entry from the moment you type it in Settings; the sensor
+redacts the URL in every response, so there is no other time the app sees it.
+Clearing the Webhook URL field removes the app's copy. The sensor's manually
+configured APNs relay is not used by the app: the app never holds the relay
+credentials.
 
 When Slack is enabled, additional options appear:
 - **Webhook URL** — Your Slack incoming webhook URL
@@ -1263,8 +1275,14 @@ checking automatically for 20 minutes and shows how long it has waited. The
 Sensor Not Responding screen appears only after that recovery window expires.
 
 The app reconnects automatically on a 30-second interval. After five minutes
-of disconnection, it adds a Medium-severity **Sensor Disconnected** alert to
-the local app view; this is not a sensor-persisted alert.
+of disconnection it raises a **Sensor Disconnected** alert: High if the sensor
+had been connected earlier in this app session, Medium if it never was. The
+alert is created by the app, so it is not persisted by the sensor, but it is
+delivered the same way sensor alerts are: a macOS notification (subject to your
+macOS Notifications setting) and a Slack message when Slack is enabled and the
+alert meets your Slack minimum severity. The Slack message comes from the Mac
+running the app, which is the point: it still arrives when the sensor host has
+been stopped.
 
 ### No Alerts Appearing
 
@@ -1479,5 +1497,8 @@ On macOS, the sensor uses pfctl packet filter rules (loaded into a dedicated `co
 The `planted_credentials` table contains generated deception bait. Separately,
 operator-supplied Home Assistant tokens, AI keys, Slack webhook URLs, and APNs
 delivery secrets are stored in the encrypted secret store and redacted from
-configuration responses. Pairing and TLS keys are also retained locally.
+configuration responses. The Mac app additionally keeps the Slack webhook URL
+in its own Keychain entry so it can report a sensor outage to Slack; that copy
+is written only when you enter the URL in Settings and is removed when you
+clear the field. Pairing and TLS keys are also retained locally.
 Synthetic bait must never be replaced with real service credentials.

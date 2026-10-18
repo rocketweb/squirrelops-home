@@ -239,6 +239,15 @@ TLS keys and configuration credentials are stored in the encrypted secret
 store. Runtime YAML contains non-secret configuration only. Legacy plaintext
 configuration credentials are migrated and scrubbed at startup.
 
+The Mac app holds one configuration credential of its own: a copy of the Slack
+webhook URL, in a Keychain generic-password item under the app's service name.
+The sensor redacts the URL in every configuration response, so the copy is
+written only when the operator enters the URL in Settings and is deleted when
+the field is cleared. The app uses it for the single alert the sensor cannot
+send, Sensor Disconnected, and posts through an ephemeral URLSession so neither
+the URL nor the message is cached on disk. APNs relay credentials are never
+held by the app.
+
 Python components resolve operating-system tools through an absolute path
 allowlist, never the service `PATH`. An allow-listed path is accepted only if
 the resolved binary is a root-owned, non-group/other-writable regular

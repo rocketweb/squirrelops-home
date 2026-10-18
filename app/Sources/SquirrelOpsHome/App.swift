@@ -148,6 +148,12 @@ struct SquirrelOpsHomeApp: App {
             localSensorProbe: { [pairingManager] in
                 await pairingManager.detectLocalSensor() != nil
             },
+            offlineDelivery: { alert in
+                await OfflineAlertDispatcher.shared.deliver(
+                    alert,
+                    detail: "The SquirrelOps Home app has not been able to reach the sensor for five minutes."
+                )
+            },
             onEvent: { [appState] frame in
                 Task { @MainActor in
                     WSEventProcessor.process(frame, into: appState)

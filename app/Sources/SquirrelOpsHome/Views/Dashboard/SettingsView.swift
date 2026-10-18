@@ -792,6 +792,9 @@ struct SettingsView: View {
                     }
                 }
                 if case .object(let slack) = methods["slack"] {
+                    // Non-secret fields refresh the offline-delivery cache; the
+                    // redacted URL leaves the cached secret untouched.
+                    Self.recordSlackDelivery(slack)
                     if case .bool(let enabled) = slack["enabled"] {
                         slackEnabled = enabled
                     }
@@ -1110,8 +1113,28 @@ struct SettingsView: View {
         scheduleLLMConfigSave()
     }
 
+    private static func recordSlackDelivery(_ config: [String: AnyCodableValue]) {
+        var enabled = false
+        if case .bool(let value) = config["enabled"] { enabled = value }
+        var webhookURL: String?
+        if case .string(let value) = config["webhook_url"] { webhookURL = value }
+        var minimumSeverity: String?
+        if case .string(let value) = config["min_severity"] { minimumSeverity = value }
+        SlackDeliveryCache.shared.record(
+            enabled: enabled,
+            webhookURL: webhookURL,
+            minimumSeverity: minimumSeverity
+        )
+    }
+
     private func saveAlertMethod(_ method: String, config: [String: AnyCodableValue]) {
         saveError = nil
+        if method == "slack" {
+            // The sensor redacts the webhook on every read, so this save is the
+            // only time the app holds the real URL. Cache it for the alert the
+            // sensor can never send: that it has gone offline.
+            Self.recordSlackDelivery(config)
+        }
         Task {
             do {
                 let body: [String: AnyCodableValue] = [method: .object(config)]
