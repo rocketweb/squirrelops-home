@@ -590,6 +590,11 @@ environment approval is missing. Configure all controls in
 
 Before tagging:
 
+Complete the [signing identity preflight](RELEASE_SECURITY.md#signing-identity-preflight).
+The repository's Rocket Web tagger address must be present on the selected GPG
+key and verified in its GitHub registration. Local signature validity alone is
+not enough. Preserve published tags if an identity mismatch is discovered.
+
 ```bash
 # Update only the versions whose shipped components changed:
 # VERSION (Home distribution), APP_VERSION, sensor/pyproject.toml,
@@ -610,6 +615,13 @@ git push origin sensor-vX.Y.Z
 git tag -s home-vX.Y.Z -m "SquirrelOps Home X.Y.Z"
 git push origin home-vX.Y.Z
 ```
+
+Before dispatching, run the remote tag-object and signature verification in
+[the Home release procedure](RELEASE_SECURITY.md#home-release-procedure).
+Stop if any tag is not GitHub-verified or its object or target differs from the
+reviewed record. The Home tag must target the reviewed release commit;
+unchanged component tags may target older commits, but their embedded source
+must match the workflow's component-source checks.
 
 Do not dispatch `Release Sensor` while Linux publication is blocked. The Home
 workflow verifies both component tags but does not publish a Linux image.
