@@ -916,14 +916,19 @@ Every individual connection is still retained in the decoy's forensic log.
 | Decoy Trip | High, Critical on write activity | Unexpected decoy activity. On the Studio Build Mac the title names what the campaign has shown so far (credential hunting, AI agent probing, write activity), the alert escalates to Critical when write activity is reached and never steps back down, and Slack and push messages carry the intent and stage. Automatic printer discovery is retained without an intrusion alert |
 | Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
 | ARP Ownership Conflict | High | The scan cannot establish a unique IP/MAC owner |
+| New Device | Medium | A device not already approved joined the LAN; one alert per device |
+| Device Needs Verification | Medium | The fingerprint matcher is unsure a device is the one it matched and the device is not approved; a dismissed alert returns if it recurs |
+| MAC Address Changed | High | A known device answered from a different hardware address; raised regardless of trust, folded per device, and reactivated on every further change |
 | Sensor Disconnected | Medium | The Mac app has been disconnected for five minutes; this alert is local to the app |
 
-New-device, MAC-change, and verification events exist in the sensor, but there
-is no runtime subscriber turning them into alert-feed rows. Behavioral anomaly,
-learning-complete, vendor-advisory, and review-reminder types or standalone
-classes are also present without active runtime producers. Rejected-device
-reappearance is not an implemented alert type. These definitions are not
-promises of automatic notifications.
+Device alerts are gated on trust: approving a device in its detail view stops
+new-device and verification alerts for it. MAC changes still alert for approved
+devices, because an approved identity moving to new hardware is the signal that
+matters. Device alerts are not grouped into incidents. Behavioral anomaly,
+learning-complete, vendor-advisory, and review-reminder types are present
+without active runtime producers, and rejected-device reappearance is not an
+implemented alert type. Those definitions are not promises of automatic
+notifications.
 
 ### Grouped Security Alerts
 
