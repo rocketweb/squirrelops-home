@@ -1400,6 +1400,14 @@ async def run_sensor(
         )
         decoy_alert_handler.subscribe_to(event_bus)
 
+        # Device lifecycle events already existed; this is the subscriber that
+        # turns an unknown device joining, a device needing verification, or a
+        # MAC change into an alert row.
+        from squirrelops_home_sensor.alerts.device_handler import DeviceAlertHandler
+
+        device_alert_handler = DeviceAlertHandler(db=db, event_bus=event_bus)
+        device_alert_handler.subscribe_to(event_bus)
+
         # 7d. Wire orchestrator into scan loop for auto-deploy
         scan_loop.set_orchestrator(orchestrator.inner)
         logger.info("Decoy orchestrator wired to scan loop for auto-deploy")
