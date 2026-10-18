@@ -271,7 +271,7 @@ class DeviceAlertHandler:
                 "incident_id": None,
                 "read_at": None,
                 "actioned_at": None,
-                "detail": detail,
+                "summary": _summary(detail),
                 "issue_key": issue_key,
                 "alert_count": None,
                 "device_count": 1,
@@ -312,7 +312,7 @@ class DeviceAlertHandler:
                 "incident_id": existing["incident_id"],
                 "read_at": None,
                 "actioned_at": None,
-                "detail": detail,
+                "summary": _summary(detail),
                 "issue_key": existing["issue_key"],
                 "alert_count": None,
                 "device_count": 1,
@@ -355,6 +355,29 @@ def _device_detail(payload: dict[str, Any]) -> dict[str, Any]:
         "model_name", "custom_name", "area", "trust_status", "first_seen", "last_seen",
     )
     return {key: payload.get(key) for key in keys if payload.get(key) is not None}
+
+
+def _summary(detail: dict[str, Any]) -> str:
+    """One line for Slack and push, built from what the detail actually holds.
+
+    Outbound handlers render a string; the detail dict is for the app and the
+    row. Sending the dict would reach an operator as a Python repr.
+    """
+    parts: list[str] = []
+    vendor = detail.get("vendor")
+    device_type = detail.get("device_type")
+    if vendor or (device_type and device_type != "unknown"):
+        parts.append(" ".join(str(x) for x in (vendor, device_type) if x))
+    if detail.get("new_mac"):
+        parts.append(f"MAC {detail.get('old_mac')} to {detail['new_mac']}")
+        count = detail.get("change_count")
+        if isinstance(count, int) and count > 1:
+            parts.append(f"{count} changes")
+    elif detail.get("mac_address"):
+        parts.append(f"MAC {detail['mac_address']}")
+    if detail.get("trust_status"):
+        parts.append(f"trust {detail['trust_status']}")
+    return ", ".join(parts)
 
 
 def _load_detail(raw: object) -> dict[str, Any]:

@@ -136,6 +136,9 @@ async def test_new_untrusted_device_raises_a_medium_alert(handler, bus, db):
     assert announced[0]["severity"] == "medium"
     assert announced[0]["source_ip"] == "192.168.1.77"
     assert announced[0]["issue_key"] == "device:new:7"
+    # Outbound handlers render a string; a dict here would reach Slack as a repr.
+    assert "detail" not in announced[0]
+    assert announced[0]["summary"] == "Google smartphone, MAC aa:bb:cc:dd:ee:01, trust unknown"
 
 
 @pytest.mark.asyncio
@@ -225,6 +228,7 @@ async def test_repeated_mac_changes_fold_into_one_active_alert(handler, bus, db)
     assert len(updated) == 1
     assert updated[0]["id"] == rows[0]["id"]
     assert updated[0]["read_at"] is None
+    assert updated[0]["summary"] == "Google, MAC aa:bb:cc:dd:ee:02 to aa:bb:cc:dd:ee:03, 2 changes"
 
 
 @pytest.mark.asyncio
