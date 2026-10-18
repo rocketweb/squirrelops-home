@@ -27,6 +27,7 @@ class DeviceSummary(BaseModel):
     area: str | None = None
     custom_name: str | None = None
     trust_status: str
+    trusted_scanner: bool = False
     is_online: bool
     first_seen: str
     last_seen: str
@@ -66,6 +67,7 @@ class DeviceDetail(BaseModel):
     notes: str | None = None
     trust_status: str
     trust_updated_at: str | None = None
+    trusted_scanner: bool = False
     is_online: bool
     first_seen: str
     last_seen: str
@@ -76,6 +78,9 @@ class DeviceUpdateRequest(BaseModel):
     custom_name: str | None = None
     notes: str | None = None
     device_type: str | None = None
+    # Operator statement that this device is their own scanner. Decoy trips
+    # from it are evidence, not alerts. Independent of trust status.
+    trusted_scanner: bool | None = None
 
 
 class TrustActionResponse(BaseModel):
@@ -90,6 +95,10 @@ class PaginatedFingerprints(BaseModel):
 
 
 # ---------- Helpers ----------
+
+
+def _trusted_scanner(row: aiosqlite.Row) -> bool:
+    return bool(row["trusted_scanner"]) if "trusted_scanner" in row.keys() else False
 
 
 async def _get_device_or_404(db: aiosqlite.Connection, device_id: int) -> aiosqlite.Row:
@@ -214,6 +223,7 @@ async def list_devices(
             area=row["area"] if "area" in row.keys() else None,
             custom_name=row["custom_name"] if "custom_name" in row.keys() else None,
             trust_status=row["trust_status"] or "unknown",
+            trusted_scanner=_trusted_scanner(row),
             is_online=bool(row["is_online"]),
             first_seen=row["first_seen"],
             last_seen=row["last_seen"],
@@ -248,6 +258,7 @@ async def get_device(
         notes=device["notes"] if "notes" in device.keys() else None,
         trust_status=trust_status,
         trust_updated_at=trust_updated_at,
+        trusted_scanner=_trusted_scanner(device),
         is_online=bool(device["is_online"]),
         first_seen=device["first_seen"],
         last_seen=device["last_seen"],
@@ -276,6 +287,9 @@ async def update_device(
     if body.device_type is not None:
         updates.append("device_type = ?")
         params.append(body.device_type)
+    if body.trusted_scanner is not None:
+        updates.append("trusted_scanner = ?")
+        params.append(int(body.trusted_scanner))
 
     if updates:
         params.append(device_id)

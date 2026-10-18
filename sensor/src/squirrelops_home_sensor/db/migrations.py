@@ -2058,6 +2058,26 @@ async def _apply_v12(db: aiosqlite.Connection) -> None:
     await db.commit()
 
 
+async def _apply_v13(db: aiosqlite.Connection) -> None:
+    """V13: devices.trusted_scanner.
+
+    The operator's statement that a device is their own scanner (a media
+    server, a monitoring box, their laptop). Decoy trips from it are kept as
+    forensic evidence but do not raise or feed alerts. It is independent of
+    trust status and changes nothing the decoy sends.
+    """
+    if not await _column_exists(db, "devices", "trusted_scanner"):
+        await db.execute(
+            "ALTER TABLE devices ADD COLUMN trusted_scanner INTEGER NOT NULL DEFAULT 0"
+        )
+    now = datetime.now(UTC).isoformat()
+    await db.execute(
+        "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, ?)",
+        (13, now),
+    )
+    await db.commit()
+
+
 # Ordered list of migration functions. Index 0 = migration to version 1.
 _MIGRATIONS: list[tuple[int, callable]] = [
     (1, _apply_v1),
@@ -2072,6 +2092,7 @@ _MIGRATIONS: list[tuple[int, callable]] = [
     (10, _apply_v10),
     (11, _apply_v11),
     (12, _apply_v12),
+    (13, _apply_v13),
 ]
 
 

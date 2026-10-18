@@ -919,3 +919,41 @@ class TestMigrationV10:
         )
         await db.rollback()
         await db.close()
+
+
+class TestMigrationV13:
+    """V13: devices.trusted_scanner, the operator's own-scanner flag."""
+
+    @pytest.mark.asyncio
+    async def test_v13_adds_trusted_scanner_defaulting_to_false(self, tmp_path) -> None:
+        db = await aiosqlite.connect(str(tmp_path / "test.db"))
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+
+        await db.execute(
+            "INSERT INTO devices (ip_address, first_seen, last_seen) "
+            "VALUES ('192.168.1.1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+        )
+        cursor = await db.execute("SELECT trusted_scanner FROM devices WHERE ip_address = '192.168.1.1'")
+        assert (await cursor.fetchone())["trusted_scanner"] == 0
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_v13_applies_to_a_v12_database_and_is_idempotent(self, tmp_path) -> None:
+        db = await aiosqlite.connect(str(tmp_path / "test.db"))
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        # Roll back the version record and the column to simulate a 2.1.x database.
+        await db.execute("DELETE FROM schema_version WHERE version = 13")
+        await db.execute("ALTER TABLE devices DROP COLUMN trusted_scanner")
+        await db.commit()
+
+        await apply_migrations(db)
+        await apply_migrations(db)
+
+        cursor = await db.execute("PRAGMA table_info(devices)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        assert "trusted_scanner" in columns
+        cursor = await db.execute("SELECT MAX(version) FROM schema_version")
+        assert (await cursor.fetchone())[0] == SCHEMA_VERSION == 13
+        await db.close()

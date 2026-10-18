@@ -851,3 +851,92 @@ class TestIntentDrivenTrips:
         detail = json.loads(row["detail"])
         assert detail["detection_method"] == "decoy_port_scan"
         assert len(detail["endpoints"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Trusted scanners (#64)
+# ---------------------------------------------------------------------------
+
+
+async def _seed_device(db, ip: str, *, trusted_scanner: bool) -> int:
+    cursor = await db.execute(
+        """INSERT INTO devices (ip_address, mac_address, hostname, vendor, device_type,
+           first_seen, last_seen, is_online, trusted_scanner)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+        (ip, "AA:BB:CC:DD:EE:10", "plex-server", "Intel", "media",
+         "2026-10-01T00:00:00Z", "2026-10-18T00:00:00Z", int(trusted_scanner)),
+    )
+    await db.commit()
+    return int(cursor.lastrowid)
+
+
+class TestTrustedScanner:
+    @pytest.mark.asyncio
+    async def test_trip_from_a_trusted_scanner_is_evidence_without_an_alert(self, handler, bus, db):
+        from squirrelops_home_sensor.db import queries as q
+
+        await _seed_device(db, "10.0.0.20", trusted_scanner=True)
+        decoy_id = await q.insert_decoy(
+            db, name="Web", decoy_type="mimic", bind_address="192.168.1.240", port=80,
+            created_at="2026-10-18T00:00:00Z", updated_at="2026-10-18T00:00:00Z",
+        )
+
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.20", "source_port": 40000, "dest_port": 80,
+            "protocol": "tcp", "timestamp": "2026-10-18T12:00:00Z", "decoy_id": decoy_id,
+        })
+
+        async with db.execute("SELECT * FROM home_alerts") as cur:
+            assert await cur.fetchall() == []
+        assert bus.events_of_type("alert.new") == []
+        # The forensic record and the decoy's counters are untouched by the flag.
+        assert len(await q.list_decoy_connections(db, source_ip="10.0.0.20")) == 1
+        async with db.execute("SELECT connection_count FROM decoys WHERE id = ?", (decoy_id,)) as cur:
+            assert (await cur.fetchone())[0] == 1
+
+    @pytest.mark.asyncio
+    async def test_credential_use_by_a_trusted_scanner_is_still_critical(self, handler, bus, db):
+        await _seed_device(db, "10.0.0.20", trusted_scanner=True)
+
+        await bus.deliver("decoy.credential_trip", {
+            "source_ip": "10.0.0.20", "source_port": 40001, "dest_port": 445,
+            "credential_used": "admin:P@ssw0rd", "timestamp": "2026-10-18T12:00:00Z",
+            "detection_method": "decoy_http",
+        })
+
+        async with db.execute("SELECT severity FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+        assert [r["severity"] for r in rows] == ["critical"]
+
+    @pytest.mark.asyncio
+    async def test_marking_a_source_trusted_stops_feeding_its_open_alert(self, handler, bus, db):
+        device_id = await _seed_device(db, "10.0.0.20", trusted_scanner=False)
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.20", "source_port": 40000, "dest_port": 80,
+            "protocol": "tcp", "timestamp": "2026-10-18T12:00:00Z",
+        })
+        await db.execute("UPDATE devices SET trusted_scanner = 1 WHERE id = ?", (device_id,))
+        await db.commit()
+
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.20", "source_port": 40002, "dest_port": 443,
+            "protocol": "tcp", "timestamp": "2026-10-18T12:00:05Z",
+        })
+
+        async with db.execute("SELECT detail FROM home_alerts") as cur:
+            rows = await cur.fetchall()
+        assert len(rows) == 1
+        assert json.loads(rows[0]["detail"])["connection_count"] == 1
+        assert bus.events_of_type("alert.updated") == []
+
+    @pytest.mark.asyncio
+    async def test_untrusted_device_still_alerts(self, handler, bus, db):
+        await _seed_device(db, "10.0.0.21", trusted_scanner=False)
+
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.21", "source_port": 40000, "dest_port": 80,
+            "protocol": "tcp", "timestamp": "2026-10-18T12:00:00Z",
+        })
+
+        async with db.execute("SELECT COUNT(*) FROM home_alerts") as cur:
+            assert (await cur.fetchone())[0] == 1

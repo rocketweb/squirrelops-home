@@ -168,9 +168,14 @@ public struct DeviceSummary: Codable, Sendable, Identifiable, Equatable, Hashabl
     public let area: String?
     public let customName: String?
     public let trustStatus: String
+    /// Operator's own-scanner flag. Optional so a sensor older than schema
+    /// v13 still decodes; read it through `isTrustedScanner`.
+    public let trustedScanner: Bool?
     public let isOnline: Bool
     public let firstSeen: String
     public let lastSeen: String
+
+    public var isTrustedScanner: Bool { trustedScanner ?? false }
 
     public init(
         id: Int,
@@ -183,6 +188,7 @@ public struct DeviceSummary: Codable, Sendable, Identifiable, Equatable, Hashabl
         area: String? = nil,
         customName: String?,
         trustStatus: String,
+        trustedScanner: Bool? = nil,
         isOnline: Bool,
         firstSeen: String,
         lastSeen: String
@@ -197,6 +203,7 @@ public struct DeviceSummary: Codable, Sendable, Identifiable, Equatable, Hashabl
         self.area = area
         self.customName = customName
         self.trustStatus = trustStatus
+        self.trustedScanner = trustedScanner
         self.isOnline = isOnline
         self.firstSeen = firstSeen
         self.lastSeen = lastSeen
@@ -213,6 +220,7 @@ public struct DeviceSummary: Codable, Sendable, Identifiable, Equatable, Hashabl
         case area
         case customName = "custom_name"
         case trustStatus = "trust_status"
+        case trustedScanner = "trusted_scanner"
         case isOnline = "is_online"
         case firstSeen = "first_seen"
         case lastSeen = "last_seen"
@@ -284,10 +292,13 @@ public struct DeviceDetail: Codable, Sendable {
     public let notes: String?
     public let trustStatus: String
     public let trustUpdatedAt: String?
+    public let trustedScanner: Bool?
     public let isOnline: Bool
     public let firstSeen: String
     public let lastSeen: String
     public let latestFingerprint: FingerprintEntry?
+
+    public var isTrustedScanner: Bool { trustedScanner ?? false }
 
     public init(
         id: Int,
@@ -302,6 +313,7 @@ public struct DeviceDetail: Codable, Sendable {
         notes: String?,
         trustStatus: String,
         trustUpdatedAt: String?,
+        trustedScanner: Bool? = nil,
         isOnline: Bool,
         firstSeen: String,
         lastSeen: String,
@@ -319,6 +331,7 @@ public struct DeviceDetail: Codable, Sendable {
         self.notes = notes
         self.trustStatus = trustStatus
         self.trustUpdatedAt = trustUpdatedAt
+        self.trustedScanner = trustedScanner
         self.isOnline = isOnline
         self.firstSeen = firstSeen
         self.lastSeen = lastSeen
@@ -338,6 +351,7 @@ public struct DeviceDetail: Codable, Sendable {
         case notes
         case trustStatus = "trust_status"
         case trustUpdatedAt = "trust_updated_at"
+        case trustedScanner = "trusted_scanner"
         case isOnline = "is_online"
         case firstSeen = "first_seen"
         case lastSeen = "last_seen"

@@ -7,17 +7,28 @@ public struct DeviceUpdateRequest: Encodable, Sendable {
     public let customName: String?
     public let notes: String?
     public let deviceType: String?
+    /// Operator statement that this device is their own scanner. Decoy trips
+    /// from it are kept as evidence without raising alerts. `nil` leaves the
+    /// sensor's value unchanged.
+    public let trustedScanner: Bool?
 
-    public init(customName: String? = nil, notes: String? = nil, deviceType: String? = nil) {
+    public init(
+        customName: String? = nil,
+        notes: String? = nil,
+        deviceType: String? = nil,
+        trustedScanner: Bool? = nil
+    ) {
         self.customName = customName
         self.notes = notes
         self.deviceType = deviceType
+        self.trustedScanner = trustedScanner
     }
 
     enum CodingKeys: String, CodingKey {
         case customName = "custom_name"
         case notes
         case deviceType = "device_type"
+        case trustedScanner = "trusted_scanner"
     }
 }
 

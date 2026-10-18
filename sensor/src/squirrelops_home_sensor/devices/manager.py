@@ -259,15 +259,18 @@ class DeviceManager:
         if row:
             trust_status = row[0]
 
-        # Custom name from devices table
+        # Custom name and the operator's own-scanner flag from devices table
         custom_name = None
+        trusted_scanner = False
         cursor = await self._db.execute(
-            "SELECT custom_name FROM devices WHERE id = ?",
+            "SELECT custom_name, trusted_scanner FROM devices WHERE id = ?",
             (tracked.device_id,),
         )
         row = await cursor.fetchone()
-        if row and row[0]:
-            custom_name = row[0]
+        if row:
+            if row[0]:
+                custom_name = row[0]
+            trusted_scanner = bool(row[1])
 
         return {
             "id": tracked.device_id,
@@ -280,6 +283,7 @@ class DeviceManager:
             "custom_name": custom_name,
             "area": tracked.area,
             "trust_status": trust_status,
+            "trusted_scanner": trusted_scanner,
             "is_online": tracked.is_online,
             "first_seen": tracked.first_seen.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "last_seen": now_iso,
