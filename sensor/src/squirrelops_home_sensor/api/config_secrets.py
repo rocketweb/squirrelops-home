@@ -49,6 +49,7 @@ CONFIG_SECRET_PATHS: tuple[SecretPath, ...] = (
     ("alert_methods", WILDCARD, "webhook_url"),
     ("alert_methods", WILDCARD, "relay_token"),
     ("alert_methods", WILDCARD, "device_token"),
+    ("alert_methods", WILDCARD, "signing_secret"),
 )
 
 # The same secrets, relative to the ``alert_methods`` subtree that
@@ -57,6 +58,7 @@ ALERT_METHOD_SECRET_PATHS: tuple[SecretPath, ...] = (
     (WILDCARD, "webhook_url"),
     (WILDCARD, "relay_token"),
     (WILDCARD, "device_token"),
+    (WILDCARD, "signing_secret"),
 )
 
 # ``alert_methods`` is intentionally extensible, so enumerating secret names

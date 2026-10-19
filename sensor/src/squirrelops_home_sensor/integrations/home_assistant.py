@@ -133,6 +133,42 @@ class HomeAssistantClient:
             logger.debug("Home Assistant connection test failed", exc_info=True)
             return False
 
+    async def fire_event(self, event_type: str, data: dict) -> bool:
+        """Fire a Home Assistant event. Returns True when HA accepted it.
+
+        Same LAN-only resolution and host pinning as the connectivity check:
+        the token is never sent to an address that resolved outside the LAN.
+        """
+        endpoint = f"{self._base_url}/api/events/{event_type}"
+        resolved = await asyncio.to_thread(resolve_lan_url, endpoint)
+        if resolved is None:
+            logger.warning("Blocked Home Assistant event to a non-LAN endpoint")
+            return False
+        try:
+            extensions = (
+                {"sni_hostname": resolved.hostname}
+                if endpoint.startswith("https://")
+                else None
+            )
+            async with httpx.AsyncClient(
+                trust_env=False,
+                follow_redirects=False,
+            ) as client:
+                resp = await client.post(
+                    resolved.pinned_url,
+                    headers=self._headers | {
+                        "Host": resolved.host_header,
+                        "Content-Type": "application/json",
+                    },
+                    content=json.dumps(data, separators=(",", ":"), sort_keys=True),
+                    timeout=_TIMEOUT,
+                    extensions=extensions,
+                )
+                return resp.status_code == 200
+        except httpx.HTTPError:
+            logger.debug("Home Assistant event request failed", exc_info=True)
+            return False
+
     async def _ws_command(self, command_type: str) -> list[dict]:
         """Send a WebSocket command and return the result list.
 

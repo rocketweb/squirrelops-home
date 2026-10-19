@@ -239,6 +239,16 @@ result; the UI separately rejects completions from an older settings revision.
 
 ### Stored secrets
 
+The sensor never acts on the network it watches: it does not block, isolate, or
+reconfigure anything. Response is delegated to the operator's own systems
+through the documented `squirrelops.alert/1` event (see `ALERT_WEBHOOK.md`).
+That event is signed with HMAC-SHA256 over a timestamp and the exact body when
+a signing secret is configured, so a receiver can refuse unsigned or replayed
+events before it blocks anything. The webhook URL and signing secret are stored
+in the encrypted secret store and redacted from configuration responses. The
+Home Assistant variant sends only to a LAN-resolved address, the same rule as
+the device-enrichment calls.
+
 TLS keys and configuration credentials are stored in the encrypted secret
 store. Runtime YAML contains non-secret configuration only. Legacy plaintext
 configuration credentials are migrated and scrubbed at startup.

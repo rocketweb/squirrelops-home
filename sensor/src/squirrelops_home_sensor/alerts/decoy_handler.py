@@ -368,6 +368,11 @@ class DecoyAlertHandler:
                 "intruder_intent": detail.get("intruder_intent"),
                 "narrative_stage": detail.get("narrative_stage"),
                 "summary": trip_summary(detail),
+                "device_id": self._coerce_int(existing["device_id"]),
+                "decoy_id": self._coerce_int(existing["decoy_id"]),
+                "decoy_name": detail.get("latest_decoy_name") or detail.get("decoy_name"),
+                "dest_port": self._coerce_int(payload.get("dest_port", detail.get("dest_port"))),
+                "protocol": detail.get("protocol"),
                 "source_event_seq": source_event_seq,
             },
             source_id=source_ip,
@@ -830,6 +835,14 @@ class DecoyAlertHandler:
                 "intruder_intent": detail_obj.get("intruder_intent"),
                 "narrative_stage": detail_obj.get("narrative_stage"),
                 "summary": trip_summary(detail_obj) if alert_type == AlertType.DECOY_TRIP else None,
+                # Identifiers the response contract carries: who, and which decoy.
+                "device_id": device_id,
+                "decoy_id": self._coerce_int(decoy_id),
+                "decoy_name": (
+                    str(payload["decoy_name"])[:128] if payload.get("decoy_name") else None
+                ),
+                "dest_port": self._coerce_int(dest_port),
+                "protocol": detail_obj.get("protocol"),
                 "source_event_seq": source_event_seq,
             },
             source_id=source_ip,
