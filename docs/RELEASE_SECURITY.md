@@ -221,6 +221,71 @@ field, or a permission regression stops the release. Do not add a broad PAT or
 an unauthenticated fallback. Fix the repository setting or token permission
 instead.
 
+## Signing identity preflight
+
+Check the signing identity **before creating or pushing release tags**. A good
+local GPG signature does not establish GitHub's identity verification.
+
+This repository uses `Matt MacDougall <matt.macdougall@rocketweb.com>` in its
+repository-local Git configuration. Do not substitute a personal address to
+make a signature check pass. The effective tagger address must also appear on
+the selected GPG public key, and that identity must be registered and verified
+on the GitHub account that owns the key.
+
+Run these read-only checks from the release checkout:
+
+```bash
+git config --local --get user.name
+git config --local --get user.email
+git var GIT_COMMITTER_IDENT
+SIGNING_KEY="$(git config --get user.signingkey)"
+test -n "$SIGNING_KEY"
+gpg --list-keys --keyid-format=long "$SIGNING_KEY"
+SIGNER_LOGIN="$(gh api user --jq .login)"
+gh api "users/${SIGNER_LOGIN}/gpg_keys" \
+  --jq '.[] | {key_id, emails, can_sign}'
+```
+
+Compare the effective tagger address with the selected key's identities and the
+matching GitHub key record. Stop if the address is missing or is not verified.
+Check account email verification in GitHub Settings when API access is not
+available. Do not broaden CLI permissions just to inspect account settings.
+The authenticated GitHub User ID must also match the separately pinned
+`tag_bypass_user_id`; correct email identities do not replace that check.
+
+### Correcting an email mismatch
+
+GitHub checks both the key identity and the account's verified address. See
+[GitHub's email verification requirements](https://docs.github.com/en/authentication/troubleshooting-commit-signature-verification/using-a-verified-email-address-in-your-gpg-key)
+and [its procedure for adding a key identity](https://docs.github.com/en/authentication/managing-commit-signature-verification/associating-an-email-with-your-gpg-key).
+
+Before changing a signing identity or its account registration, obtain explicit
+approval for that key and address. Preserve the existing public-key export and
+registered public-key record. Add the missing identity to the existing key,
+retain its other identities, and export only the updated **public** key. Verify
+that its primary fingerprint is unchanged before updating GitHub's registration.
+Never upload or log private key material, passphrases, recovery codes or tokens.
+Leave interactive sign-in, passkey and two-factor checks to the account owner.
+
+GitHub can reject an updated public export because its subkeys are already
+registered. That is not a reason to generate a different key or remove subkeys.
+If replacement requires deleting the old account registration, confirm that
+exact deletion at the point of action. Match the primary key and subkey IDs,
+keep the original and replacement public exports ready, and replace only the
+matching GPG registration. Leave SSH authentication keys unchanged. Registration
+removal can affect verification status until the public key is registered again.
+
+Keep the original public-key registration as recovery evidence. If registration
+replacement fails, restore only that registration from the verified backup;
+do not replace the private key or change release tags. A local identity addition
+alone does not update GitHub. Confirm the registered identity and recheck each
+existing tag through GitHub after the public-key update.
+
+If tags have already been pushed and GitHub reports `bad_email`, preserve their
+tag-object IDs and target commits. Do not delete, force-push or re-sign them to
+work around verification. Do not dispatch the release until GitHub verifies
+the existing signatures. Other verification failures require their own diagnosis.
+
 ## Home release procedure
 
 After the release changes pass review, CI and the applicable live security
@@ -252,6 +317,40 @@ git push --atomic origin \
 Only the dedicated tag-ruleset bypass identity creates these signed tags. The
 separate environment reviewer approves the workflow after confirming GitHub
 shows every required tag signature as verified.
+
+After pushing, verify the remote annotated tag objects, their exact targets and
+GitHub's signature result before dispatching the workflow:
+
+```bash
+(
+set -euo pipefail
+REVIEWED_COMMIT="$(git rev-parse HEAD)"
+test "$(git rev-parse "home-v${DISTRIBUTION_VERSION}^{commit}")" = "$REVIEWED_COMMIT"
+for TAG in "app-v${APP_VERSION}" "sensor-v${SENSOR_VERSION}" \
+  "home-v${DISTRIBUTION_VERSION}"; do
+  EXPECTED_TAG_OBJECT="$(git rev-parse "$TAG")"
+  EXPECTED_TAG_COMMIT="$(git rev-parse "${TAG}^{commit}")"
+  TAG_OBJECT="$(
+    gh api "repos/rocketweb/squirrelops-home/git/ref/tags/${TAG}" \
+      --jq '.object | select(.type == "tag") | .sha'
+  )"
+  test -n "$TAG_OBJECT"
+  test "$TAG_OBJECT" = "$EXPECTED_TAG_OBJECT"
+  gh api "repos/rocketweb/squirrelops-home/git/tags/${TAG_OBJECT}" \
+    | jq -e --arg tag "$TAG" --arg commit "$EXPECTED_TAG_COMMIT" \
+      '.tag == $tag and .object.type == "commit" and .object.sha == $commit
+       and .verification.verified == true and .verification.reason == "valid"'
+done
+)
+```
+
+Record the tag-object IDs as well as the release commit. Local `git verify-tag`
+and the remote verification above are separate requirements.
+Previously released component tags may point to older commits if their embedded
+source is unchanged. Do not move them to the Home commit. Verify source parity
+using the app and sensor path lists in the workflow's
+`Require exact protected refs and independent versions` step; tag-signature
+verification alone does not prove that parity.
 
 Do not rerun a failed release workflow. GitHub retains approvals on a rerun,
 so the workflow requires `run_attempt == 1`. Preserve and inspect the failed
