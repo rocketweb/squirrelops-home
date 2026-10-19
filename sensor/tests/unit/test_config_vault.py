@@ -111,3 +111,14 @@ def test_scrub_removes_legacy_plaintext_yaml_atomically(tmp_path) -> None:
     assert "relay-secret" not in saved
     assert "device-secret" not in saved
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_webhook_signing_secret_is_vaulted_not_persisted() -> None:
+    from squirrelops_home_sensor.config_vault import strip_vaulted_config_secrets
+
+    clean = strip_vaulted_config_secrets(
+        {"alert_methods": {"webhook": {"enabled": True, "webhook_url": "https://h", "signing_secret": "k"}}}
+    )
+    assert "signing_secret" not in clean["alert_methods"]["webhook"]
+    assert "webhook_url" not in clean["alert_methods"]["webhook"]
+    assert clean["alert_methods"]["webhook"]["enabled"] is True

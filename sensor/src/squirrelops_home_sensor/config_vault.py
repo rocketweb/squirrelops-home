@@ -23,6 +23,7 @@ _ALERT_METHOD_SECRET_FIELDS = (
     "webhook_url",
     "relay_token",
     "device_token",
+    "signing_secret",
 )
 
 
