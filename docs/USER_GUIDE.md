@@ -1038,6 +1038,21 @@ app. APNs delivery is not a ready-to-enable iPhone/Mac feature in Settings.
 
 **Slack Webhook** — Posts alert summaries to a Slack channel via an incoming webhook URL.
 
+**Automation Webhook:** Posts one JSON event per alert, schema
+`squirrelops.alert/1`, to an endpoint you run. The event names the source IP
+and (by default) MAC address and device, the decoy and port, the alert type,
+severity, title and summary, and the campaign intent and stage when the deep
+decoy supplied them. Set a **Signing Secret** and each request carries an
+HMAC-SHA256 signature your receiver verifies. This is how you connect
+SquirrelOps to a router or controller that can block a device: the sensor
+reports, your automation acts. The full contract, request format, signature
+recipe, and a Home Assistant example are in [ALERT_WEBHOOK.md](ALERT_WEBHOOK.md).
+
+**Home Assistant Events:** Fires the same event as a native Home Assistant event
+named `squirrelops_alert`, through the Home Assistant integration configured
+further down this page. Nothing is sent until that integration is enabled with a
+URL and token.
+
 **Where deliveries come from.** The sensor sends every alert it raises (decoy
 trips, credential trips, security insights, device alerts) through the methods
 above. One alert cannot come from the sensor: that the sensor itself is
@@ -1448,6 +1463,8 @@ After pairing, app management traffic uses mutual TLS over your local network.
 | **Manually configured APNs relay** | Device token, alert title/body, type, and severity | Your configured relay and Apple Push Notification Service | Disable the sensor's `alert_methods.push` or `alert_methods.apns` configuration; token registration is not implemented in the app |
 | **Cloud AI Classification and Decoy Naming** | Classification: OUI prefix, sanitized DNS and mDNS names, open port numbers, detected services, mDNS service types, and available UPnP metadata. DHCP option codes are supported if supplied, but are not collected by the current scanner. Naming: a bounded, sanitized hostname sample. No fingerprint hashes, connection destinations, device IPs, full MAC addresses, packet contents, alerts, or credentials. | Your selected cloud or custom AI provider, using your own API key | Choose **None** or switch to Lite |
 | **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers." | Your Slack workspace | Toggle off in Settings > Alert Methods |
+| **Automation Webhook** | The `squirrelops.alert/1` event: alert id, type, severity, title, summary, timestamps, source IP, decoy name and port, campaign intent and stage, sensor id and version. Source MAC and device id unless you turn off "Include Device Identifiers" (on by default for this method). | The endpoint URL you configured | Toggle off in Settings > Alert Methods |
+| **Home Assistant Events** | The same `squirrelops.alert/1` event | Your Home Assistant instance, LAN addresses only | Toggle off in Settings > Alert Methods |
 | **Update Checks** | Standard request metadata, such as your public IP address and HTTP headers | GitHub Releases API | Don't click "Check for Updates" |
 
 With LM Studio or Ollama on the local network, classification and naming data

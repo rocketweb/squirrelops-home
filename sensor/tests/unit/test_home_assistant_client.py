@@ -512,3 +512,37 @@ class TestHomeAssistantClient:
     def test_ws_url_from_https(self) -> None:
         c = HomeAssistantClient(url="https://ha.local:8123", token="t")
         assert c._ws_url == "wss://ha.local:8123"
+
+
+class TestFireEvent:
+    """The response contract rides to Home Assistant as a native event."""
+
+    async def test_posts_compact_json_to_the_events_api(
+        self, client: HomeAssistantClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(
+            url=f"{PINNED_HA_URL}/api/events/squirrelops_alert",
+            json={"message": "Event squirrelops_alert fired."},
+            status_code=200,
+        )
+        assert await client.fire_event("squirrelops_alert", {"schema": "squirrelops.alert/1", "b": 1}) is True
+        request = httpx_mock.get_requests()[-1]
+        assert request.method == "POST"
+        assert request.headers["Authorization"].startswith("Bearer ")
+        assert request.headers["Content-Type"] == "application/json"
+        assert request.content == b'{"b":1,"schema":"squirrelops.alert/1"}'
+
+    async def test_rejected_event_returns_false(
+        self, client: HomeAssistantClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(url=f"{PINNED_HA_URL}/api/events/squirrelops_alert", status_code=401)
+        assert await client.fire_event("squirrelops_alert", {}) is False
+
+    async def test_unreachable_returns_false(
+        self, client: HomeAssistantClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_exception(
+            httpx.ConnectError("Connection refused"),
+            url=f"{PINNED_HA_URL}/api/events/squirrelops_alert",
+        )
+        assert await client.fire_event("squirrelops_alert", {}) is False

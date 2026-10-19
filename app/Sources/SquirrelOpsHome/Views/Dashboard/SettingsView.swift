@@ -42,6 +42,14 @@ struct SettingsView: View {
     @State private var llmSaveRevision = UUID()
     @State private var autoApproveThreshold: String = "0.75"
     @State private var slackIncludeDeviceInfo = false
+    // Response contract: the operator's own automation endpoint and HA events.
+    @State private var webhookEnabled = false
+    @State private var webhookURL: String = ""
+    @State private var webhookSigningSecret: String = ""
+    @State private var webhookMinSeverity: String = "high"
+    @State private var webhookIncludeDeviceInfo = true
+    @State private var haEventsEnabled = false
+    @State private var haEventsMinSeverity: String = "high"
     @State private var credentialFilename: String = "passwords.txt"
 
     // Home Assistant
@@ -292,6 +300,91 @@ struct SettingsView: View {
                             .foregroundStyle(Theme.statusWarning(colorScheme))
                     }
                 }
+            }
+
+            Toggle("Automation Webhook", isOn: $webhookEnabled)
+                .font(Typography.body)
+                .foregroundStyle(Theme.textPrimary(colorScheme))
+                .disabled(isLoading)
+                .onChange(of: webhookEnabled) { _, newValue in
+                    guard !isLoading else { return }
+                    saveAlertMethod("webhook", config: webhookConfig(enabled: newValue))
+                }
+
+            if webhookEnabled {
+                Text("Posts one signed JSON event per alert (schema squirrelops.alert/1) to an endpoint you run, with the source MAC and IP, the decoy, and the campaign intent and stage, so your router or Home Assistant can act. The sensor never blocks anything itself. See docs/ALERT_WEBHOOK.md for the contract.")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textTertiary(colorScheme))
+                SecureField("Endpoint URL", text: $webhookURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(Typography.mono)
+                    .task(id: webhookURL) {
+                        guard !isLoading else { return }
+                        do {
+                            try await Task.sleep(for: .seconds(1))
+                        } catch { return }
+                        saveAlertMethod("webhook", config: webhookConfig(enabled: webhookEnabled))
+                    }
+                SecureField("Signing Secret (optional)", text: $webhookSigningSecret)
+                    .textFieldStyle(.roundedBorder)
+                    .font(Typography.mono)
+                    .task(id: webhookSigningSecret) {
+                        guard !isLoading else { return }
+                        do {
+                            try await Task.sleep(for: .seconds(1))
+                        } catch { return }
+                        saveAlertMethod("webhook", config: webhookConfig(enabled: webhookEnabled))
+                    }
+                severityPicker(
+                    label: "Webhook Severity",
+                    selection: $webhookMinSeverity,
+                    method: "webhook",
+                    enabled: webhookEnabled,
+                    extraConfig: [
+                        "webhook_url": .string(webhookURL),
+                        "signing_secret": .string(webhookSigningSecret),
+                        "include_device_info": .bool(webhookIncludeDeviceInfo),
+                    ]
+                )
+                Toggle("Include Device Identifiers", isOn: $webhookIncludeDeviceInfo)
+                    .font(Typography.body)
+                    .foregroundStyle(Theme.textPrimary(colorScheme))
+                    .disabled(isLoading)
+                    .onChange(of: webhookIncludeDeviceInfo) { _, _ in
+                        guard !isLoading else { return }
+                        saveAlertMethod("webhook", config: webhookConfig(enabled: webhookEnabled))
+                    }
+                Text("On by default: the MAC address is what a controller blocks on. Turn it off if the endpoint is outside your network.")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(Theme.textTertiary(colorScheme))
+            }
+
+            Toggle("Home Assistant Events", isOn: $haEventsEnabled)
+                .font(Typography.body)
+                .foregroundStyle(Theme.textPrimary(colorScheme))
+                .disabled(isLoading)
+                .onChange(of: haEventsEnabled) { _, newValue in
+                    guard !isLoading else { return }
+                    saveAlertMethod("home_assistant", config: [
+                        "enabled": .bool(newValue),
+                        "min_severity": .string(haEventsMinSeverity),
+                        "include_device_info": .bool(true),
+                    ])
+                }
+
+            if haEventsEnabled {
+                Text(haEnabled
+                     ? "Fires a squirrelops_alert event in Home Assistant with the same payload as the automation webhook, using the integration configured below."
+                     : "Requires the Home Assistant integration below to be enabled with a URL and token. Nothing is sent until it is.")
+                    .font(Typography.bodySmall)
+                    .foregroundStyle(haEnabled ? Theme.textTertiary(colorScheme) : Theme.statusWarning(colorScheme))
+                severityPicker(
+                    label: "Home Assistant Severity",
+                    selection: $haEventsMinSeverity,
+                    method: "home_assistant",
+                    enabled: haEventsEnabled,
+                    extraConfig: ["include_device_info": .bool(true)]
+                )
             }
 
         }
@@ -808,6 +901,19 @@ struct SettingsView: View {
                         slackIncludeDeviceInfo = includeInfo
                     }
                 }
+                if case .object(let webhook) = methods["webhook"] {
+                    if case .bool(let enabled) = webhook["enabled"] { webhookEnabled = enabled }
+                    if case .string(let url) = webhook["webhook_url"] { webhookURL = url }
+                    if case .string(let secret) = webhook["signing_secret"] { webhookSigningSecret = secret }
+                    if case .string(let severity) = webhook["min_severity"] { webhookMinSeverity = severity }
+                    if case .bool(let includeInfo) = webhook["include_device_info"] {
+                        webhookIncludeDeviceInfo = includeInfo
+                    }
+                }
+                if case .object(let haEvents) = methods["home_assistant"] {
+                    if case .bool(let enabled) = haEvents["enabled"] { haEventsEnabled = enabled }
+                    if case .string(let severity) = haEvents["min_severity"] { haEventsMinSeverity = severity }
+                }
             }
 
             // LLM config: nested under "classifier", with top-level fallback for compat
@@ -1125,6 +1231,16 @@ struct SettingsView: View {
             webhookURL: webhookURL,
             minimumSeverity: minimumSeverity
         )
+    }
+
+    private func webhookConfig(enabled: Bool) -> [String: AnyCodableValue] {
+        [
+            "enabled": .bool(enabled),
+            "webhook_url": .string(webhookURL),
+            "signing_secret": .string(webhookSigningSecret),
+            "min_severity": .string(webhookMinSeverity),
+            "include_device_info": .bool(webhookIncludeDeviceInfo),
+        ]
     }
 
     private func saveAlertMethod(_ method: String, config: [String: AnyCodableValue]) {

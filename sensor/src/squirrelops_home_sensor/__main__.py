@@ -1390,7 +1390,15 @@ async def run_sensor(
 
         incident_grouper = IncidentGrouper(db=db, event_bus=event_bus)
 
-        alert_dispatcher = ConfigurableAlertDispatcher(config)
+        from squirrelops_home_sensor import __version__ as sensor_version
+
+        # The response contract names the sensor that observed the alert so a
+        # receiver with several sensors can tell them apart.
+        alert_dispatcher = ConfigurableAlertDispatcher(
+            config,
+            sensor_id=str(config.get("sensor", {}).get("id") or "") or None,
+            sensor_version=sensor_version,
+        )
         alert_dispatcher.subscribe_to(event_bus)
 
         decoy_alert_handler = DecoyAlertHandler(

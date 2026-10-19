@@ -197,3 +197,34 @@ class TestSentinelSafety:
     def test_sentinel_is_not_a_plausible_real_value(self) -> None:
         assert REDACTED.startswith("__")
         assert "://" not in REDACTED
+
+
+class TestResponseWebhookSecrets:
+    def test_signing_secret_is_redacted_and_restored(self) -> None:
+        from squirrelops_home_sensor.api.config_secrets import (
+            redact_alert_methods,
+            restore_alert_method_secrets,
+        )
+
+        stored = {
+            "webhook": {
+                "enabled": True,
+                "webhook_url": "https://automation.lan/hook",
+                "signing_secret": "hmac-key",
+                "min_severity": "high",
+                "include_device_info": True,
+            }
+        }
+        out = redact_alert_methods(stored)
+        assert out["webhook"]["webhook_url"] == REDACTED
+        assert out["webhook"]["signing_secret"] == REDACTED
+        assert out["webhook"]["min_severity"] == "high"
+        assert out["webhook"]["include_device_info"] is True
+
+        # The app echoes the markers back when it only flips a flag.
+        restored = restore_alert_method_secrets(
+            {"webhook": {"enabled": False, "webhook_url": REDACTED, "signing_secret": REDACTED}},
+            stored,
+        )
+        assert restored["webhook"]["signing_secret"] == "hmac-key"
+        assert restored["webhook"]["webhook_url"] == "https://automation.lan/hook"

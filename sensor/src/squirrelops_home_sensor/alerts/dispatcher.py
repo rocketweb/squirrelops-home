@@ -11,13 +11,17 @@ Built-in method factories:
   - ``create_apns_stub_handler()`` -- no-op placeholder (kept for compat)
 """
 
+import hashlib
+import hmac
 import json
 import logging
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from time import monotonic
+from datetime import UTC, datetime
+from time import monotonic, time
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from squirrelops_home_sensor.alerts.types import Severity, severity_emoji
 
@@ -167,7 +171,7 @@ class AlertDispatcher:
                     # pending and gets delivered once the cooldown expires.
                     return
 
-        await self.dispatch(payload)
+        await self.dispatch(payload, event_type="alert.updated")
 
         # After dispatch, not before: dispatch records the delivered summary
         # with no re-notification time, and this is the write that starts the
@@ -234,16 +238,24 @@ class AlertDispatcher:
         if payload is None:
             logger.warning("Alert dispatcher received event without payload: %r", event)
             return
-        await self.dispatch(payload)
+        await self.dispatch(payload, event_type="alert.new")
 
-    async def dispatch(self, alert_payload: AlertPayload) -> None:
+    async def dispatch(
+        self,
+        alert_payload: AlertPayload,
+        *,
+        event_type: str = "alert.new",
+    ) -> None:
         """Send the alert to all methods whose severity threshold is met.
 
         If a method handler raises an exception, the error is logged but
         dispatch continues to remaining methods (best-effort fan-out).
+        Handlers receive a copy carrying ``event_type`` so an outbound
+        contract can say whether this is a new alert or a material change.
         """
         severity = Severity(alert_payload["severity"])
         self.record_delivered_summary(alert_payload)
+        alert_payload = {**alert_payload, "event_type": event_type}
 
         for method in self._methods:
             if not method.accepts(severity):
@@ -281,7 +293,12 @@ class AlertDispatcher:
                 state.retry_after = 0.0
 
 
-def build_methods_from_config(config: dict[str, Any]) -> list[dict[str, Any]]:
+def build_methods_from_config(
+    config: dict[str, Any],
+    *,
+    sensor_id: str | None = None,
+    sensor_version: str | None = None,
+) -> list[dict[str, Any]]:
     """Build alert delivery methods from the live sensor config."""
     methods: list[dict[str, Any]] = [
         {"name": "log", "handler": create_log_handler(), "min_severity": "low"},
@@ -317,19 +334,291 @@ def build_methods_from_config(config: dict[str, Any]) -> list[dict[str, Any]]:
             "min_severity": push_cfg.get("min_severity", "low"),
         })
 
+    # The response contract: one documented JSON event per alert, for the
+    # operator's own automation (router block, HA automation, SIEM).
+    webhook_cfg = alert_methods.get("webhook", {})
+    if isinstance(webhook_cfg, dict) and webhook_cfg.get("enabled"):
+        webhook_url = str(webhook_cfg.get("webhook_url", "")).strip()
+        if _is_http_url(webhook_url):
+            methods.append({
+                "name": "webhook",
+                "handler": create_webhook_handler(
+                    webhook_url,
+                    signing_secret=str(webhook_cfg.get("signing_secret", "") or ""),
+                    # Device identifiers are the point of this method: a MAC is
+                    # what a controller blocks on. Still operator-controlled.
+                    include_device_info=bool(webhook_cfg.get("include_device_info", True)),
+                    sensor_id=sensor_id,
+                    sensor_version=sensor_version,
+                ),
+                "min_severity": webhook_cfg.get("min_severity", "low"),
+            })
+        else:
+            logger.warning("Webhook alert method enabled without an http(s) webhook_url; skipping")
+
+    ha_method = alert_methods.get("home_assistant", {})
+    ha_cfg = config.get("home_assistant", {})
+    if isinstance(ha_method, dict) and ha_method.get("enabled"):
+        ha_url = str(ha_cfg.get("url", "")).strip() if isinstance(ha_cfg, dict) else ""
+        ha_token = str(ha_cfg.get("token", "")) if isinstance(ha_cfg, dict) else ""
+        if isinstance(ha_cfg, dict) and ha_cfg.get("enabled") and ha_url and ha_token:
+            methods.append({
+                "name": "home_assistant",
+                "handler": create_home_assistant_event_handler(
+                    ha_url,
+                    ha_token,
+                    include_device_info=bool(ha_method.get("include_device_info", True)),
+                    sensor_id=sensor_id,
+                    sensor_version=sensor_version,
+                ),
+                "min_severity": ha_method.get("min_severity", "low"),
+            })
+        else:
+            logger.warning(
+                "Home Assistant alert method enabled without a configured, enabled "
+                "Home Assistant integration; skipping"
+            )
+
     return methods
+
+
+def _is_http_url(value: str) -> bool:
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.netloc)
 
 
 class ConfigurableAlertDispatcher(AlertDispatcher):
     """Alert dispatcher that resolves delivery methods from live config."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        *,
+        sensor_id: str | None = None,
+        sensor_version: str | None = None,
+    ) -> None:
         self._config = config
+        self._sensor_id = sensor_id
+        self._sensor_version = sensor_version
         super().__init__(methods=[])
 
-    async def dispatch(self, alert_payload: AlertPayload) -> None:
-        self._methods = [MethodConfig(m) for m in build_methods_from_config(self._config)]
-        await super().dispatch(alert_payload)
+    async def dispatch(
+        self,
+        alert_payload: AlertPayload,
+        *,
+        event_type: str = "alert.new",
+    ) -> None:
+        self._methods = [
+            MethodConfig(m)
+            for m in build_methods_from_config(
+                self._config,
+                sensor_id=self._sensor_id,
+                sensor_version=self._sensor_version,
+            )
+        ]
+        await super().dispatch(alert_payload, event_type=event_type)
+
+
+# -- Response contract ------------------------------------------------
+#
+# The outbound event an operator automates against. Its shape is the
+# contract: fields are added only with a schema bump, and nothing internal
+# (event sequence numbers, read markers, detail blobs) ever rides along.
+
+RESPONSE_EVENT_SCHEMA = "squirrelops.alert/1"
+
+_TITLE_LIMIT = 256
+_SUMMARY_LIMIT = 512
+_NAME_LIMIT = 128
+
+
+def _bounded_str(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return value[:limit]
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def format_response_event(
+    alert_payload: AlertPayload,
+    *,
+    include_device_info: bool,
+    sensor_id: str | None = None,
+    sensor_version: str | None = None,
+) -> dict[str, Any]:
+    """Render an alert as the documented ``squirrelops.alert/1`` event."""
+    source: dict[str, Any] = {"ip": _bounded_str(alert_payload.get("source_ip"), 64)}
+    if include_device_info:
+        mac = _bounded_str(alert_payload.get("source_mac"), 32)
+        if mac:
+            source["mac"] = mac
+        device_id = _int_or_none(alert_payload.get("device_id"))
+        if device_id is not None:
+            source["device_id"] = device_id
+
+    decoy: dict[str, Any] | None = None
+    decoy_id = _int_or_none(alert_payload.get("decoy_id"))
+    decoy_name = _bounded_str(alert_payload.get("decoy_name"), _NAME_LIMIT)
+    dest_port = _int_or_none(alert_payload.get("dest_port"))
+    if decoy_id is not None or decoy_name or dest_port is not None:
+        decoy = {
+            "id": decoy_id,
+            "name": decoy_name,
+            "port": dest_port,
+            "protocol": _bounded_str(alert_payload.get("protocol"), 16),
+        }
+
+    campaign: dict[str, Any] | None = None
+    intent = _bounded_str(alert_payload.get("intruder_intent"), 32)
+    stage = _int_or_none(alert_payload.get("narrative_stage"))
+    if intent or stage is not None:
+        campaign = {
+            "intent": intent,
+            "stage": stage,
+            "stage_label": _STAGE_LABELS.get(stage) if stage is not None else None,
+        }
+
+    event_type = alert_payload.get("event_type")
+    return {
+        "schema": RESPONSE_EVENT_SCHEMA,
+        "event": event_type if event_type in ("alert.new", "alert.updated") else "alert.new",
+        "sent_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sensor": {"id": sensor_id, "version": sensor_version},
+        "alert": {
+            "id": _int_or_none(alert_payload.get("id")),
+            "type": _bounded_str(alert_payload.get("alert_type"), 64),
+            "severity": _bounded_str(alert_payload.get("severity"), 16),
+            "title": _bounded_str(alert_payload.get("title"), _TITLE_LIMIT),
+            "summary": _bounded_str(_outbound_detail(alert_payload), _SUMMARY_LIMIT),
+            "created_at": _bounded_str(alert_payload.get("created_at"), 64),
+        },
+        "source": source,
+        "decoy": decoy,
+        "campaign": campaign,
+    }
+
+
+def encode_response_event(event: dict[str, Any]) -> bytes:
+    """Canonical bytes: compact, sorted keys, so a receiver can re-sign them."""
+    return json.dumps(event, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def sign_response_event(body: bytes, *, secret: str, timestamp: int) -> str:
+    """``t=<unix>,v1=<hex HMAC-SHA256(secret, "<unix>." + body)>``.
+
+    The timestamp is inside the signed material so a captured event cannot
+    be replayed later without the receiver noticing the age.
+    """
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        f"{timestamp}.".encode() + body,
+        hashlib.sha256,
+    ).hexdigest()
+    return f"t={timestamp},v1={digest}"
+
+
+def create_webhook_handler(
+    webhook_url: str,
+    *,
+    signing_secret: str = "",
+    include_device_info: bool = True,
+    sensor_id: str | None = None,
+    sensor_version: str | None = None,
+    session_factory: Callable | None = None,
+    clock: Callable[[], float] = time,
+) -> AlertHandler:
+    """POST the response event to the operator's own endpoint."""
+
+    async def _handler(alert_payload: AlertPayload) -> None:
+        event = format_response_event(
+            alert_payload,
+            include_device_info=include_device_info,
+            sensor_id=sensor_id,
+            sensor_version=sensor_version,
+        )
+        body = encode_response_event(event)
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"squirrelops-home-sensor/{sensor_version or 'unknown'}",
+            "X-SquirrelOps-Schema": RESPONSE_EVENT_SCHEMA,
+            "X-SquirrelOps-Event": event["event"],
+        }
+        if signing_secret:
+            headers["X-SquirrelOps-Signature"] = sign_response_event(
+                body, secret=signing_secret, timestamp=int(clock())
+            )
+
+        post_kwargs: dict[str, object] = {"data": body, "headers": headers}
+        if session_factory is not None:
+            session = session_factory()
+        else:
+            import aiohttp
+
+            session = aiohttp.ClientSession()
+            post_kwargs["timeout"] = aiohttp.ClientTimeout(total=10)
+
+        try:
+            async with session:
+                resp = await session.post(webhook_url, **post_kwargs)  # type: ignore[arg-type]
+                status = int(getattr(resp, "status", 0))
+                if not 200 <= status < 300:
+                    raise AlertDeliveryError(f"Webhook returned HTTP {status}")
+        except AlertDeliveryError:
+            raise
+        except Exception as exc:
+            # Client exceptions embed the URL, which may carry a token.
+            raise AlertDeliveryError(
+                f"Webhook request failed ({type(exc).__name__})"
+            ) from None
+
+    return _handler
+
+
+def create_home_assistant_event_handler(
+    ha_url: str,
+    ha_token: str,
+    *,
+    include_device_info: bool = True,
+    sensor_id: str | None = None,
+    sensor_version: str | None = None,
+    client_factory: Callable | None = None,
+) -> AlertHandler:
+    """Fire the same response event as a ``squirrelops_alert`` HA event."""
+
+    async def _handler(alert_payload: AlertPayload) -> None:
+        event = format_response_event(
+            alert_payload,
+            include_device_info=include_device_info,
+            sensor_id=sensor_id,
+            sensor_version=sensor_version,
+        )
+        if client_factory is not None:
+            client = client_factory()
+        else:
+            from squirrelops_home_sensor.integrations.home_assistant import HomeAssistantClient
+
+            client = HomeAssistantClient(ha_url, ha_token)
+        try:
+            delivered = await client.fire_event(HOME_ASSISTANT_EVENT_TYPE, event)
+        except Exception as exc:
+            raise AlertDeliveryError(
+                f"Home Assistant event request failed ({type(exc).__name__})"
+            ) from None
+        if not delivered:
+            raise AlertDeliveryError("Home Assistant did not accept the event")
+
+    return _handler
+
+
+HOME_ASSISTANT_EVENT_TYPE = "squirrelops_alert"
 
 
 # -- Slack payload formatter -----------------------------------------

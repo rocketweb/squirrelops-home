@@ -940,3 +940,61 @@ class TestTrustedScanner:
 
         async with db.execute("SELECT COUNT(*) FROM home_alerts") as cur:
             assert (await cur.fetchone())[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# Response contract identifiers
+# ---------------------------------------------------------------------------
+
+
+class TestOutboundIdentifiers:
+    """alert.new and alert.updated name the device and the decoy at top level.
+
+    The response contract (webhook, Home Assistant) is built from the event
+    alone, so what a controller needs to block (MAC, device) and what the
+    operator needs to read (decoy, port) must not be buried in ``detail``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_new_alert_carries_device_and_decoy(self, handler, bus, db):
+        from squirrelops_home_sensor.db import queries as q
+
+        device_id = await _seed_device(db, "10.0.0.30", trusted_scanner=False)
+        decoy_id = await q.insert_decoy(
+            db, name="Studio Build Mac", decoy_type="deep", bind_address="192.168.1.241", port=445,
+            created_at="2026-10-19T00:00:00Z", updated_at="2026-10-19T00:00:00Z",
+        )
+        await bus.deliver("decoy.trip", {
+            "source_ip": "10.0.0.30", "source_port": 40000, "dest_port": 445, "protocol": "tcp",
+            "timestamp": "2026-10-19T12:00:00Z", "decoy_id": decoy_id, "decoy_name": "Studio Build Mac",
+        })
+
+        event = bus.events_of_type("alert.new")[0]
+        assert event["device_id"] == device_id
+        assert event["source_mac"] == "AA:BB:CC:DD:EE:10"
+        assert event["decoy_id"] == decoy_id
+        assert event["decoy_name"] == "Studio Build Mac"
+        assert event["dest_port"] == 445
+        assert event["protocol"] == "tcp"
+
+    @pytest.mark.asyncio
+    async def test_updated_alert_carries_them_too(self, handler, bus, db):
+        from squirrelops_home_sensor.db import queries as q
+
+        device_id = await _seed_device(db, "10.0.0.30", trusted_scanner=False)
+        decoy_id = await q.insert_decoy(
+            db, name="Studio Build Mac", decoy_type="deep", bind_address="192.168.1.241", port=445,
+            created_at="2026-10-19T00:00:00Z", updated_at="2026-10-19T00:00:00Z",
+        )
+        for port, source_port in ((445, 40000), (22, 40001)):
+            await bus.deliver("decoy.trip", {
+                "source_ip": "10.0.0.30", "source_port": source_port, "dest_port": port, "protocol": "tcp",
+                "timestamp": "2026-10-19T12:00:00Z", "decoy_id": decoy_id, "decoy_name": "Studio Build Mac",
+            })
+
+        updated = bus.events_of_type("alert.updated")[-1]
+        assert updated["device_id"] == device_id
+        assert updated["decoy_id"] == decoy_id
+        assert updated["decoy_name"] == "Studio Build Mac"
+        assert updated["dest_port"] == 22
+        assert updated["protocol"] == "tcp"
