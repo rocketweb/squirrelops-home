@@ -49,3 +49,8 @@ qa/FINDINGS.md
 
 # Retain acceptance captures privately; commit sanitized reports and fixture code.
 docs/testing/evidence/
+
+# Local review notes and tool caches. Deception-surface reviews live in the
+# private rocketweb/squirrelops repo, never here.
+CODE_REVIEW-*.md
+.impeccable/
