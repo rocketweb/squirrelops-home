@@ -2271,3 +2271,35 @@ def test_dependabot_tracks_pinned_action_updates() -> None:
     assert "directory: /sensor" in config
     assert "directory: /" in config
     assert "interval: weekly" in config
+
+
+def test_every_workflow_uses_the_release_uv_version() -> None:
+    """One uv for the macOS toolchain: scripts, release, supply chain, and CI.
+
+    The installer and venv builder refuse any other uv, so a workflow that
+    floats to the latest release tests a toolchain the release never uses.
+    The container's uv is a separately digest-pinned Linux build input and is
+    checked by the Dockerfile digest test, not here.
+    """
+    scripts = {
+        name: re.search(r'^REQUIRED_UV_VERSION="([^"]+)"$', (REPO_ROOT / "scripts" / name).read_text(), re.M)
+        for name in ("build-sensor-venv.sh", "install-macos.sh")
+    }
+    versions = {name: match.group(1) for name, match in scripts.items() if match}
+    assert set(versions) == set(scripts), "both macOS scripts must pin REQUIRED_UV_VERSION"
+    assert len(set(versions.values())) == 1, versions
+    release_uv = next(iter(versions.values()))
+
+    setup_uv_steps = 0
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        workflow = yaml.load(path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)
+        for job in workflow.get("jobs", {}).values():
+            for step in job.get("steps", []):
+                if not str(step.get("uses", "")).startswith("astral-sh/setup-uv@"):
+                    continue
+                setup_uv_steps += 1
+                pinned = (step.get("with") or {}).get("version")
+                assert pinned == release_uv, (
+                    f"{path.name}: setup-uv must pin version {release_uv!r}, found {pinned!r}"
+                )
+    assert setup_uv_steps >= 3, "expected setup-uv in sensor CI, supply chain CI, and release"
