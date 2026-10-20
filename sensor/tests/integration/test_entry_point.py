@@ -583,7 +583,12 @@ class TestEntryPointStartup:
         with patch("squirrelops_home_sensor.__main__.sys.platform", platform):
             await run_sensor(config_path=str(config_file), port=9443, no_tls=True)
 
-        mock_subsystems["load_deep_secret"].assert_not_awaited()
+        # The deployment secret now seeds the classic decoys' presentation on
+        # every platform, so it is loaded once regardless; what must not
+        # happen here is constructing the deep orchestrator.
+        mock_subsystems["load_deep_secret"].assert_awaited_once_with(
+            mock_subsystems["secret_store"]
+        )
         mock_subsystems["deep_orchestrator_cls"].assert_not_called()
 
     @pytest.mark.asyncio

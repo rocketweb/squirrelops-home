@@ -13,8 +13,11 @@ import pytest
 from squirrelops_home_sensor.decoys.credentials import (
     CredentialGenerator,
 )
+from squirrelops_home_sensor.decoys.profile import compile_profile
 from squirrelops_home_sensor.decoys.types.base import DecoyConnectionEvent
 from squirrelops_home_sensor.decoys.types.dev_server import DevServerDecoy
+
+TEST_SEED = b"dev-server-integration-seed-00000000000"
 
 
 @pytest.fixture
@@ -35,6 +38,7 @@ async def decoy(credentials):
         port=0,  # 0 = OS picks a free port
         bind_address="127.0.0.1",
         planted_credentials=credentials,
+        profile=compile_profile(TEST_SEED, decoy_type="dev_server", decoy_id=1),
     )
     await d.start()
     yield d
@@ -73,6 +77,7 @@ class TestDevServerLifecycle:
             port=0,
             bind_address="127.0.0.1",
             planted_credentials=credentials,
+            profile=compile_profile(TEST_SEED, decoy_type="dev_server", decoy_id=2),
         )
         await d.start()
         await d.stop()

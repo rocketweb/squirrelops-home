@@ -612,10 +612,16 @@ def create_mdns_advertiser(config: dict[str, Any], port: int) -> Any:
     )
 
 
-def create_orchestrator(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
+def create_orchestrator(
+    config: dict[str, Any],
+    db: Any,
+    event_bus: Any,
+    deployment_secret: bytes | None = None,
+) -> Any:
     """Create the decoy orchestrator.
 
-    Returns an object with async start()/stop() methods.
+    Returns an object with async start()/stop() methods. ``deployment_secret``
+    seeds every attacker-visible value the classic decoys present.
     """
     from squirrelops_home_sensor.decoys.orchestrator import DecoyOrchestrator
 
@@ -642,6 +648,7 @@ def create_orchestrator(config: dict[str, Any], db: Any, event_bus: Any) -> Any:
             virtual_ip_range_start=scouts_cfg.get("virtual_ip_range_start", 200),
             virtual_ip_range_end=scouts_cfg.get("virtual_ip_range_end", 250),
             network_publisher=network_publisher,
+            deployment_secret=deployment_secret,
         )
     )
 
@@ -1204,11 +1211,18 @@ async def run_sensor(
         )
         runtime.scan_loop = scan_loop
 
-        # 6. Init decoy orchestrator
+        # 6. Init decoy orchestrator. The install's deployment secret seeds
+        # what every decoy presents, so it is loaded before any decoy exists.
+        from squirrelops_home_sensor.decoys.deep.orchestrator import (
+            load_or_create_deployment_secret,
+        )
+
+        deployment_secret = await load_or_create_deployment_secret(secret_store)
         orchestrator = create_orchestrator(
             config=config,
             db=db,
             event_bus=event_bus,
+            deployment_secret=deployment_secret,
         )
         runtime.orchestrator = orchestrator
 
@@ -1239,10 +1253,8 @@ async def run_sensor(
         ):
             from squirrelops_home_sensor.decoys.deep.orchestrator import (
                 DeepDecoyOrchestrator,
-                load_or_create_deployment_secret,
             )
 
-            deployment_secret = await load_or_create_deployment_secret(secret_store)
             deep_orchestrator = DeepDecoyOrchestrator(
                 db=db,
                 event_bus=event_bus,

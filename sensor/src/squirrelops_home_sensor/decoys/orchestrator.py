@@ -18,12 +18,14 @@ import ipaddress
 import json as json_mod
 import logging
 import re
+import secrets
 import socket
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol, runtime_checkable
 
+from squirrelops_home_sensor.decoys.profile import DecoyProfile, compile_profile
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 from squirrelops_home_sensor.privileged.helper import PrivilegedOperations
 from squirrelops_home_sensor.subprocess_security import (
@@ -270,9 +272,17 @@ def _create_decoy_instance(
     bind_address: str,
     credentials: list,
     config: dict | None = None,
+    *,
+    profile: DecoyProfile | None = None,
 ) -> BaseDecoy:
-    """Factory for creating BaseDecoy subclass instances."""
+    """Factory for creating BaseDecoy subclass instances.
+
+    ``profile`` carries every attacker-visible value; the factory never
+    invents one, so a decoy cannot be built from source literals by accident.
+    """
     _require_classic_type(decoy_type)
+    if profile is None:
+        raise ValueError("a compiled decoy profile is required")
     from squirrelops_home_sensor.decoys.types.dev_server import DevServerDecoy
     from squirrelops_home_sensor.decoys.types.file_share import FileShareDecoy
     from squirrelops_home_sensor.decoys.types.home_assistant import HomeAssistantDecoy
@@ -281,17 +291,19 @@ def _create_decoy_instance(
         return DevServerDecoy(
             decoy_id=decoy_id, name=name, port=port,
             bind_address=bind_address, planted_credentials=credentials,
+            profile=profile,
         )
     elif decoy_type == "home_assistant":
         return HomeAssistantDecoy(
             decoy_id=decoy_id, name=name, port=port,
             bind_address=bind_address, planted_credentials=credentials,
+            profile=profile,
         )
     else:
         return FileShareDecoy(
             decoy_id=decoy_id, name=name, port=port,
             bind_address=bind_address, planted_credentials=credentials,
-            config=config,
+            config=config, profile=profile,
         )
 
 
@@ -321,9 +333,21 @@ class DecoyOrchestrator:
         virtual_ip_range_start: int = 200,
         virtual_ip_range_end: int = 250,
         network_publisher: PrivilegedOperations | None = None,
+        deployment_secret: bytes | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._db = db
+        # Seed for every attacker-visible value a classic decoy presents. The
+        # sensor passes the install's deployment secret; without one (tests,
+        # ad hoc use) a process-local secret keeps the output unpredictable
+        # but not stable across restarts, which is why it is logged.
+        if deployment_secret is None:
+            logger.warning(
+                "Classic decoys are using a process-local seed; presentation "
+                "will change on restart"
+            )
+            deployment_secret = secrets.token_bytes(32)
+        self._deployment_secret = deployment_secret
         self._credential_load_lock = asyncio.Lock()
         self._max_decoys = max_decoys
         self._canary_enabled = canary_enabled
@@ -340,6 +364,19 @@ class DecoyOrchestrator:
         # threads (HTTP-emulator decoys use ThreadingHTTPServer) can schedule
         # the async handler back onto the loop thread-safely.
         self._loop: asyncio.AbstractEventLoop | None = None
+
+    def _profile_for(
+        self, decoy_type: str, decoy_id: int, config: dict | None
+    ) -> DecoyProfile:
+        password_filename = (
+            (config or {}).get("password_filename") or self._credential_filename
+        )
+        return compile_profile(
+            self._deployment_secret,
+            decoy_type=decoy_type,
+            decoy_id=decoy_id,
+            password_filename=password_filename,
+        )
 
     async def _get_bind_address(self) -> str:
         """Resolve a concrete non-mimic listener address or fail closed.
@@ -558,6 +595,7 @@ class DecoyOrchestrator:
                     bind_address=bind_address,
                     credentials=creds,
                     config=config,
+                    profile=self._profile_for(row["decoy_type"], row["id"], config),
                 )
                 await self.deploy_decoy(decoy)
                 now = datetime.now(UTC).isoformat()
@@ -742,6 +780,7 @@ class DecoyOrchestrator:
             bind_address=bind_address,
             credentials=creds,
             config=config,
+            profile=self._profile_for(decoy_type, decoy_id, config),
         )
         return decoy, now
 
@@ -1072,6 +1111,7 @@ class DecoyOrchestrator:
             bind_address=bind_address,
             credentials=creds,
             config=config,
+            profile=self._profile_for(row["decoy_type"], decoy_id, config),
         )
 
         try:

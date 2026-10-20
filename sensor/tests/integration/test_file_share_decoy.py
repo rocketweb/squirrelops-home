@@ -13,8 +13,11 @@ import pytest
 from squirrelops_home_sensor.decoys.credentials import (
     CredentialGenerator,
 )
+from squirrelops_home_sensor.decoys.profile import compile_profile
 from squirrelops_home_sensor.decoys.types.base import DecoyConnectionEvent
 from squirrelops_home_sensor.decoys.types.file_share import FileShareDecoy
+
+TEST_SEED = b"file-share-integration-seed-0000000000"
 
 
 @pytest.fixture
@@ -35,6 +38,7 @@ async def decoy(credentials):
         port=0,
         bind_address="127.0.0.1",
         planted_credentials=credentials,
+        profile=compile_profile(TEST_SEED, decoy_type="file_share", decoy_id=20),
     )
     await d.start()
     yield d

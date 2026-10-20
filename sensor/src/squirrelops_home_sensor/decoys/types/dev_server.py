@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 
 from clownpeanuts.services.http.emulator import Emulator
 from squirrelops_home_sensor.decoys.credentials import GeneratedCredential
+from squirrelops_home_sensor.decoys.profile import DecoyProfile
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
 logger = logging.getLogger(__name__)
@@ -37,19 +38,12 @@ _REACT_ERROR_PAGE = """<!DOCTYPE html>
     <p style="color: #666;">See the developer console for more information.</p>
     <p style="font-size: 12px; color: #999;">
       This error occurred during page generation.
-      React and Next.js development server v14.1.0
+      React and Next.js development server v{next_version}
     </p>
   </div>
 </div>
 </body>
 </html>"""
-
-_HEALTH_RESPONSE = json.dumps({
-    "status": "ok",
-    "uptime": 847293,
-    "version": "1.4.2",
-    "environment": "development",
-})
 
 
 class DevServerDecoy(BaseDecoy):
@@ -74,6 +68,8 @@ class DevServerDecoy(BaseDecoy):
         port: int,
         bind_address: str = "127.0.0.1",
         planted_credentials: list[GeneratedCredential] | None = None,
+        *,
+        profile: DecoyProfile,
     ) -> None:
         super().__init__(
             decoy_id=decoy_id,
@@ -82,6 +78,9 @@ class DevServerDecoy(BaseDecoy):
             bind_address=bind_address,
             decoy_type="dev_server",
         )
+        if profile.decoy_type != "dev_server":
+            raise ValueError("profile was compiled for a different decoy type")
+        self._profile = profile
         self._planted_credentials = planted_credentials or []
         self._emulator: Emulator | None = None
         self._running = False
@@ -112,7 +111,9 @@ class DevServerDecoy(BaseDecoy):
                     "Content-Type": "text/html; charset=utf-8",
                     "X-Powered-By": "Next.js",
                 },
-                "body": _REACT_ERROR_PAGE,
+                "body": _REACT_ERROR_PAGE.format(
+                    next_version=self._profile.framework_version or ""
+                ),
             },
             {
                 "path": "/api/health",
@@ -122,7 +123,12 @@ class DevServerDecoy(BaseDecoy):
                     "Content-Type": "application/json",
                     "X-Powered-By": "Express",
                 },
-                "body": _HEALTH_RESPONSE,
+                "body": json.dumps({
+                    "status": "ok",
+                    "uptime": self._profile.uptime_seconds,
+                    "version": self._profile.app_version,
+                    "environment": "development",
+                }),
             },
             {
                 "path": "/.env",

@@ -122,6 +122,19 @@ Commands and file access inside the guest remain unobserved. A decoy alert is
 evidence to investigate, and can also be caused by an operator or scanner. Automatic IPP
 printer-discovery requests are retained without an intrusion alert.
 
+The source of the classic decoys is public, so what a decoy presents must not
+be learnable from it. Every attacker-visible value a classic decoy serves (its
+claimed server version, the names, dates and sizes in a directory listing, the
+hostname and version on a login page, an application's version and uptime) is
+compiled per decoy from the install's deployment secret with HKDF, drawing from
+version-frequency and naming corpora shipped as data. Two installs share no
+such value, two decoys on one install share none, and a restart reproduces the
+same presentation. Two tests enforce this in CI: one compiles the decoys under
+many seeds and fails if any observable is constant that the imitated software
+does not itself hold constant, and one scans the decoy modules for version,
+server, or date-shaped string literals. Draws stay inside their corpora; a
+random-looking value would be its own tell.
+
 SSDP and Scout probes may connect to self-signed HTTPS services. Certificate
 verification is intentionally disabled only for these credential-free
 fingerprinting requests. Targets are restricted to private LAN addresses,

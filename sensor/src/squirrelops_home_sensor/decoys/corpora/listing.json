@@ -1,0 +1,12 @@
+{
+  "files": [
+    "notes.txt", "todo.txt", "backup.zip", "config.yml", "export.csv", "wifi.txt",
+    "invoices.pdf", "photos.tar.gz", "db-dump.sql", "keys.txt", "README.txt",
+    "old-passwords.txt", "inventory.xlsx", "scan001.pdf", "letter.docx", "router.cfg",
+    "cameras.txt", "budget.xlsx"
+  ],
+  "directories": [
+    "backup/", "backups/", "old/", "archive/", "config/", "documents/", "photos/",
+    "scripts/", "downloads/", "tmp/"
+  ]
+}

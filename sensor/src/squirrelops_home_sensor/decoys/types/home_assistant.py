@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 
 from clownpeanuts.services.http.emulator import Emulator
 from squirrelops_home_sensor.decoys.credentials import GeneratedCredential
+from squirrelops_home_sensor.decoys.profile import DecoyProfile
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ _HA_LOGIN_PAGE = """<!DOCTYPE html>
       <button type="submit">Log in</button>
     </form>
     <p style="font-size: 12px; color: #666; margin-top: 24px;">
-      Home Assistant 2024.1.0 &bull; hass.local
+      Home Assistant {version} &bull; {hostname}.local
     </p>
   </div>
 </body>
@@ -85,6 +86,8 @@ class HomeAssistantDecoy(BaseDecoy):
         port: int,
         bind_address: str = "127.0.0.1",
         planted_credentials: list[GeneratedCredential] | None = None,
+        *,
+        profile: DecoyProfile,
     ) -> None:
         super().__init__(
             decoy_id=decoy_id,
@@ -93,6 +96,9 @@ class HomeAssistantDecoy(BaseDecoy):
             bind_address=bind_address,
             decoy_type="home_assistant",
         )
+        if profile.decoy_type != "home_assistant":
+            raise ValueError("profile was compiled for a different decoy type")
+        self._profile = profile
         self._planted_credentials = planted_credentials or []
         self._emulator: Emulator | None = None
         self._running = False
@@ -110,7 +116,8 @@ class HomeAssistantDecoy(BaseDecoy):
                 "method": "GET",
                 "status": 200,
                 "headers": {"Content-Type": "text/html; charset=utf-8"},
-                "body": _HA_LOGIN_PAGE,
+                "body": _HA_LOGIN_PAGE.replace("{version}", self._profile.server_version)
+                .replace("{hostname}", self._profile.hostname),
             },
             {
                 "path": "/api/",
