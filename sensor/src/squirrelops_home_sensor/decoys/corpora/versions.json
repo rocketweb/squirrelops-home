@@ -1,0 +1,27 @@
+{
+  "nginx": [
+    {"version": "1.18.0", "weight": 20},
+    {"version": "1.22.1", "weight": 25},
+    {"version": "1.24.0", "weight": 30},
+    {"version": "1.26.3", "weight": 15},
+    {"version": "1.27.4", "weight": 10}
+  ],
+  "express": [
+    {"version": "4.18.2", "weight": 35},
+    {"version": "4.19.2", "weight": 25},
+    {"version": "4.21.2", "weight": 30},
+    {"version": "5.1.0", "weight": 10}
+  ],
+  "next": [
+    {"version": "14.1.0", "weight": 20},
+    {"version": "14.2.18", "weight": 35},
+    {"version": "15.0.4", "weight": 25},
+    {"version": "15.3.1", "weight": 20}
+  ],
+  "home_assistant": [
+    {"version": "2025.6.3", "weight": 15},
+    {"version": "2025.8.2", "weight": 25},
+    {"version": "2025.9.4", "weight": 35},
+    {"version": "2025.10.1", "weight": 25}
+  ]
+}

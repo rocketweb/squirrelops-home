@@ -131,6 +131,21 @@ uv run pytest tests/unit/test_mimic_server.py -q
 uv run pytest tests/unit/test_scout_engine.py::TestGetMimicCandidates -q
 ```
 
+Classic decoys present nothing that is a literal in the source: every
+attacker-visible value comes from `decoys/profile.py`, compiled per decoy from
+the deployment secret and the corpora under `decoys/corpora/`. Three tests
+guard that. `tests/unit/test_decoy_profile.py` pins the compiler's
+determinism and corpus bounds. `tests/unit/test_decoy_entropy_properties.py`
+compiles each decoy type under sixteen seeds and fails if an observable is
+constant that the imitated software does not hold constant, and lints the
+decoy modules for version, server, or date-shaped literals. The route snapshot
+in `tests/unit/test_classic_factory_presentation.py` is taken under a fixed
+test seed; a changed hash is a deception review, not a value to update.
+
+```bash
+uv run pytest tests/unit/test_decoy_profile.py tests/unit/test_decoy_entropy_properties.py -q
+```
+
 AI setup checks are covered by
 `sensor/tests/integration/test_ai_diagnostics.py` and
 `app/Tests/SquirrelOpsHomeTests/AIConnectionStateTests.swift`. The sensor tests

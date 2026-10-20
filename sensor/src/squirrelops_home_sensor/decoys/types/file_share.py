@@ -19,18 +19,40 @@ from datetime import UTC, datetime
 
 from clownpeanuts.services.http.emulator import Emulator
 from squirrelops_home_sensor.decoys.credentials import GeneratedCredential
+from squirrelops_home_sensor.decoys.profile import DecoyProfile, ListingEntry
 from squirrelops_home_sensor.decoys.types.base import BaseDecoy, DecoyConnectionEvent
 
 logger = logging.getLogger(__name__)
 
 _MAX_CREDENTIAL_AUTH_SIZE = 8 * 1024
 _MAX_DECODED_CREDENTIAL_SIZE = 4 * 1024
+_LISTING_NAME_COLUMN = 51
 
 
-def _build_directory_listing_html(password_filename: str = "passwords.txt") -> str:
-    """Build an nginx autoindex-style directory listing page."""
-    # Pad to align columns like real nginx autoindex
-    pad = " " * max(1, 55 - len(password_filename))
+def _listing_size(entry: ListingEntry) -> str:
+    if entry.size is None:
+        return "-"
+    if entry.size < 1024:
+        return str(entry.size)
+    if entry.size < 1024 * 1024:
+        return f"{entry.size / 1024:.1f}K"
+    return f"{entry.size / (1024 * 1024):.1f}M"
+
+
+def _build_directory_listing_html(listing: tuple[ListingEntry, ...]) -> str:
+    """Build an autoindex-style directory listing page from the profile.
+
+    Directories first, then files, each group alphabetical; the href and the
+    link text are the same name.
+    """
+    ordered = sorted(listing, key=lambda entry: (not entry.is_dir, entry.name.lower()))
+    lines = []
+    for entry in ordered:
+        link = f'<a href="{entry.name}">{entry.name}</a>'
+        pad = " " * max(1, _LISTING_NAME_COLUMN - len(entry.name))
+        stamp = entry.modified.strftime("%d-%b-%Y %H:%M")
+        lines.append(f"{link}{pad}{stamp} {_listing_size(entry):>19}")
+    rows = "\n".join(lines)
     return f"""<!DOCTYPE html>
 <html>
 <head><title>Index of /</title></head>
@@ -38,10 +60,7 @@ def _build_directory_listing_html(password_filename: str = "passwords.txt") -> s
 <h1>Index of /</h1>
 <hr>
 <pre>
-<a href="{password_filename}">{password_filename}</a>{pad}14-Jan-2024 03:22    1.2K
-<a href=".ssh/">.ssh/</a>                                                      08-Dec-2023 19:45       -
-<a href="backup/">.backup/</a>                                                 21-Nov-2023 14:12       -
-<a href="notes.txt">notes.txt</a>                                              03-Feb-2024 08:30     256
+{rows}
 </pre>
 <hr>
 </body>
@@ -71,6 +90,8 @@ class FileShareDecoy(BaseDecoy):
         bind_address: str = "127.0.0.1",
         planted_credentials: list[GeneratedCredential] | None = None,
         config: dict | None = None,
+        *,
+        profile: DecoyProfile,
     ) -> None:
         super().__init__(
             decoy_id=decoy_id,
@@ -79,6 +100,9 @@ class FileShareDecoy(BaseDecoy):
             bind_address=bind_address,
             decoy_type="file_share",
         )
+        if profile.decoy_type != "file_share":
+            raise ValueError("profile was compiled for a different decoy type")
+        self._profile = profile
         self._planted_credentials = planted_credentials or []
         self._config = config or {}
         self._emulator: Emulator | None = None
@@ -113,6 +137,7 @@ class FileShareDecoy(BaseDecoy):
 
     def _build_routes(self) -> list[dict]:
         """Build ClownPeanuts route configuration."""
+        server = self._profile.server_header or ""
         return [
             {
                 "path": "/",
@@ -120,9 +145,9 @@ class FileShareDecoy(BaseDecoy):
                 "status": 200,
                 "headers": {
                     "Content-Type": "text/html; charset=utf-8",
-                    "Server": "nginx/1.24.0",
+                    "Server": server,
                 },
-                "body": _build_directory_listing_html(self._password_filename),
+                "body": _build_directory_listing_html(self._profile.listing),
             },
             {
                 "path": f"/{self._password_filename}",
@@ -130,7 +155,7 @@ class FileShareDecoy(BaseDecoy):
                 "status": 200,
                 "headers": {
                     "Content-Type": "text/plain; charset=utf-8",
-                    "Server": "nginx/1.24.0",
+                    "Server": server,
                 },
                 "body": self._passwords_content,
             },
@@ -140,7 +165,7 @@ class FileShareDecoy(BaseDecoy):
                 "status": 200,
                 "headers": {
                     "Content-Type": "application/octet-stream",
-                    "Server": "nginx/1.24.0",
+                    "Server": server,
                 },
                 "body": self._ssh_key_content,
             },
