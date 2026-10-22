@@ -52,6 +52,10 @@ def test_archive_carries_one_coherent_persona_and_real_project_shape() -> None:
         "login_password": persona.login_password,
         "persona_id": "studio-mini-v1",
         "username": "buildbot",
+        "project_slug": persona.primary_project.slug,
+        "project_product": persona.primary_project.product,
+        "project_name": persona.primary_project.name,
+        "release_branch": persona.release_branch,
     }
     assert persona.openai_api_key in environment
     assert persona.source_token in environment

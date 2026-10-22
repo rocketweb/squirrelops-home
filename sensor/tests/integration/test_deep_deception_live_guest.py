@@ -374,9 +374,13 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
     checkpoints = [record.getMessage() for record in caplog.records
                    if record.getMessage().startswith("Guest relay checkpoint ")]
     assert 0 < len(checkpoints) <= 513
-    for port in (22, 445):
-        for stage in ("listener_activated", "accepted", "guest_connect_started", "guest_connected"):
-            assert any(f"stage={stage} service={port} " in message for message in checkpoints)
+    missing = [
+        (port, stage)
+        for port in (22, 445)
+        for stage in ("listener_activated", "accepted", "guest_connect_started", "guest_connected")
+        if not any(f"stage={stage} service={port} " in message for message in checkpoints)
+    ]
+    assert missing == [], f"no checkpoint for {missing}; {len(checkpoints)} checkpoints captured"
     assert all(controller._diagnostic_nonce not in message for message in checkpoints)
     assert all(persona.login_password not in message for message in checkpoints)
 
