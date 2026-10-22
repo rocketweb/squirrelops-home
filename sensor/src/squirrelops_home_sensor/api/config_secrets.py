@@ -67,12 +67,7 @@ ALERT_METHOD_SECRET_PATHS: tuple[SecretPath, ...] = (
 # are safe and needed by clients are exposed. Every other configured value is
 # treated as secret at the API boundary while explicit paths above continue to
 # define the values managed by today's encrypted config vault.
-ALERT_METHOD_PUBLIC_FIELDS = frozenset({
-    "enabled",
-    "include_device_info",
-    "min_severity",
-    "relay_url",
-})
+from squirrelops_home_sensor.config_fields import ALERT_METHOD_PUBLIC_FIELDS  # noqa: E402
 
 
 class _Missing:
