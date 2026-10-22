@@ -19,8 +19,8 @@ from squirrelops_home_sensor.decoys.deep.narrative import (
 from squirrelops_home_sensor.decoys.deep.persona import build_studio_mini_persona
 
 NONSTREAMING_SHA256 = {
-    "/v1/chat/completions": "8271e3b17298cd5fc7d307290538d0a62195aad5367ea19aceb6dbdf84b091a9",
-    "/api/chat": "d25d749ec2c7681be9b393fe4948767a5a9ad6cc8c29906f301e05044154309c",
+    "/v1/chat/completions": "900582a5fb1174c69b9af8ec8acafcc64032ce83593b1f471d5212b31372902b",
+    "/api/chat": "3d8008d261e2aae0c0318a4af0f0108cf0f55ab3591af14f85f9e49a136f7a31",
 }
 
 
@@ -32,20 +32,22 @@ def _persona():
 
 
 def test_openai_models_response_is_byte_exact() -> None:
+    persona = _persona()
     response = build_agent_response(
-        _persona(),
+        persona,
         new_campaign(decoy_id=41, source_ip="192.0.2.44"),
         AgentRequest(method="GET", path="/v1/models"),
     )
 
+    coder, helper = persona.model_names
     assert response.status == 200
     assert response.content_type == "application/json"
     assert response.body == (
         b'{"object":"list","data":['
-        b'{"id":"fieldkit-coder:14b","object":"model","created":1788184800,'
-        b'"owned_by":"hawthorn-ml"},'
-        b'{"id":"release-notes:latest","object":"model","created":1788184800,'
-        b'"owned_by":"hawthorn-ml"}]}'
+        + f'{{"id":"{coder}","object":"model","created":1788184800,'.encode()
+        + b'"owned_by":"hawthorn-ml"},'
+        + f'{{"id":"{helper}","object":"model","created":1788184800,'.encode()
+        + b'"owned_by":"hawthorn-ml"}]}'
     )
 
 
@@ -56,20 +58,25 @@ def test_ollama_tags_response_has_realistic_shape_and_shared_models() -> None:
         AgentRequest(method="GET", path="/api/tags"),
     )
 
+    persona = _persona()
+    coder = persona.models[0]
     assert response.status == 200
-    assert response.json_body["models"][0]["name"] == "fieldkit-coder:14b"
+    assert response.json_body["models"][0]["name"] == coder.name
+    assert response.json_body["models"][0]["digest"] == coder.digest
+    assert response.json_body["models"][0]["size"] == coder.size
     assert response.json_body["models"][0]["details"] == {
         "format": "gguf",
-        "family": "qwen3",
-        "families": ["qwen3"],
-        "parameter_size": "14.8B",
+        "family": coder.family,
+        "families": [coder.family],
+        "parameter_size": coder.parameter_size,
         "quantization_level": "Q4_K_M",
     }
 
 
 def test_mcp_initialize_negotiates_current_supported_revision() -> None:
+    persona = _persona()
     response = build_agent_response(
-        _persona(),
+        persona,
         new_campaign(decoy_id=41, source_ip="192.0.2.44"),
         AgentRequest(
             method="POST",
@@ -93,18 +100,22 @@ def test_mcp_initialize_negotiates_current_supported_revision() -> None:
         "result": {
             "protocolVersion": "2025-06-18",
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "studio-build-tools", "version": "0.9.7"},
+            "serverInfo": {
+                "name": persona.mcp_server_name,
+                "version": persona.mcp_server_version,
+            },
             "instructions": (
-                "Use list_projects before reading the release runbook. "
-                "The signing rotation is still in progress."
+                f"Use {persona.tool_name('list_projects')} before reading the "
+                "release runbook. The signing rotation is still in progress."
             ),
         },
     }
 
 
 def test_mcp_lists_the_four_agent_bait_tools() -> None:
+    persona = _persona()
     response = build_agent_response(
-        _persona(),
+        persona,
         new_campaign(decoy_id=41, source_ip="192.0.2.44"),
         AgentRequest(
             method="POST",
@@ -115,10 +126,10 @@ def test_mcp_lists_the_four_agent_bait_tools() -> None:
 
     tools = response.json_body["result"]["tools"]
     assert [tool["name"] for tool in tools] == [
-        "list_projects",
-        "read_runbook",
-        "get_deployment",
-        "search_secrets",
+        persona.tool_name("list_projects"),
+        persona.tool_name("read_runbook"),
+        persona.tool_name("get_deployment"),
+        persona.tool_name("search_secrets"),
     ]
     assert all(tool["inputSchema"]["type"] == "object" for tool in tools)
 
@@ -132,7 +143,7 @@ def test_agent_runbook_points_deeper_into_only_the_synthetic_world() -> None:
             method="POST",
             path="/mcp",
             user_agent="codex-cli/1.2",
-            body="tools/call read_runbook",
+            body=f"tools/call {persona.tool_name('read_runbook')}",
         ),
     )
     response = build_agent_response(
@@ -145,7 +156,7 @@ def test_agent_runbook_points_deeper_into_only_the_synthetic_world() -> None:
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
-                "params": {"name": "read_runbook", "arguments": {}},
+                "params": {"name": persona.tool_name("read_runbook"), "arguments": {}},
             },
         ),
     )
@@ -171,7 +182,7 @@ def test_secret_search_returns_only_planted_credentials() -> None:
                 "id": 4,
                 "method": "tools/call",
                 "params": {
-                    "name": "search_secrets",
+                    "name": persona.tool_name("search_secrets"),
                     "arguments": {"query": "OPENAI_API_KEY"},
                 },
             },
