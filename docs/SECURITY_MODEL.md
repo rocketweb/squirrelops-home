@@ -135,6 +135,14 @@ does not itself hold constant, and one scans the decoy modules for version,
 server, or date-shaped string literals. Draws stay inside their corpora; a
 random-looking value would be its own tell.
 
+The Studio Build Mac persona follows the same rule for everything an attacker
+reads out of its files and agent endpoints: the project and its product name,
+the MCP server name, version, and tool names, the local model names and their
+digests, the ticket and branch labels, and the password's word are drawn per
+install from the persona corpus. The hostname, username, organization, and
+share names are baked into the guest image and stay fixed until the guest is
+built per install.
+
 SSDP and Scout probes may connect to self-signed HTTPS services. Certificate
 verification is intentionally disabled only for these credential-free
 fingerprinting requests. Targets are restricted to private LAN addresses,
