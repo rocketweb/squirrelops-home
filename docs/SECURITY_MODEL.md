@@ -272,7 +272,13 @@ the device-enrichment calls.
 
 TLS keys and configuration credentials are stored in the encrypted secret
 store. Runtime YAML contains non-secret configuration only. Legacy plaintext
-configuration credentials are migrated and scrubbed at startup.
+configuration credentials are migrated and scrubbed at startup. Alert methods
+accept arbitrary fields; every string field not on the public allow-list
+(`enabled`, `include_device_info`, `min_severity`, `relay_url`) is treated as a
+credential by both the API boundary and the vault, so a new method's secret is
+redacted on read and vaulted at rest without anyone adding its name to a list.
+The YAML keeps a marker in place of each vaulted value so hydration knows which
+fields to fetch.
 
 The Mac app holds one configuration credential of its own: a copy of the Slack
 webhook URL, in a Keychain generic-password item under the app's service name.

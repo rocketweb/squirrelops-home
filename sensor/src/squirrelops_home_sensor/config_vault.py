@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 
+from squirrelops_home_sensor.config_fields import ALERT_METHOD_PUBLIC_FIELDS
 from squirrelops_home_sensor.secrets.store import SecretStore
 from squirrelops_home_sensor.secure_io import atomic_write_private_text
 
@@ -19,17 +20,30 @@ _FIXED_SECRETS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("apns_relay_token",), "config.apns_relay_token"),
 )
 
-_ALERT_METHOD_SECRET_FIELDS = (
+# Alert-method fields older releases stripped from the YAML outright. Their
+# names are probed at hydration so an install written by one of those releases
+# still gets its values back; everything newer leaves a marker instead.
+_LEGACY_ALERT_METHOD_SECRET_FIELDS = (
     "webhook_url",
     "relay_token",
     "device_token",
     "signing_secret",
 )
 
+# Written to the YAML file in place of a vaulted value. Not URL-shaped and not
+# token-shaped, so it cannot be mistaken for a usable value, and it tells
+# hydration which field to fetch without the vault keeping an index.
+VAULTED = "__squirrelops_vaulted__"
+
 
 def _alert_method_key(method_name: str, field_name: str) -> str:
     digest = hashlib.sha256(method_name.encode("utf-8")).hexdigest()
     return f"config.alert_methods.{digest}.{field_name}"
+
+
+def _is_vaulted_field(field_name: str, value: Any) -> bool:
+    """Every non-public string field of an alert method is a credential."""
+    return field_name not in ALERT_METHOD_PUBLIC_FIELDS and isinstance(value, str)
 
 
 def _get_path(config: Mapping[str, Any], path: tuple[str, ...]) -> Any:
@@ -51,9 +65,16 @@ def _set_path(config: MutableMapping[str, Any], path: tuple[str, ...], value: st
     node[path[-1]] = value
 
 
+def _configured_value(value: Any) -> str:
+    """The plaintext a config holds for a secret path; markers count as unset."""
+    if not isinstance(value, str) or value == VAULTED:
+        return ""
+    return value
+
+
 def _secret_locations(config: Mapping[str, Any]) -> dict[str, tuple[tuple[str, ...], str]]:
     locations = {
-        store_key: (path, str(_get_path(config, path) or ""))
+        store_key: (path, _configured_value(_get_path(config, path)))
         for path, store_key in _FIXED_SECRETS
     }
     methods = config.get("alert_methods", {})
@@ -61,11 +82,17 @@ def _secret_locations(config: Mapping[str, Any]) -> dict[str, tuple[tuple[str, .
         for method_name, method_config in methods.items():
             if not isinstance(method_name, str) or not isinstance(method_config, Mapping):
                 continue
-            for field_name in _ALERT_METHOD_SECRET_FIELDS:
+            field_names = set(_LEGACY_ALERT_METHOD_SECRET_FIELDS)
+            field_names.update(
+                name
+                for name, value in method_config.items()
+                if isinstance(name, str) and _is_vaulted_field(name, value)
+            )
+            for field_name in sorted(field_names):
                 path = ("alert_methods", method_name, field_name)
                 locations[_alert_method_key(method_name, field_name)] = (
                     path,
-                    str(method_config.get(field_name) or ""),
+                    _configured_value(method_config.get(field_name)),
                 )
     return locations
 
@@ -82,6 +109,12 @@ async def hydrate_vaulted_config_secrets(
         stored = await store.get(store_key)
         if stored:
             _set_path(config, path, stored)
+        elif _get_path(config, path) == VAULTED:
+            # A marker with nothing behind it: drop it rather than hand the
+            # sentinel to a handler as if it were a credential.
+            parent = _get_path(config, path[:-1])
+            if isinstance(parent, MutableMapping):
+                parent.pop(path[-1], None)
 
 
 async def sync_vaulted_config_secrets(
@@ -129,7 +162,7 @@ async def restore_vaulted_config_secrets(
 
 
 def strip_vaulted_config_secrets(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a copy with vault-managed credentials removed."""
+    """Return a copy safe to persist: fixed secrets removed, method secrets marked."""
     clean = deepcopy(dict(config))
     for path, _store_key in _FIXED_SECRETS:
         parent = _get_path(clean, path[:-1])
@@ -138,9 +171,11 @@ def strip_vaulted_config_secrets(config: Mapping[str, Any]) -> dict[str, Any]:
     methods = clean.get("alert_methods", {})
     if isinstance(methods, MutableMapping):
         for method_config in methods.values():
-            if isinstance(method_config, MutableMapping):
-                for field_name in _ALERT_METHOD_SECRET_FIELDS:
-                    method_config.pop(field_name, None)
+            if not isinstance(method_config, MutableMapping):
+                continue
+            for field_name, value in list(method_config.items()):
+                if isinstance(field_name, str) and _is_vaulted_field(field_name, value):
+                    method_config[field_name] = VAULTED
     return clean
 
 
