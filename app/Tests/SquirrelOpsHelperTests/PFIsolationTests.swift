@@ -2235,14 +2235,9 @@ struct BatchedListenerOwnershipTests {
 
     @Test("A missing listener is reported as missing, by endpoint")
     func missingListenerIsNamed() {
-        let error = #expect(throws: RPCError.self) {
-            try requireSensorOwnedListeners(listeners, serviceUID: 309) { _, _ in
-                CommandResult(status: 0, stdout: "p123\nu309\nf10\nn192.168.1.214:50402\n", stderr: "")
-            }
-        }
-        let text = String(describing: error)
-        #expect(text.contains("192.168.1.216:58449"))
-        #expect(text.contains("no listening socket"))
+        let text = ownershipFailureText(stdout: "p123\nu309\nf10\nn192.168.1.214:50402\n")
+        #expect(text.contains("192.168.1.216:58449"), "\(text)")
+        #expect(text.contains("no listening socket"), "\(text)")
     }
 
     @Test("A foreign owner, a wrong bind, and a second pid are each named")
@@ -2253,14 +2248,27 @@ struct BatchedListenerOwnershipTests {
             ("p123\nu309\nf10\nn192.168.1.214:50402\np124\nu309\nf11\nn192.168.1.214:50402\nf12\nn192.168.1.216:58449\n", "2 processes"),
         ]
         for (stdout, expected) in cases {
-            let error = #expect(throws: RPCError.self) {
-                try requireSensorOwnedListeners(listeners, serviceUID: 309) { _, _ in
-                    CommandResult(status: 0, stdout: stdout, stderr: "")
-                }
-            }
-            let text = String(describing: error)
+            let text = ownershipFailureText(stdout: stdout)
             #expect(text.contains("192.168.1.214:50402"), "\(text)")
             #expect(text.contains(expected), "\(text)")
+        }
+    }
+
+    /// Runs the batched check against canned lsof output and returns the
+    /// RPCError text. Captured with do/catch rather than the value of
+    /// `#expect(throws:)`, which is Void on the Swift 6.0 toolchain CI pins.
+    private func ownershipFailureText(stdout: String) -> String {
+        do {
+            try requireSensorOwnedListeners(listeners, serviceUID: 309) { _, _ in
+                CommandResult(status: 0, stdout: stdout, stderr: "")
+            }
+            Issue.record("Expected the listener ownership check to fail")
+            return ""
+        } catch let error as RPCError {
+            return String(describing: error)
+        } catch {
+            Issue.record("Expected an RPCError, got \(type(of: error))")
+            return ""
         }
     }
 
