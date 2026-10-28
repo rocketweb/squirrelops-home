@@ -110,3 +110,19 @@ def test_relay_listeners_queue_a_full_burst_before_accept() -> None:
             f"listener {port} must queue {ceiling} pending connects; a burst "
             "larger than the default backlog is reset by the guest kernel"
         )
+
+
+def test_init_takes_the_project_story_from_the_persona_control_file() -> None:
+    """The project slug, product, and branch are drawn per install (#88).
+
+    init must not know any of them. It reads them from persona.json, which
+    the archive builder writes, and validates their shape before using them.
+    """
+    init = _read("sbin/init")
+    for literal in ("fieldkit", "FieldKit", "release/2.8"):
+        assert literal not in init, f"init bakes in {literal!r}; the persona decides that"
+    for field in ("project_slug", "project_product", "release_branch", "project_name"):
+        assert f"jq -r '.{field}'" in init, f"init must read {field} from persona.json"
+    # The slug becomes a path, the product a filename, the branch a git ref:
+    # each is checked against a tight shape before it touches the shell.
+    assert 'fail "persona project"' in init
