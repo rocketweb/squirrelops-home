@@ -371,16 +371,14 @@ func registerMethods(router: RPCRouter) {
                     "Sensor service account is unavailable or changed"
                 )
             }
-            for listener in backendListeners {
-                try requireSensorOwnedListener(
-                    listener,
-                    serviceUID: sensorUID
-                ) { executable, arguments in
-                    try runCommand(
-                        executable: executable,
-                        arguments: arguments
-                    )
-                }
+            try requireSensorOwnedListeners(
+                backendListeners,
+                serviceUID: sensorUID
+            ) { executable, arguments in
+                try runCommand(
+                    executable: executable,
+                    arguments: arguments
+                )
             }
         }
 
@@ -432,16 +430,14 @@ func registerMethods(router: RPCRouter) {
                         "Sensor service account disappeared or changed"
                     )
                 }
-                for listener in backendListeners {
-                    try requireSensorOwnedListener(
-                        listener,
-                        serviceUID: sensorUID
-                    ) { executable, arguments in
-                        try runCommand(
-                            executable: executable,
-                            arguments: arguments
-                        )
-                    }
+                try requireSensorOwnedListeners(
+                    backendListeners,
+                    serviceUID: sensorUID
+                ) { executable, arguments in
+                    try runCommand(
+                        executable: executable,
+                        arguments: arguments
+                    )
                 }
             } catch {
                 try quarantinePortForwardingAfterListenerRace(
@@ -1498,34 +1494,64 @@ func requireSensorOwnedListener(
     serviceUID: uid_t,
     run: (String, [String]) throws -> CommandResult
 ) throws {
-    let result = try run(
-        "/usr/sbin/lsof",
-        [
-            "-n",
-            "-P",
-            "-l",
-            "-a",
-            "-iTCP:\(listener.port)",
-            "-sTCP:LISTEN",
-            "-Fpun",
-        ]
-    )
-    guard result.status == 0,
+    try requireSensorOwnedListeners([listener], serviceUID: serviceUID, run: run)
+}
+
+/// Verify every backend listener with one lsof pass.
+///
+/// A fleet-wide anchor load names every mimic's listeners, and lsof walks every
+/// process on the machine per invocation. One invocation per listener, twice
+/// per load, is what let a 30-second RPC time out behind a long ARP scan and
+/// then reported the torn-down listener as a wrong-owner bind. One invocation
+/// covers all ports; the records are grouped by port and each listener is
+/// judged on its own, with the failure naming the endpoint and the reason.
+func requireSensorOwnedListeners(
+    _ listeners: [PFBackendListener],
+    serviceUID: uid_t,
+    run: (String, [String]) throws -> CommandResult
+) throws {
+    if listeners.isEmpty { return }
+    var arguments = ["-n", "-P", "-l", "-a"]
+    for port in Set(listeners.map(\.port)).sorted() {
+        arguments.append("-iTCP:\(port)")
+    }
+    arguments.append(contentsOf: ["-sTCP:LISTEN", "-Fpun"])
+    let result = try run("/usr/sbin/lsof", arguments)
+    // lsof exits 1 when a selection matches nothing; that is a missing
+    // listener, judged per endpoint below, not a failure to run lsof.
+    guard result.status == 0 || result.status == 1,
           result.stderr.utf8.count <= maximumLSOFOutputBytes else {
         throw RPCError.internalError(
             "Could not verify mimic backend listener ownership"
         )
     }
     let records = try parseLSOFListeners(result.stdout)
-    let expectedEndpoint = "\(listener.ip):\(listener.port)"
-    guard !records.isEmpty,
-          records.allSatisfy({
-              $0.uid == serviceUID && $0.endpoint == expectedEndpoint
-          }),
-          Set(records.map(\.pid)).count == 1 else {
-        throw RPCError.internalError(
-            "Mimic backend listener is not an exact sensor-owned VIP bind"
-        )
+
+    for listener in listeners {
+        let expectedEndpoint = "\(listener.ip):\(listener.port)"
+        let suffix = ":\(listener.port)"
+        let matching = records.filter { $0.endpoint.hasSuffix(suffix) }
+        if matching.isEmpty {
+            throw RPCError.internalError(
+                "Mimic backend listener \(expectedEndpoint) has no listening socket"
+            )
+        }
+        if let foreign = matching.first(where: { $0.uid != serviceUID }) {
+            throw RPCError.internalError(
+                "Mimic backend listener \(expectedEndpoint) is owned by uid \(foreign.uid), not the sensor"
+            )
+        }
+        if let misbound = matching.first(where: { $0.endpoint != expectedEndpoint }) {
+            throw RPCError.internalError(
+                "Mimic backend listener \(expectedEndpoint) is bound to \(misbound.endpoint), not the exact VIP"
+            )
+        }
+        let pids = Set(matching.map(\.pid))
+        if pids.count != 1 {
+            throw RPCError.internalError(
+                "Mimic backend listener \(expectedEndpoint) is held by \(pids.count) processes, not one"
+            )
+        }
     }
 }
 

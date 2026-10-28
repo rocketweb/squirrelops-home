@@ -966,3 +966,34 @@ class TestMacOSPrivilegedOpsTimeout:
             await server.wait_closed()
             if os.path.exists(sock_path):
                 os.unlink(sock_path)
+
+
+class TestMacOSPortForwardTimeout:
+    """Port-forward RPCs are the helper's slowest calls and must outlast a scan.
+
+    The helper is single-threaded and verifies every backend listener with
+    lsof before and after loading the PF anchor, queued behind whatever ARP
+    scan is in flight. A 30 s default timed out in the field; the sensor then
+    rolled the mimic back while the helper was still verifying it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_setup_and_clear_use_the_long_timeout(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from squirrelops_home_sensor.privileged.xpc import (
+            PORT_FORWARD_RPC_TIMEOUT,
+            MacOSPrivilegedOps,
+        )
+
+        ops = MacOSPrivilegedOps.__new__(MacOSPrivilegedOps)
+        ops._call = AsyncMock(return_value={"success": True, "rules_count": 3})  # type: ignore[method-assign]
+
+        assert await ops.setup_port_forwards(
+            [{"from_ip": "192.168.1.200", "from_port": 80, "to_ip": "192.168.1.200", "to_port": 50080}]
+        )
+        assert await ops.clear_port_forwards()
+
+        assert PORT_FORWARD_RPC_TIMEOUT >= 120.0
+        for call in ops._call.await_args_list:
+            assert call.kwargs.get("timeout") == PORT_FORWARD_RPC_TIMEOUT, call

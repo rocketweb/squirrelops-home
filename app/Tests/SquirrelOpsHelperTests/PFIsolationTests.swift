@@ -2208,3 +2208,67 @@ struct PFIsolationTests {
         return cache
     }
 }
+
+@Suite("Batched listener ownership")
+struct BatchedListenerOwnershipTests {
+    private let listeners = [
+        PFBackendListener(ip: "192.168.1.214", port: 50402),
+        PFBackendListener(ip: "192.168.1.216", port: 58449),
+    ]
+
+    @Test("One lsof invocation covers every backend listener")
+    func oneInvocationForAllListeners() throws {
+        var calls = 0
+        try requireSensorOwnedListeners(listeners, serviceUID: 309) { executable, arguments in
+            calls += 1
+            #expect(executable == "/usr/sbin/lsof")
+            #expect(arguments.contains("-iTCP:50402") && arguments.contains("-iTCP:58449"))
+            #expect(arguments.contains("-sTCP:LISTEN"))
+            return CommandResult(
+                status: 0,
+                stdout: "p123\nu309\nf10\nn192.168.1.214:50402\nf11\nn192.168.1.216:58449\n",
+                stderr: ""
+            )
+        }
+        #expect(calls == 1, "a fleet-wide PF load must not scan every process once per listener")
+    }
+
+    @Test("A missing listener is reported as missing, by endpoint")
+    func missingListenerIsNamed() {
+        let error = #expect(throws: RPCError.self) {
+            try requireSensorOwnedListeners(listeners, serviceUID: 309) { _, _ in
+                CommandResult(status: 0, stdout: "p123\nu309\nf10\nn192.168.1.214:50402\n", stderr: "")
+            }
+        }
+        let text = String(describing: error)
+        #expect(text.contains("192.168.1.216:58449"))
+        #expect(text.contains("no listening socket"))
+    }
+
+    @Test("A foreign owner, a wrong bind, and a second pid are each named")
+    func failureKindsAreDistinct() {
+        let cases: [(String, String)] = [
+            ("p123\nu0\nf10\nn192.168.1.214:50402\nf11\nn192.168.1.216:58449\n", "owned by uid 0"),
+            ("p123\nu309\nf10\nn*:50402\nf11\nn192.168.1.216:58449\n", "bound to *:50402"),
+            ("p123\nu309\nf10\nn192.168.1.214:50402\np124\nu309\nf11\nn192.168.1.214:50402\nf12\nn192.168.1.216:58449\n", "2 processes"),
+        ]
+        for (stdout, expected) in cases {
+            let error = #expect(throws: RPCError.self) {
+                try requireSensorOwnedListeners(listeners, serviceUID: 309) { _, _ in
+                    CommandResult(status: 0, stdout: stdout, stderr: "")
+                }
+            }
+            let text = String(describing: error)
+            #expect(text.contains("192.168.1.214:50402"), "\(text)")
+            #expect(text.contains(expected), "\(text)")
+        }
+    }
+
+    @Test("The single-listener check is the batched check with one entry")
+    func singleListenerDelegates() throws {
+        try requireSensorOwnedListener(listeners[0], serviceUID: 309) { _, arguments in
+            #expect(arguments.filter { $0.hasPrefix("-iTCP:") } == ["-iTCP:50402"])
+            return CommandResult(status: 0, stdout: "p123\nu309\nf10\nn192.168.1.214:50402\n", stderr: "")
+        }
+    }
+}
