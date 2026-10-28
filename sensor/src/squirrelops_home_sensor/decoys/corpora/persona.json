@@ -1,0 +1,183 @@
+{
+  "projects": [
+    {
+      "name": "FieldKit iOS",
+      "slug": "fieldkit-ios",
+      "product": "FieldKit",
+      "description": "Internal iOS field-service client"
+    },
+    {
+      "name": "Dispatch iOS",
+      "slug": "dispatch-ios",
+      "product": "Dispatch",
+      "description": "Internal iOS dispatch console"
+    },
+    {
+      "name": "Ledgerline iOS",
+      "slug": "ledgerline-ios",
+      "product": "Ledgerline",
+      "description": "Internal iOS invoicing companion"
+    },
+    {
+      "name": "Waypoint iOS",
+      "slug": "waypoint-ios",
+      "product": "Waypoint",
+      "description": "Internal iOS route planning client"
+    },
+    {
+      "name": "Crewboard iOS",
+      "slug": "crewboard-ios",
+      "product": "Crewboard",
+      "description": "Internal iOS crew scheduling app"
+    },
+    {
+      "name": "Sitecheck iOS",
+      "slug": "sitecheck-ios",
+      "product": "Sitecheck",
+      "description": "Internal iOS site inspection client"
+    },
+    {
+      "name": "Rangefinder iOS",
+      "slug": "rangefinder-ios",
+      "product": "Rangefinder",
+      "description": "Internal iOS asset survey tool"
+    },
+    {
+      "name": "Helm iOS",
+      "slug": "helm-ios",
+      "product": "Helm",
+      "description": "Internal iOS operations dashboard"
+    }
+  ],
+  "mcp_servers": [
+    "studio-build-tools",
+    "build-runner-tools",
+    "release-desk",
+    "xcode-lane-tools",
+    "studio-ops",
+    "fastlane-bridge"
+  ],
+  "mcp_server_versions": [
+    "0.9.7",
+    "0.8.2",
+    "1.0.3",
+    "1.1.0",
+    "0.12.1"
+  ],
+  "ollama_versions": [
+    "0.9.7",
+    "0.10.1",
+    "0.11.4",
+    "0.12.3"
+  ],
+  "tool_name_sets": [
+    {
+      "list_projects": "list_projects",
+      "read_runbook": "read_runbook",
+      "get_deployment": "get_deployment",
+      "search_secrets": "search_secrets"
+    },
+    {
+      "list_projects": "projects_list",
+      "read_runbook": "read_release_notes",
+      "get_deployment": "deployment_status",
+      "search_secrets": "find_config_value"
+    },
+    {
+      "list_projects": "list_workspaces",
+      "read_runbook": "read_recovery_notes",
+      "get_deployment": "last_deployment",
+      "search_secrets": "grep_env"
+    },
+    {
+      "list_projects": "list_targets",
+      "read_runbook": "read_playbook",
+      "get_deployment": "deployment_state",
+      "search_secrets": "lookup_secret"
+    },
+    {
+      "list_projects": "show_projects",
+      "read_runbook": "read_runbook",
+      "get_deployment": "get_release",
+      "search_secrets": "search_config"
+    }
+  ],
+  "coder_models": [
+    {
+      "name": "{product}-coder:14b",
+      "family": "qwen3",
+      "parameter_size": "14.8B",
+      "size": 9324818432
+    },
+    {
+      "name": "qwen2.5-coder:14b",
+      "family": "qwen2",
+      "parameter_size": "14.8B",
+      "size": 8988124288
+    },
+    {
+      "name": "deepseek-coder-v2:16b",
+      "family": "deepseek2",
+      "parameter_size": "15.7B",
+      "size": 8905129472
+    },
+    {
+      "name": "codellama:13b",
+      "family": "llama",
+      "parameter_size": "13B",
+      "size": 7365960935
+    },
+    {
+      "name": "qwen3:14b",
+      "family": "qwen3",
+      "parameter_size": "14.8B",
+      "size": 9276240338
+    }
+  ],
+  "helper_models": [
+    {
+      "name": "release-notes:latest",
+      "family": "llama",
+      "parameter_size": "8.0B",
+      "size": 4791312384
+    },
+    {
+      "name": "llama3.1:8b",
+      "family": "llama",
+      "parameter_size": "8.0B",
+      "size": 4661224676
+    },
+    {
+      "name": "gemma3:12b",
+      "family": "gemma3",
+      "parameter_size": "12.2B",
+      "size": 8149190253
+    },
+    {
+      "name": "mistral:7b",
+      "family": "llama",
+      "parameter_size": "7.2B",
+      "size": 4113301824
+    }
+  ],
+  "ticket_prefixes": [
+    "ENG",
+    "MOB",
+    "IOS",
+    "REL",
+    "BUILD",
+    "APP"
+  ],
+  "password_words": [
+    "Juniper",
+    "Harbor",
+    "Maple",
+    "Granite",
+    "Sable",
+    "Cobalt",
+    "Willow",
+    "Thistle",
+    "Marigold",
+    "Pewter"
+  ]
+}
