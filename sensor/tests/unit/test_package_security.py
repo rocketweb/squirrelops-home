@@ -438,7 +438,7 @@ def test_helper_pf_records_live_rules_before_post_load_owner_check() -> None:
         source.index('router.handlers["clearPortForwards"]')
     ]
     assert setup.index("recordSuccessfulLiveMutation(") < setup.index(
-        "requireSensorOwnedListener("
+        "requireSensorOwnedListeners("
     )
 
 
@@ -462,7 +462,7 @@ def test_helper_pf_mutations_require_owned_vips_and_sensor_listeners() -> None:
     validate = setup.index("validatePortForwardRequest(")
     build = setup.index("buildPFRules(")
     revalidate = setup.index("revalidatePortForwardOwnership(")
-    listener = setup.index("requireSensorOwnedListener(")
+    listener = setup.index("requireSensorOwnedListeners(")
     network_recheck = setup.index("requireUnchangedPFNetworkContext(")
     final_address_check = setup.index(
         "guard let currentInterfaceAddresses = ipv4InterfaceAddresses()"
@@ -490,7 +490,12 @@ def test_helper_pf_mutations_require_owned_vips_and_sensor_listeners() -> None:
     assert "ownedIPs.isSubset(of: endpointIPs)" in source
     assert '"/usr/sbin/lsof"' in source
     assert '"-sTCP:LISTEN"' in source
-    assert "$0.uid == serviceUID && $0.endpoint == expectedEndpoint" in source
+    # The batched check judges each listener on three conditions, each with
+    # its own failure text: owner, exact endpoint, and a single process.
+    assert "$0.uid != serviceUID" in source
+    assert "$0.endpoint != expectedEndpoint" in source
+    assert "pids.count != 1" in source
+    assert "has no listening socket" in source
     assert "quarantinePortForwardingAfterListenerRace(" in setup
     assert "requireNoLocalIPv4AddressConflicts(" in source
     assert "cleanupPFStates(for: [ip]" in source

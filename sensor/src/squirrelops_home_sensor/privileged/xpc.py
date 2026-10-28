@@ -40,6 +40,14 @@ SERVICE_SCAN_MAX_CONCURRENT = 32
 SERVICE_SCAN_MAX_PROBES = 4096
 
 
+# Port-forward RPCs are the helper's slowest calls: it verifies every backend
+# listener with lsof before and after loading the PF anchor, and it serves
+# requests one at a time, so these calls can queue behind a full ARP scan. The
+# generic 30 s budget timed out in the field and the sensor rolled a healthy
+# mimic back while the helper was still verifying it.
+PORT_FORWARD_RPC_TIMEOUT = 180.0
+
+
 class MacOSPrivilegedOps(PrivilegedOperations):
     """macOS operations, delegating only privileged work to the helper.
 
@@ -339,6 +347,7 @@ class MacOSPrivilegedOps(PrivilegedOperations):
                     "protected_endpoints": protected_endpoints or [],
                     "interface": interface,
                 },
+                timeout=PORT_FORWARD_RPC_TIMEOUT,
             )
             count = result.get("rules_count", 0)
             logger.info("Port forwarding: %d pfctl rules loaded", count)
@@ -350,7 +359,7 @@ class MacOSPrivilegedOps(PrivilegedOperations):
     async def clear_port_forwards(self) -> bool:
         """Delegate pfctl port forward cleanup to the helper."""
         try:
-            result = await self._call("clearPortForwards")
+            result = await self._call("clearPortForwards", timeout=PORT_FORWARD_RPC_TIMEOUT)
             return result.get("success", False)
         except Exception:
             logger.exception("Failed to clear port forwards via helper")
