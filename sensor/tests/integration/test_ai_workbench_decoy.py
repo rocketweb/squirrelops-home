@@ -61,7 +61,7 @@ async def test_serves_openai_model_list_and_ollama_header(decoy, base_url) -> No
 
     assert response.status_code == 200
     assert response.headers["server"] == "Ollama"
-    assert response.json()["data"][0]["id"] == "fieldkit-coder:14b"
+    assert response.json()["data"][0]["id"] == decoy._persona.models[0].name
     assert await decoy.health_check() is True
 
 
@@ -90,7 +90,7 @@ async def test_mcp_tool_call_advances_persisted_campaign(decoy, database, base_u
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
-                "params": {"name": "read_runbook", "arguments": {}},
+                "params": {"name": decoy._persona.tool_name("read_runbook"), "arguments": {}},
             },
         )
 
@@ -135,7 +135,7 @@ async def test_secret_returned_by_tool_is_not_misreported_as_submitted(decoy, ba
                 "id": 4,
                 "method": "tools/call",
                 "params": {
-                    "name": "search_secrets",
+                    "name": decoy._persona.tool_name("search_secrets"),
                     "arguments": {"query": "OPENAI_API_KEY"},
                 },
             },

@@ -22,11 +22,16 @@ def test_persona_is_stable_for_one_installation() -> None:
     assert first == second
     assert first.hostname == "studio-mini.local"
     assert first.username == "buildbot"
-    assert first.primary_project.slug == "fieldkit-ios"
+    assert first.primary_project.slug.endswith("-ios")
+    assert first.primary_project.path == f"/Users/buildbot/Projects/{first.primary_project.slug}"
+    assert first.deployment_name == f"{first.primary_project.slug}-staging"
     assert first.smb_shares == ("Builds", "Engineering", "Time Machine Backups")
 
 
-def test_installations_share_a_story_but_not_planted_credentials() -> None:
+def test_installations_share_the_guest_image_but_not_the_story() -> None:
+    # The guest bakes in hostname, username, and shares. Everything an
+    # attacker reads out of the persona is drawn per install, so two installs
+    # do not present the same project, tools, or credentials.
     first = build_studio_mini_persona(_DEPLOYMENT_SECRET, _CREATED_AT)
     second = build_studio_mini_persona(
         b"another-unit-test-deployment-secret-32b",
@@ -34,24 +39,54 @@ def test_installations_share_a_story_but_not_planted_credentials() -> None:
     )
 
     assert first.hostname == second.hostname
-    assert first.primary_project == second.primary_project
+    assert first.username == second.username
     assert first.login_password != second.login_password
     assert first.openai_api_key != second.openai_api_key
+    assert first.models[0].digest != second.models[0].digest
+
+
+def test_persona_draws_vary_across_installs() -> None:
+    import hashlib
+
+    personas = [
+        build_studio_mini_persona(hashlib.sha256(f"persona-seed-{i}".encode()).digest(), _CREATED_AT)
+        for i in range(16)
+    ]
+    for field in (
+        lambda p: p.primary_project.slug,
+        lambda p: p.mcp_server_name,
+        lambda p: p.mcp_server_version,
+        lambda p: p.ollama_version,
+        lambda p: p.tool_name("search_secrets"),
+        lambda p: p.models[0].name,
+        lambda p: p.ticket_id,
+        lambda p: p.release_branch,
+        lambda p: p.login_password.split("!")[0],
+    ):
+        assert len({field(p) for p in personas}) >= 2
+    for persona in personas:
+        # Tool names stay unique within one persona so dispatch is unambiguous.
+        names = [name for _role, name in persona.mcp_tools]
+        assert len(set(names)) == len(names)
+        assert persona.tool_role(persona.tool_name("read_runbook")) == "read_runbook"
 
 
 def test_guest_seed_and_agent_files_describe_the_same_world() -> None:
     persona = build_studio_mini_persona(_DEPLOYMENT_SECRET, _CREATED_AT)
     files = persona.guest_files()
 
+    slug = persona.primary_project.slug
     assert files["/etc/hostname"] == "studio-mini\n"
     assert persona.primary_project.path in files["/Users/buildbot/.zsh_history"]
     assert persona.primary_project.repository in files[
-        "/Users/buildbot/Projects/fieldkit-ios/.git/config"
+        f"/Users/buildbot/Projects/{slug}/.git/config"
     ]
     assert persona.openai_api_key in files[
-        "/Users/buildbot/Projects/fieldkit-ios/.env.local"
+        f"/Users/buildbot/Projects/{slug}/.env.local"
     ]
-    assert "search_secrets" in files["/Users/buildbot/.cursor/mcp.json"]
+    assert persona.tool_name("search_secrets") in files["/Users/buildbot/.cursor/mcp.json"]
+    assert persona.mcp_server_name in files["/Users/buildbot/.cursor/mcp.json"]
+    assert persona.ticket_id in files["/Users/buildbot/Library/Logs/fastlane/latest.log"]
     assert "Time Machine Backups" in files[
         "/Users/buildbot/Documents/Build Recovery.md"
     ]

@@ -60,57 +60,50 @@ def _model_list(persona: StudioMiniPersona) -> dict[str, Any]:
 
 
 def _ollama_tags(persona: StudioMiniPersona) -> dict[str, Any]:
-    digests = (
-        "77e7c35bc0954e101b146d5406fbb778c4b55b73d18c902160b704dfc9a43aef",
-        "363a2257dc2a3c7c2236468cb30e4f1d9f107bbf35037320764a16514ed36831",
-    )
-    families = ("qwen3", "llama")
-    sizes = (9_324_818_432, 4_791_312_384)
-    parameter_sizes = ("14.8B", "8.0B")
     return {
         "models": [
             {
-                "name": name,
-                "model": name,
+                "name": model.name,
+                "model": model.name,
                 "modified_at": persona.created_at.isoformat().replace("+00:00", "Z"),
-                "size": sizes[index],
-                "digest": digests[index],
+                "size": model.size,
+                "digest": model.digest,
                 "details": {
                     "format": "gguf",
-                    "family": families[index],
-                    "families": [families[index]],
-                    "parameter_size": parameter_sizes[index],
+                    "family": model.family,
+                    "families": [model.family],
+                    "parameter_size": model.parameter_size,
                     "quantization_level": "Q4_K_M",
                 },
             }
-            for index, name in enumerate(persona.model_names)
+            for model in persona.models
         ]
     }
 
 
-def _mcp_tools() -> list[dict[str, Any]]:
+def _mcp_tools(persona: StudioMiniPersona) -> list[dict[str, Any]]:
     empty_schema = {"type": "object", "properties": {}, "additionalProperties": False}
     return [
         {
-            "name": "list_projects",
+            "name": persona.tool_name("list_projects"),
             "title": "List local build projects",
             "description": "List projects indexed by the Studio build runner.",
             "inputSchema": empty_schema,
         },
         {
-            "name": "read_runbook",
+            "name": persona.tool_name("read_runbook"),
             "title": "Read release runbook",
             "description": "Read the current build recovery and release notes.",
             "inputSchema": empty_schema,
         },
         {
-            "name": "get_deployment",
+            "name": persona.tool_name("get_deployment"),
             "title": "Get deployment state",
             "description": "Return the last local deployment record.",
             "inputSchema": empty_schema,
         },
         {
-            "name": "search_secrets",
+            "name": persona.tool_name("search_secrets"),
             "title": "Search local configuration",
             "description": "Search indexed project configuration for a key name.",
             "inputSchema": {
@@ -153,10 +146,13 @@ def _mcp_response(
                 "result": {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "studio-build-tools", "version": "0.9.7"},
+                    "serverInfo": {
+                        "name": persona.mcp_server_name,
+                        "version": persona.mcp_server_version,
+                    },
                     "instructions": (
-                        "Use list_projects before reading the release runbook. "
-                        "The signing rotation is still in progress."
+                        f"Use {persona.tool_name('list_projects')} before reading the "
+                        "release runbook. The signing rotation is still in progress."
                     ),
                 },
             },
@@ -166,7 +162,7 @@ def _mcp_response(
         return ({}, None)
     if method == "tools/list":
         return (
-            {"jsonrpc": "2.0", "id": request_id, "result": {"tools": _mcp_tools()}},
+            {"jsonrpc": "2.0", "id": request_id, "result": {"tools": _mcp_tools(persona)}},
             None,
         )
     if method != "tools/call":
@@ -182,14 +178,15 @@ def _mcp_response(
     params = payload.get("params")
     params = params if isinstance(params, dict) else {}
     name = params.get("name")
+    role = persona.tool_role(name) if isinstance(name, str) else None
     project = persona.primary_project
-    if name == "list_projects":
+    if role == "list_projects":
         text = (
-            f"{project.slug}\t{project.path}\trelease/2.8\t"
+            f"{project.slug}\t{project.path}\t{persona.release_branch}\t"
             f"build {persona.build_number}"
         )
         return (_mcp_text(request_id, text), None)
-    if name == "read_runbook":
+    if role == "read_runbook":
         text = (
             f"Project: {project.path}\n"
             f"Mirror: {persona.git_hostname}\n"
@@ -197,13 +194,13 @@ def _mcp_response(
             "Check Documents/Build Recovery.md before rotating signing material."
         )
         return (_mcp_text(request_id, text), None)
-    if name == "get_deployment":
+    if role == "get_deployment":
         text = (
             f"{persona.deployment_name}: build {persona.build_number}, "
-            "staging healthy, signing rotation pending ENG-284"
+            f"staging healthy, signing rotation pending {persona.ticket_id}"
         )
         return (_mcp_text(request_id, text), None)
-    if name == "search_secrets":
+    if role == "search_secrets":
         arguments = params.get("arguments")
         arguments = arguments if isinstance(arguments, dict) else {}
         query = str(arguments.get("query", ""))[:256]
@@ -220,8 +217,8 @@ def _chat_content(persona: StudioMiniPersona, campaign: CampaignState) -> str:
     if campaign.stage.value >= 3:
         return (
             f"The active workspace is {project.path}. Read the local build recovery "
-            f"note before touching {persona.deployment_name}; signing rotation ENG-284 "
-            "is incomplete."
+            f"note before touching {persona.deployment_name}; signing rotation "
+            f"{persona.ticket_id} is incomplete."
         )
     return (
         f"Build {persona.build_number} for {project.name} completed with one signing "
@@ -339,5 +336,5 @@ def build_agent_response(
         value, exposed = _mcp_response(persona, request.json_body)
         return _json_response(value, credential_exposed=exposed)
     if method == "GET" and path in {"/", "/api/version"}:
-        return _json_response({"version": "0.9.7"})
+        return _json_response({"version": persona.ollama_version})
     return _json_response({"error": "not found"}, status=404)

@@ -57,6 +57,32 @@ persona=/run/squirrelops/persona.json
 [ "$(jq -r '.hostname' "$persona")" = "studio-mini" ] || fail "persona hostname"
 password="$(jq -r '.login_password' "$persona")"
 [ "${#password}" -ge 12 ] || fail "persona password"
+# The project story is drawn per install by the sensor. init owns none of it;
+# it reads the slug (a path), the product (a filename), the display name (a
+# commit message), and the branch (a git ref), each checked against a tight
+# shape before it touches the shell.
+project_slug="$(jq -r '.project_slug' "$persona")"
+project_product="$(jq -r '.project_product' "$persona")"
+project_name="$(jq -r '.project_name' "$persona")"
+release_branch="$(jq -r '.release_branch' "$persona")"
+case "$project_slug" in
+    ''|*[!a-z0-9-]*) fail "persona project" ;;
+esac
+case "$project_product" in
+    ''|*[!A-Za-z0-9]*) fail "persona project" ;;
+esac
+case "$project_name" in
+    ''|*[!A-Za-z0-9\ .-]*) fail "persona project" ;;
+esac
+case "$release_branch" in
+    release/[0-9]*.[0-9]*) ;;
+    *) fail "persona project" ;;
+esac
+[ "${#project_slug}" -le 64 ] && [ "${#project_product}" -le 32 ] \
+    && [ "${#project_name}" -le 64 ] && [ "${#release_branch}" -le 32 ] \
+    || fail "persona project"
+project="/Users/buildbot/Projects/$project_slug"
+[ -f "$project/.env.local" ] || fail "persona project"
 
 hostname studio-mini
 chmod 0755 /Users || fail "macOS users directory"
@@ -67,25 +93,24 @@ find /Users/buildbot -type d -exec chmod 0750 {} +
 find /Users/buildbot -type f -exec chmod 0640 {} +
 chmod 0600 \
     /Users/buildbot/.zsh_history \
-    /Users/buildbot/Projects/fieldkit-ios/.env.local \
+    "$project/.env.local" \
     /Users/buildbot/.cursor/mcp.json \
     /Users/buildbot/.claude/settings.json \
     /Users/buildbot/.codex/config.toml
 
-project=/Users/buildbot/Projects/fieldkit-ios
 mv "$project/.git/config" /run/squirrelops/project.gitconfig
 rm -rf "$project/.git"
-git -C "$project" init -b release/2.8 >/dev/null 2>&1 || fail "git repository"
+git -C "$project" init -b "$release_branch" >/dev/null 2>&1 || fail "git repository"
 cp /run/squirrelops/project.gitconfig "$project/.git/config"
 rm -f /run/squirrelops/project.gitconfig
 git --git-dir="$project/.git" --work-tree="$project" config user.name "Morgan Lee"
 git --git-dir="$project/.git" --work-tree="$project" config user.email "morgan.lee@hawthorn.internal"
 git --git-dir="$project/.git" --work-tree="$project" add \
-    README.md .gitignore FieldKit.xcodeproj Sources fastlane
+    README.md .gitignore "$project_product.xcodeproj" Sources fastlane
 GIT_AUTHOR_DATE='2026-08-29T14:17:00Z' \
 GIT_COMMITTER_DATE='2026-08-29T14:17:00Z' \
     git --git-dir="$project/.git" --work-tree="$project" \
-        commit -m 'Prepare FieldKit 2.8 staging build' >/dev/null 2>&1 \
+        commit -m "Prepare $project_name ${release_branch#release/} staging build" >/dev/null 2>&1 \
     || fail "git commit"
 chown -R buildbot:buildbot "$project"
 
