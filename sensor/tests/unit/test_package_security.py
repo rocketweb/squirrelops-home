@@ -438,7 +438,7 @@ def test_helper_pf_records_live_rules_before_post_load_owner_check() -> None:
         source.index('router.handlers["clearPortForwards"]')
     ]
     assert setup.index("recordSuccessfulLiveMutation(") < setup.index(
-        "requireSensorOwnedListener("
+        "requireSensorOwnedListeners("
     )
 
 
@@ -462,7 +462,7 @@ def test_helper_pf_mutations_require_owned_vips_and_sensor_listeners() -> None:
     validate = setup.index("validatePortForwardRequest(")
     build = setup.index("buildPFRules(")
     revalidate = setup.index("revalidatePortForwardOwnership(")
-    listener = setup.index("requireSensorOwnedListener(")
+    listener = setup.index("requireSensorOwnedListeners(")
     network_recheck = setup.index("requireUnchangedPFNetworkContext(")
     final_address_check = setup.index(
         "guard let currentInterfaceAddresses = ipv4InterfaceAddresses()"
