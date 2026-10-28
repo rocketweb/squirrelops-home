@@ -102,14 +102,14 @@ async def _ssh_command(
     return stdout.decode("utf-8")
 
 
-async def _sftp_round_trip(port: int, password: str, tmp_path: Path) -> None:
+async def _sftp_round_trip(port: int, password: str, tmp_path: Path, persona) -> None:
     upload = tmp_path / "sftp-upload.txt"
     download = tmp_path / "sftp-download.txt"
     project_readme = tmp_path / "fieldkit-readme.md"
     upload.write_text("SquirrelOps live SFTP acceptance\n", encoding="utf-8")
     commands = "\n".join(
         (
-            f'get /Users/buildbot/Projects/fieldkit-ios/README.md "{project_readme}"',
+            f'get {persona.primary_project.path}/README.md "{project_readme}"',
             f'put "{upload}" /Users/buildbot/Builds/squirrelops-acceptance.txt',
             f'get /Users/buildbot/Builds/squirrelops-acceptance.txt "{download}"',
             "rm /Users/buildbot/Builds/squirrelops-acceptance.txt",
@@ -142,14 +142,14 @@ async def _sftp_round_trip(port: int, password: str, tmp_path: Path) -> None:
     )
     assert project_readme.exists(), stdout + stderr
     assert download.exists(), stdout + stderr
-    assert "FieldKit" in project_readme.read_text(encoding="utf-8")
+    assert persona.primary_project.name in project_readme.read_text(encoding="utf-8")
     assert download.read_text(encoding="utf-8") == upload.read_text(encoding="utf-8")
 
 
-def _smb_round_trip(port: int, password: str) -> None:
+def _smb_round_trip(port: int, password: str, persona) -> None:
     server = "127.0.0.1"
     share = rf"\\{server}\Engineering"
-    remote_write = share + r"\fieldkit-ios\squirrelops-acceptance.txt"
+    remote_write = share + "\\" + persona.primary_project.slug + r"\squirrelops-acceptance.txt"
     try:
         smbclient.register_session(
             server,
@@ -158,13 +158,13 @@ def _smb_round_trip(port: int, password: str) -> None:
             port=port,
             auth_protocol="ntlm",
         )
-        assert "fieldkit-ios" in smbclient.listdir(share, port=port)
+        assert persona.primary_project.slug in smbclient.listdir(share, port=port)
         with smbclient.open_file(
-            share + r"\fieldkit-ios\README.md",
+            share + "\\" + persona.primary_project.slug + r"\README.md",
             mode="rb",
             port=port,
         ) as remote_readme:
-            assert b"FieldKit" in remote_readme.read()
+            assert persona.primary_project.name.encode() in remote_readme.read()
         with smbclient.open_file(remote_write, mode="wb", port=port) as remote_file:
             remote_file.write(b"SquirrelOps live SMB acceptance\n")
         with smbclient.open_file(remote_write, mode="rb", port=port) as remote_file:
@@ -318,13 +318,14 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
                 "/Users/buildbot/Projects /Users/buildbot/Builds; "
                 "find /Users/buildbot -maxdepth 5 -type f -print | sort",
             )
-            assert "/Users/buildbot/Projects/fieldkit-ios/README.md" in guest_layout
-            await _sftp_round_trip(ports[22], persona.login_password, tmp_path)
+            assert f"{persona.primary_project.path}/README.md" in guest_layout
+            await _sftp_round_trip(ports[22], persona.login_password, tmp_path, persona)
             smb_response = await _smb2_negotiate(ports[445])
             await asyncio.to_thread(
                 _smb_round_trip,
                 ports[445],
                 persona.login_password,
+                persona,
             )
             # More than the 16-slot admission pool, sequentially: both normal
             # closes and write-side EOF must release their relay ownership.
@@ -373,9 +374,13 @@ async def test_live_guest_serves_file_operations_and_isolates_host(
     checkpoints = [record.getMessage() for record in caplog.records
                    if record.getMessage().startswith("Guest relay checkpoint ")]
     assert 0 < len(checkpoints) <= 513
-    for port in (22, 445):
-        for stage in ("listener_activated", "accepted", "guest_connect_started", "guest_connected"):
-            assert any(f"stage={stage} service={port} " in message for message in checkpoints)
+    missing = [
+        (port, stage)
+        for port in (22, 445)
+        for stage in ("listener_activated", "accepted", "guest_connect_started", "guest_connected")
+        if not any(f"stage={stage} service={port} " in message for message in checkpoints)
+    ]
+    assert missing == [], f"no checkpoint for {missing}; {len(checkpoints)} checkpoints captured"
     assert all(controller._diagnostic_nonce not in message for message in checkpoints)
     assert all(persona.login_password not in message for message in checkpoints)
 

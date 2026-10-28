@@ -1292,10 +1292,20 @@ echo "[postinstall] Privileged helper is available to ${SENSOR_USER}."
 # Step 5: Load the sensor service
 # ---------------------------------------------------------------------------
 echo "[postinstall] Loading sensor service..."
-if ! launchctl bootstrap system "$PLIST_DEST" 2>/dev/null; then
-    echo "[postinstall] Failed to bootstrap sensor service." >&2
+# An operator who stopped the sensor with `launchctl disable` or `unload -w`
+# left a disabled override that outlives the plist; launchd refuses to
+# bootstrap a disabled label. Clearing it is a no-op when nothing is disabled.
+if ! launchctl enable "system/${PLIST_NAME}" 2>/dev/null; then
+    echo "[postinstall] Could not clear a disabled override for ${PLIST_NAME}; continuing." >&2
+fi
+BOOTSTRAP_ERR="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/squirrelops-bootstrap.XXXXXX")"
+if ! launchctl bootstrap system "$PLIST_DEST" 2>"$BOOTSTRAP_ERR"; then
+    bootstrap_error="$(/usr/bin/tr -d '\n' < "$BOOTSTRAP_ERR")"
+    /bin/rm -f "$BOOTSTRAP_ERR"
+    echo "[postinstall] Failed to bootstrap sensor service: ${bootstrap_error:-no detail from launchctl}" >&2
     exit 1
 fi
+/bin/rm -f "$BOOTSTRAP_ERR"
 
 # ---------------------------------------------------------------------------
 # Step 6: Prove launchd accepted the sensor and owns its continued startup
