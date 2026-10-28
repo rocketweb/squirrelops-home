@@ -38,11 +38,13 @@ def test_archive_carries_one_coherent_persona_and_real_project_shape() -> None:
         control = json.loads(
             bundle.extractfile("run/squirrelops/persona.json").read().decode("utf-8")
         )
+        slug = persona.primary_project.slug
+        product = persona.primary_project.product
         environment = bundle.extractfile(
-            "Users/buildbot/Projects/fieldkit-ios/.env.local"
+            f"Users/buildbot/Projects/{slug}/.env.local"
         ).read().decode("utf-8")
         project = bundle.extractfile(
-            "Users/buildbot/Projects/fieldkit-ios/FieldKit.xcodeproj/project.pbxproj"
+            f"Users/buildbot/Projects/{slug}/{product}.xcodeproj/project.pbxproj"
         ).read().decode("utf-8")
 
     assert control == {
@@ -50,10 +52,14 @@ def test_archive_carries_one_coherent_persona_and_real_project_shape() -> None:
         "login_password": persona.login_password,
         "persona_id": "studio-mini-v1",
         "username": "buildbot",
+        "project_slug": persona.primary_project.slug,
+        "project_product": persona.primary_project.product,
+        "project_name": persona.primary_project.name,
+        "release_branch": persona.release_branch,
     }
     assert persona.openai_api_key in environment
     assert persona.source_token in environment
-    assert "FieldKit-Staging" in project
+    assert persona.primary_project.scheme in project
 
 
 def test_archive_bytes_are_stable_for_the_same_persona() -> None:

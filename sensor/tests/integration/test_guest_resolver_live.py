@@ -115,7 +115,7 @@ async def test_fresh_guest_smb_handshake_and_local_identity(tmp_path: Path) -> N
         assert identity.startswith("studio-mini\n")
         assert "127.0.0.1 studio-mini.local studio-mini localhost" in identity
         assert identity.endswith("lo\n")
-        await asyncio.to_thread(_smb_round_trip, ports[445], persona.login_password)
+        await asyncio.to_thread(_smb_round_trip, ports[445], persona.login_password, persona)
     finally:
         process = controller._process
         await controller.stop()

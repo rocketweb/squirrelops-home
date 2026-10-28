@@ -574,3 +574,20 @@ def test_local_test_guidance_matches_when_the_opt_in_is_consumed() -> None:
     builder = (REPO_ROOT / "scripts/build-pkg.sh").read_text(encoding="utf-8")
     assert "after a successful helper installation" not in builder
     assert "consumes the opt-in as soon as it accepts it" in builder
+
+
+def test_postinstall_clears_a_disabled_override_and_reports_bootstrap_errors() -> None:
+    """A label disabled by an operator (launchctl disable, unload -w) made every
+    upgrade fail with "Failed to bootstrap sensor service" and nothing else,
+    because the postinstall neither re-enabled the label nor kept launchctl's
+    stderr. Seen on a Mac Studio upgrading 2.1.0 to a local 2.1.2 build.
+    """
+    postinstall = (REPO_ROOT / "scripts/pkg/postinstall").read_text(encoding="utf-8")
+    enable = postinstall.find('launchctl enable "system/${PLIST_NAME}"')
+    bootstrap = postinstall.find('launchctl bootstrap system "$PLIST_DEST"')
+    assert enable != -1, "postinstall must clear a disabled override before bootstrapping"
+    assert bootstrap != -1
+    assert enable < bootstrap, "enable must run before bootstrap"
+    assert 'launchctl bootstrap system "$PLIST_DEST" 2>/dev/null' not in postinstall, (
+        "launchctl's reason for refusing the bootstrap must reach the install log"
+    )

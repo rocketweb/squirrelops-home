@@ -46,6 +46,12 @@ def build_persona_archive(persona: StudioMiniPersona) -> bytes:
             "login_password": persona.login_password,
             "persona_id": persona.persona_id,
             "username": persona.username,
+            # The guest's init builds the project's git history from these;
+            # it owns no project knowledge of its own.
+            "project_slug": persona.primary_project.slug,
+            "project_product": persona.primary_project.product,
+            "project_name": persona.primary_project.name,
+            "release_branch": persona.release_branch,
         },
         separators=(",", ":"),
         sort_keys=True,
