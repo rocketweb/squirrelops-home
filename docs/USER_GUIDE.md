@@ -837,6 +837,11 @@ Shows all deployed fake hosts in a card grid. Each card displays:
 - **Hostname** — The persistent, editable hostname used by all services in the group
 
 Each card has host-level **Remove** and, for stopped hosts, **Restart** buttons.
+A scheduled restart can fail partway, for example when the privileged helper
+times out while loading forwarding rules. The host is then saved as stopped
+with the failure recorded on its rows, every connected dashboard is told at
+once, and the next scout cycle may deploy a replacement host for the same
+device. Restart it here before that cycle to keep its identity.
 Editing the hostname updates every service row sharing the virtual IP and
 persists across sensor restarts. A hostname can be a bare label such as
 `fileserver`, or end in `.local` or `.localdomain`. The suffix is preserved

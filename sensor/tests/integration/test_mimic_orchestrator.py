@@ -2580,3 +2580,91 @@ async def test_remove_previously_hit_mimic_with_foreign_keys_enabled(
     )[0] == 1
     alert = await (await db.execute("SELECT decoy_id FROM home_alerts")).fetchone()
     assert alert["decoy_id"] == 1
+
+
+def _status_events(mimic_setup, decoy_id: int) -> list[str]:
+    """Statuses published for one service row, in publish order."""
+    return [
+        publish.args[1]["status"]
+        for publish in mimic_setup.orchestrator._event_bus.publish.await_args_list
+        if publish.args[0] == "decoy.status_changed"
+        and publish.args[1]["id"] == decoy_id
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_restart_tells_live_clients_the_host_stopped(
+    mimic_setup, db,
+):
+    """A restart that dies after its stop phase must not leave clients on 'active'."""
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    mimic_setup.orchestrator._event_bus.publish.reset_mock()
+    mimic_setup.port_forward.add_forwards.return_value = False
+
+    assert await mimic_setup.orchestrator.restart_mimic(1) is False
+
+    row = await (await db.execute("SELECT status FROM decoys WHERE id = 1")).fetchone()
+    assert row["status"] == "stopped"
+    assert 1 not in mimic_setup.orchestrator._active_mimics
+    statuses = _status_events(mimic_setup, 1)
+    assert statuses, "no status event reached live clients"
+    assert statuses[-1] == "stopped"
+    assert "active" not in statuses
+
+
+@pytest.mark.asyncio
+async def test_failed_restart_is_recorded_as_a_failure_not_an_operator_stop(
+    mimic_setup, db,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    mimic_setup.port_forward.add_forwards.return_value = False
+
+    assert await mimic_setup.orchestrator.restart_mimic(1) is False
+
+    row = await (
+        await db.execute(
+            "SELECT status, failure_count, last_failure_at FROM decoys WHERE id = 1"
+        )
+    ).fetchone()
+    assert row["status"] == "stopped"
+    assert row["failure_count"] == 1
+    assert row["last_failure_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_restart_crash_after_listener_start_is_recorded_as_a_failure(
+    mimic_setup, db,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    mimic_setup.orchestrator._event_bus.publish.reset_mock()
+    mimic_setup.port_forward.add_forwards.side_effect = RuntimeError("helper hung")
+
+    assert await mimic_setup.orchestrator.restart_mimic(1) is False
+
+    row = await (
+        await db.execute(
+            "SELECT status, failure_count FROM decoys WHERE id = 1"
+        )
+    ).fetchone()
+    assert row["status"] == "stopped"
+    assert row["failure_count"] == 1
+    assert _status_events(mimic_setup, 1)[-1] == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_operator_disable_publishes_one_stop_and_records_no_failure(
+    mimic_setup, db,
+):
+    assert await mimic_setup.orchestrator.evaluate_and_deploy() == 1
+    mimic_setup.orchestrator._event_bus.publish.reset_mock()
+
+    assert await mimic_setup.orchestrator.disable_mimic(1) is True
+
+    row = await (
+        await db.execute(
+            "SELECT status, failure_count FROM decoys WHERE id = 1"
+        )
+    ).fetchone()
+    assert row["status"] == "stopped"
+    assert row["failure_count"] == 0
+    assert _status_events(mimic_setup, 1) == ["stopped"]
