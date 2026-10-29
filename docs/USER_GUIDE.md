@@ -491,7 +491,9 @@ Decoys shows startup progress or an actionable diagnostic reason. Normal stopped
 and disabled states stay quiet. Pull down on the list or press **Command-R** to
 reload that evidence; refreshing does not bypass startup checks or restart the guest. An enabled
 host whose startup failed is retried on a later network scan, no more often
-than once per minute. An intentionally stopped host stays stopped.
+than once per minute. An intentionally stopped host stays stopped, and it
+stays listed on Decoys with its host toggle off. Turn the toggle on to publish
+it again; the Decoys tab is the only place a Studio host is enabled.
 
 Restarting or upgrading the sensor preserves the Studio host's saved state.
 Its five services do not count against the separate classic host-listener
