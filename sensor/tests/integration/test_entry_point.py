@@ -8,6 +8,7 @@ database, or a running uvicorn server.
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -332,6 +333,31 @@ def patched(mock_subsystems: dict[str, Any]):
 # ---------------------------------------------------------------------------
 # Startup tests
 # ---------------------------------------------------------------------------
+
+
+def test_deep_decoy_operator_stop_is_reported_as_a_stop(caplog) -> None:
+    from squirrelops_home_sensor.__main__ import _log_deep_decoy_not_started
+
+    with caplog.at_level(logging.INFO, logger="squirrelops_home_sensor"):
+        _log_deep_decoy_not_started({"status": "stopped", "reason": None})
+
+    assert [record.levelname for record in caplog.records] == ["INFO"]
+    assert "stopped by the operator" in caplog.records[0].getMessage()
+    assert "Decoys tab" in caplog.records[0].getMessage()
+
+
+def test_deep_decoy_startup_failure_is_a_warning_with_its_reason(caplog) -> None:
+    from squirrelops_home_sensor.__main__ import _log_deep_decoy_not_started
+
+    with caplog.at_level(logging.INFO, logger="squirrelops_home_sensor"):
+        _log_deep_decoy_not_started(
+            {"status": "degraded", "reason": "Studio virtual IP could not be published."}
+        )
+        _log_deep_decoy_not_started({"status": "degraded", "reason": None})
+
+    assert [record.levelname for record in caplog.records] == ["WARNING", "WARNING"]
+    assert "Studio virtual IP could not be published." in caplog.records[0].getMessage()
+    assert "no reason recorded" in caplog.records[1].getMessage()
 
 
 @pytest.mark.asyncio

@@ -328,6 +328,110 @@ async def test_degraded_host_can_be_stopped_without_retry_resurrecting_it(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_persisted_degraded_host_is_retried_at_startup(tmp_path) -> None:
+    """Only ``stopped`` is operator intent; a saved ``degraded`` host should run."""
+    calls: list[str] = []
+    async with aiosqlite.connect(tmp_path / "degraded.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        first, _ = await _orchestrator(db, calls)
+        assert await first.start() is True
+        await first.stop_all()
+        await db.execute("UPDATE decoys SET status = 'degraded' WHERE decoy_type = 'deep'")
+        await db.commit()
+
+        second, _ = await _orchestrator(db, calls)
+        try:
+            assert await second.start() is True
+            assert calls.count("guest:start") == 2
+            statuses = await (
+                await db.execute("SELECT DISTINCT status FROM decoys WHERE decoy_type = 'deep'")
+            ).fetchall()
+            assert [row[0] for row in statuses] == ["active"]
+        finally:
+            await second.stop_all()
+
+
+class _GuestThatFailsOnce(_Guest):
+    """First boot works, the second raises, later boots work again."""
+
+    boots = 0
+
+    async def start(self) -> dict[int, int]:
+        type(self).boots += 1
+        if type(self).boots == 2:
+            raise RuntimeError("runtime rejected on restart")
+        return await super().start()
+
+
+@pytest.mark.asyncio
+async def test_failed_restart_is_saved_as_degraded_not_as_an_operator_stop(tmp_path) -> None:
+    calls: list[str] = []
+    _GuestThatFailsOnce.boots = 0
+    async with aiosqlite.connect(tmp_path / "restart-fail.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, _ = await _orchestrator(
+            db, calls, guest_factory=lambda **kw: _GuestThatFailsOnce(calls, **kw),
+        )
+        assert await orchestrator.start() is True
+        service_id = int((await (
+            await db.execute("SELECT id FROM decoys WHERE decoy_type = 'deep' AND port = 22")
+        ).fetchone())["id"])
+
+        assert await orchestrator.restart(service_id) is False
+
+        rows = await (await db.execute(
+            "SELECT status, failure_count, last_failure_at FROM decoys WHERE decoy_type = 'deep'"
+        )).fetchall()
+        assert len(rows) == 5
+        assert {row["status"] for row in rows} == {"degraded"}
+        assert {row["failure_count"] for row in rows} == {1}
+        assert all(row["last_failure_at"] for row in rows)
+        assert orchestrator.diagnostics["status"] == "degraded"
+        reason = orchestrator.diagnostics["reason"]
+        assert isinstance(reason, str) and "startup failed" in reason
+
+        # The interrupted restart is retried like any other startup failure.
+        orchestrator._next_retry_at = 0
+        assert await orchestrator.reconcile() is True
+        assert orchestrator.diagnostics["status"] == "active"
+        statuses = await (
+            await db.execute("SELECT DISTINCT status FROM decoys WHERE decoy_type = 'deep'")
+        ).fetchall()
+        assert [row[0] for row in statuses] == ["active"]
+        await orchestrator.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_failed_enable_of_a_stopped_host_keeps_it_stopped(tmp_path) -> None:
+    """Enable has no prior running intent to restore, so its contract is unchanged."""
+    calls: list[str] = []
+    _GuestThatFailsOnce.boots = 0
+    async with aiosqlite.connect(tmp_path / "enable-fail.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, _ = await _orchestrator(
+            db, calls, guest_factory=lambda **kw: _GuestThatFailsOnce(calls, **kw),
+        )
+        assert await orchestrator.start() is True
+        service_id = int((await (
+            await db.execute("SELECT id FROM decoys WHERE decoy_type = 'deep' AND port = 22")
+        ).fetchone())["id"])
+        assert await orchestrator.disable(service_id) is True
+
+        assert await orchestrator.enable(service_id) is False
+
+        statuses = await (
+            await db.execute("SELECT DISTINCT status FROM decoys WHERE decoy_type = 'deep'")
+        ).fetchall()
+        assert [row[0] for row in statuses] == ["stopped"]
+        orchestrator._next_retry_at = 0
+        assert await orchestrator.reconcile() is False
+        assert orchestrator.diagnostics["status"] == "stopped"
+
+
+@pytest.mark.asyncio
 async def test_restart_withdraws_and_reverifies_address_before_republish(tmp_path) -> None:
     calls: list[str] = []
     async with aiosqlite.connect(tmp_path / "deep.db") as db:

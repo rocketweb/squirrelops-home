@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json as json_mod
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,7 +13,27 @@ from pydantic import BaseModel
 from squirrelops_home_sensor.api.deps import get_db, verify_client_cert
 from squirrelops_home_sensor.api.routes_scouts import get_mimic_orchestrator
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/decoys", tags=["decoys"])
+
+
+def _audit_lifecycle_action(
+    action: str, row: Any, succeeded: bool, auth: dict[str, Any],
+) -> None:
+    """Leave a value-free trail of who changed a decoy's run state."""
+    logger.info(
+        "Decoy %s %s by %s (%s): %s '%s' (id=%d) on %s:%s",
+        action,
+        "succeeded" if succeeded else "failed",
+        str(auth.get("client_name") or "unknown"),
+        str(auth.get("fingerprint") or "unknown"),
+        row["decoy_type"],
+        row["name"],
+        int(row["id"]),
+        row["bind_address"],
+        row["port"],
+    )
 
 
 # ---------- Dependency stubs ----------
@@ -252,7 +273,7 @@ async def restart_decoy(
     orchestrator=Depends(get_decoy_orchestrator),
     mimic_orchestrator=Depends(get_mimic_orchestrator),
     deep_orchestrator=Depends(get_deep_decoy_orchestrator),
-    _auth: dict = Depends(verify_client_cert),
+    auth: dict = Depends(verify_client_cert),
 ):
     """Restart the live listener and report failure instead of faking state."""
     existing = await _get_decoy_or_404(db, decoy_id)
@@ -278,6 +299,7 @@ async def restart_decoy(
             )
         succeeded = await orchestrator.restart_decoy(decoy_id)
 
+    _audit_lifecycle_action("restart", existing, succeeded, auth)
     if not succeeded:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -295,7 +317,7 @@ async def enable_decoy(
     orchestrator=Depends(get_decoy_orchestrator),
     mimic_orchestrator=Depends(get_mimic_orchestrator),
     deep_orchestrator=Depends(get_deep_decoy_orchestrator),
-    _auth: dict = Depends(verify_client_cert),
+    auth: dict = Depends(verify_client_cert),
 ):
     """Start a stopped decoy and only mark it active after it is reachable."""
     existing = await _get_decoy_or_404(db, decoy_id)
@@ -321,6 +343,7 @@ async def enable_decoy(
             )
         succeeded = await orchestrator.enable_decoy(decoy_id)
 
+    _audit_lifecycle_action("enable", existing, succeeded, auth)
     if not succeeded:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -338,7 +361,7 @@ async def disable_decoy(
     orchestrator=Depends(get_decoy_orchestrator),
     mimic_orchestrator=Depends(get_mimic_orchestrator),
     deep_orchestrator=Depends(get_deep_decoy_orchestrator),
-    _auth: dict = Depends(verify_client_cert),
+    auth: dict = Depends(verify_client_cert),
 ):
     """Stop the live listener before reporting the decoy as stopped."""
     existing = await _get_decoy_or_404(db, decoy_id)
@@ -364,6 +387,7 @@ async def disable_decoy(
             )
         succeeded = await orchestrator.disable_decoy(decoy_id)
 
+    _audit_lifecycle_action("disable", existing, succeeded, auth)
     if not succeeded:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
