@@ -491,9 +491,18 @@ Decoys shows startup progress or an actionable diagnostic reason. Normal stopped
 and disabled states stay quiet. Pull down on the list or press **Command-R** to
 reload that evidence; refreshing does not bypass startup checks or restart the guest. An enabled
 host whose startup failed is retried on a later network scan, no more often
-than once per minute. An intentionally stopped host stays stopped, and it
-stays listed on Decoys with its host toggle off. Turn the toggle on to publish
-it again; the Decoys tab is the only place a Studio host is enabled.
+than once per minute. An intentionally stopped host stays stopped, and the
+sensor startup log says so: "Studio Mini deep decoy is stopped by the operator;
+enable it from the Decoys tab to publish it". A stopped host stays listed on
+Decoys with its host toggle off; turn the toggle on to publish it again, since
+the Decoys tab is the only place a Studio host is enabled. A startup failure is
+logged as a warning that carries the reason shown on the Degraded badge.
+
+A Restart that stops the host but fails to bring it back saves the host as
+Degraded with the failure recorded, not as stopped. It is retried like any
+other startup failure, so an interrupted restart never turns into a silent
+stop across sensor restarts. Every enable, disable, and restart is written to
+the sensor log with the paired client that requested it and the outcome.
 
 Restarting or upgrading the sensor preserves the Studio host's saved state.
 Its five services do not count against the separate classic host-listener
@@ -839,6 +848,11 @@ Shows all deployed fake hosts in a card grid. Each card displays:
 - **Hostname** — The persistent, editable hostname used by all services in the group
 
 Each card has host-level **Remove** and, for stopped hosts, **Restart** buttons.
+A scheduled restart can fail partway, for example when the privileged helper
+times out while loading forwarding rules. The host is then saved as stopped
+with the failure recorded on its rows, every connected dashboard is told at
+once, and the next scout cycle may deploy a replacement host for the same
+device. Restart it here before that cycle to keep its identity.
 Editing the hostname updates every service row sharing the virtual IP and
 persists across sensor restarts. A hostname can be a bare label such as
 `fileserver`, or end in `.local` or `.localdomain`. The suffix is preserved

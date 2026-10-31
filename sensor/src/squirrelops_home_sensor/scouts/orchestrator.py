@@ -1653,7 +1653,13 @@ class MimicOrchestrator:
             )
 
     async def _set_mimic_status(self, decoy_id: int, status: str) -> None:
-        """Persist the best-known mimic runtime state."""
+        """Persist the best-known mimic runtime state and tell live clients.
+
+        Every persisted change is published. A failure path that only wrote
+        the row left WebSocket clients showing the last status they were
+        told, so a host whose restart died stayed "active" on the dashboard
+        with no alias, no listener, and no packet-filter rules behind it.
+        """
         now = datetime.now(UTC).isoformat()
         await self._db.execute(
             """UPDATE decoys
@@ -1665,6 +1671,38 @@ class MimicOrchestrator:
                )
                AND retired_at IS NULL""",
             (status, now, decoy_id, decoy_id),
+        )
+        await self._db.commit()
+        try:
+            await self._publish_group_status(decoy_id, status)
+        except Exception:
+            logger.exception(
+                "Mimic %d is %s but its grouped status event failed",
+                decoy_id,
+                status,
+            )
+
+    async def _record_mimic_restart_failure(self, decoy_id: int) -> None:
+        """Mark a host whose restart failed so it does not read as an operator stop.
+
+        The fleet heals by replacement: the stopped host's source device is
+        eligible for a fresh mimic on the next scout cycle, and startup retires
+        the stopped row after verified cleanup. The failure columns are what
+        distinguish that outcome from a deliberate disable in the saved state.
+        """
+        now = datetime.now(UTC).isoformat()
+        await self._db.execute(
+            """UPDATE decoys
+               SET failure_count = failure_count + 1,
+                   last_failure_at = ?,
+                   updated_at = ?
+               WHERE (
+                   id = ? OR host_id = (
+                       SELECT host_id FROM decoys WHERE id = ?
+                   )
+               )
+               AND retired_at IS NULL""",
+            (now, now, decoy_id, decoy_id),
         )
         await self._db.commit()
 
@@ -3112,7 +3150,9 @@ class MimicOrchestrator:
             )
             if not isolated:
                 logger.error(
-                    "Network isolation setup failed while restarting mimic %d",
+                    "Network isolation setup failed while restarting mimic %d; "
+                    "saving it as stopped with the failure recorded, so the "
+                    "next scout cycle may deploy a replacement host",
                     decoy_id,
                 )
                 await self._deactivate_failed_mimic(
@@ -3120,6 +3160,7 @@ class MimicOrchestrator:
                     bind_address=bind_address,
                     mimic=mimic,
                 )
+                await self._record_mimic_restart_failure(decoy_id)
                 return False
 
             # Resolve and install the mapping first. This awaits a DB query,
@@ -3191,12 +3232,18 @@ class MimicOrchestrator:
         except HelperUnavailableError:
             raise
         except Exception:
-            logger.exception("Failed to restart mimic decoy %d", decoy_id)
+            logger.exception(
+                "Failed to restart mimic decoy %d; saving it as stopped with "
+                "the failure recorded, so the next scout cycle may deploy a "
+                "replacement host",
+                decoy_id,
+            )
             await self._deactivate_failed_mimic(
                 decoy_id=decoy_id,
                 bind_address=bind_address,
                 mimic=mimic,
             )
+            await self._record_mimic_restart_failure(decoy_id)
             return False
 
     @_serialized_lifecycle
@@ -3250,20 +3297,12 @@ class MimicOrchestrator:
             return False
 
         mimic = self._active_mimics.get(decoy_id)
-        disabled = await self._deactivate_failed_mimic(
+        # Persisting the stop publishes the grouped status event.
+        return await self._deactivate_failed_mimic(
             decoy_id=decoy_id,
             bind_address=row["bind_address"],
             mimic=mimic,
         )
-        if disabled:
-            try:
-                await self._publish_group_status(decoy_id, "stopped")
-            except Exception:
-                logger.exception(
-                    "Mimic %d stopped but its grouped status event failed",
-                    decoy_id,
-                )
-        return disabled
 
     @_serialized_lifecycle
     async def handle_ip_conflict(self, ip: str) -> bool:
