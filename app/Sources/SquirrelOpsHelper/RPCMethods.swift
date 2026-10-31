@@ -10,6 +10,10 @@ func registerMethods(router: RPCRouter) {
     // after a helper restart the first ruleset update cleans every endpoint.
     var pfEndpointStateCache = PFEndpointStateCache()
     let virtualIPOwnership = VirtualIPOwnershipStore()
+    // Names the last anchor load this helper applied, as the sensor named
+    // it. A sensor whose load timed out asks for it to learn whether the
+    // load landed after it gave up, instead of guessing and reloading.
+    let portForwardGenerations = PortForwardGenerationLedger()
 
     router.handlers["ping"] = { _ in
         [
@@ -19,8 +23,14 @@ func registerMethods(router: RPCRouter) {
                 "arp_scan",
                 "virtual_ip",
                 "port_forward_isolation",
+                "port_forward_generation",
             ],
         ]
+    }
+
+    router.handlers["getPortForwardGeneration"] = { _ in
+        let generation: Any = portForwardGenerations.applied?.payload ?? NSNull()
+        return ["generation": generation]
     }
 
     router.handlers["getLocalInterfaceMACs"] = { _ in
@@ -258,6 +268,7 @@ func registerMethods(router: RPCRouter) {
         guard let rules = params["rules"] as? [[String: Any]] else {
             throw RPCError.internalError("Missing 'rules' parameter")
         }
+        let generation = try PortForwardGeneration.parse(params["generation"])
         let protectedEndpoints =
             (params["protected_endpoints"] as? [[String: Any]]) ?? []
         let interface = (params["interface"] as? String) ?? "en0"
@@ -327,6 +338,7 @@ func registerMethods(router: RPCRouter) {
                 endpointSignatures,
                 cleanupIPs: stateCleanupIPs
             )
+            portForwardGenerations.recordApplied(generation)
             try cleanupPFStates(for: stateCleanupIPs) { arguments, input in
                 try runPFCTL(arguments: arguments, input: input)
             }
@@ -459,6 +471,11 @@ func registerMethods(router: RPCRouter) {
         // Existing states are evaluated before new filter rules.  Kill only
         // endpoint states whose redirect/direct-port contract changed. The
         // first call after helper startup still cleans every endpoint.
+        // Only a load that passed every post-load check counts as applied.
+        // After a listener-ownership failure the anchor holds the quarantine
+        // ruleset, which matches no named generation, so the ledger keeps
+        // the previous name and the sensor reloads its restored state.
+        portForwardGenerations.recordApplied(generation)
         try cleanupPFStates(for: stateCleanupIPs) { arguments, input in
             try runPFCTL(arguments: arguments, input: input)
         }
@@ -471,7 +488,8 @@ func registerMethods(router: RPCRouter) {
         ]
     }
 
-    router.handlers["clearPortForwards"] = { _ in
+    router.handlers["clearPortForwards"] = { params in
+        let generation = try PortForwardGeneration.parse(params["generation"])
         guard try virtualIPOwnership.allEntries().isEmpty else {
             throw RPCError.internalError(
                 "Cannot clear PF while helper-owned aliases exist"
@@ -490,6 +508,7 @@ func registerMethods(router: RPCRouter) {
             [:],
             cleanupIPs: stateCleanupIPs
         )
+        portForwardGenerations.recordApplied(generation)
         try cleanupPFStates(for: stateCleanupIPs) { arguments, input in
             try runPFCTL(arguments: arguments, input: input)
         }
@@ -1779,6 +1798,53 @@ func pfStateCleanupIPs(
 /// The live signatures change as soon as an anchor load or flush succeeds,
 /// even if its subsequent state cleanup fails. Pending cleanup IPs remain
 /// required across later ruleset changes until one cleanup fully succeeds.
+/// The sensor's name for one anchor load: a per-process nonce and a
+/// sequence number. The helper stores the name of the last load it applied
+/// so a sensor whose request timed out can ask what became of it.
+struct PortForwardGeneration: Equatable {
+    static let maxNonceLength = 64
+
+    let nonce: String
+    let sequence: Int
+
+    /// Parses the optional `generation` parameter. Absent or null is nil;
+    /// anything else must be well formed, and is rejected before any PF
+    /// mutation so a malformed name never rides along with a live change.
+    static func parse(_ raw: Any?) throws -> PortForwardGeneration? {
+        guard let raw, !(raw is NSNull) else {
+            return nil
+        }
+        guard let dictionary = raw as? [String: Any],
+              let nonce = dictionary["nonce"] as? String,
+              nonce.range(
+                  of: "^[A-Za-z0-9_-]{1,\(maxNonceLength)}$",
+                  options: .regularExpression
+              ) != nil,
+              let number = dictionary["sequence"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let sequence = dictionary["sequence"] as? Int,
+              sequence >= 0
+        else {
+            throw RPCError.internalError("Malformed port-forward generation")
+        }
+        return PortForwardGeneration(nonce: nonce, sequence: sequence)
+    }
+
+    var payload: [String: Any] {
+        ["nonce": nonce, "sequence": sequence]
+    }
+}
+
+/// Process-local record of the last applied load's name. Serialized with
+/// every PF mutation by the helper's one-at-a-time accept loop.
+final class PortForwardGenerationLedger {
+    private(set) var applied: PortForwardGeneration?
+
+    func recordApplied(_ generation: PortForwardGeneration?) {
+        applied = generation
+    }
+}
+
 struct PFEndpointStateCache {
     private var live:
         [String: PFEndpointStateSignature]?
