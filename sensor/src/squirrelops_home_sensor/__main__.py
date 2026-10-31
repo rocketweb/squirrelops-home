@@ -799,6 +799,21 @@ class _OrchestratorWrapper:
         await self._orchestrator.stop_all()
 
 
+def _log_deep_decoy_not_started(diagnostics: dict[str, str | None]) -> None:
+    """Tell the operator whether Studio is stopped on purpose or failed to start."""
+    if diagnostics.get("status") == "stopped":
+        logger.info(
+            "Studio Mini deep decoy is stopped by the operator; enable it from "
+            "the Decoys tab to publish it"
+        )
+        return
+    logger.warning(
+        "Studio Mini deep decoy is unavailable; no real-protocol ports were "
+        "published. Reason: %s",
+        diagnostics.get("reason") or "no reason recorded",
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI argument parsing
 # ---------------------------------------------------------------------------
@@ -1480,10 +1495,7 @@ async def run_sensor(
                 runtime.deep_start_attempted = True
                 deep_started = await deep_orchestrator.start()
                 if not deep_started:
-                    logger.warning(
-                        "Studio Mini deep decoy is unavailable; no real-protocol "
-                        "ports were published"
-                    )
+                    _log_deep_decoy_not_started(deep_orchestrator.diagnostics)
             runtime.mimic_start_attempted = True
             resumed = await mimic_orchestrator.resume_active()
             if resumed:

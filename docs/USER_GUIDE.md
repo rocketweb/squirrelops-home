@@ -491,7 +491,16 @@ Decoys shows startup progress or an actionable diagnostic reason. Normal stopped
 and disabled states stay quiet. Pull down on the list or press **Command-R** to
 reload that evidence; refreshing does not bypass startup checks or restart the guest. An enabled
 host whose startup failed is retried on a later network scan, no more often
-than once per minute. An intentionally stopped host stays stopped.
+than once per minute. An intentionally stopped host stays stopped, and the
+sensor startup log says so: "Studio Mini deep decoy is stopped by the operator;
+enable it from the Decoys tab to publish it". A startup failure is logged as a
+warning that carries the reason shown on the Degraded badge.
+
+A Restart that stops the host but fails to bring it back saves the host as
+Degraded with the failure recorded, not as stopped. It is retried like any
+other startup failure, so an interrupted restart never turns into a silent
+stop across sensor restarts. Every enable, disable, and restart is written to
+the sensor log with the paired client that requested it and the outcome.
 
 Restarting or upgrading the sensor preserves the Studio host's saved state.
 Its five services do not count against the separate classic host-listener

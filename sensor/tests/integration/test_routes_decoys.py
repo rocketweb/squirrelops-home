@@ -1,5 +1,6 @@
 """Integration tests for decoy routes: list, get, restart, update config, connections."""
 import asyncio
+import logging
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
@@ -386,6 +387,44 @@ class TestEnableDecoy:
             db.execute("SELECT status FROM decoys WHERE id = ?", (ids[0],))
         )
         assert asyncio.get_event_loop().run_until_complete(cursor.fetchone())[0] == "stopped"
+
+
+class TestLifecycleAuditLog:
+    """Enable, disable and restart leave a who/what/outcome line in the sensor log."""
+
+    @pytest.mark.parametrize("action", ["restart", "enable", "disable"])
+    def test_successful_action_is_attributed_to_the_client(
+        self, client, db, action, caplog,
+    ):
+        ids = asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        if action == "enable":
+            asyncio.get_event_loop().run_until_complete(
+                db.execute("UPDATE decoys SET status = 'stopped' WHERE id = ?", (ids[0],))
+            )
+            asyncio.get_event_loop().run_until_complete(db.commit())
+
+        with caplog.at_level(logging.INFO, logger="squirrelops_home_sensor.api.routes_decoys"):
+            response = client.post(f"/decoys/{ids[0]}/{action}")
+
+        assert response.status_code == 200
+        lines = [record.getMessage() for record in caplog.records]
+        assert len(lines) == 1
+        assert lines[0].startswith(f"Decoy {action} succeeded by test-client (sha256:testfp)")
+        assert f"(id={ids[0]})" in lines[0]
+
+    def test_failed_action_is_logged_as_failed(
+        self, client, db, live_decoy_controls, caplog,
+    ):
+        ids = asyncio.get_event_loop().run_until_complete(seed_decoys(db, count=1))
+        live_decoy_controls[0].restart_decoy = AsyncMock(return_value=False)
+
+        with caplog.at_level(logging.INFO, logger="squirrelops_home_sensor.api.routes_decoys"):
+            response = client.post(f"/decoys/{ids[0]}/restart")
+
+        assert response.status_code == 409
+        lines = [record.getMessage() for record in caplog.records]
+        assert len(lines) == 1
+        assert lines[0].startswith("Decoy restart failed by test-client (sha256:testfp)")
 
 
 class TestDisableDecoy:
