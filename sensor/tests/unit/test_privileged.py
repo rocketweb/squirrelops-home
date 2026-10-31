@@ -986,7 +986,7 @@ class TestMacOSPortForwardTimeout:
             MacOSPrivilegedOps,
         )
 
-        ops = MacOSPrivilegedOps.__new__(MacOSPrivilegedOps)
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
         ops._call = AsyncMock(return_value={"success": True, "rules_count": 3})  # type: ignore[method-assign]
 
         assert await ops.setup_port_forwards(
@@ -1102,3 +1102,92 @@ class TestMacOSHelperClientStructure:
 
         assert any(r.levelname == "ERROR" for r in caplog.records)
         assert "Traceback" in caplog.text
+
+
+class TestPortForwardGeneration:
+    """Every anchor load is named, so a timed-out one can be identified later."""
+
+    @pytest.mark.asyncio
+    async def test_each_load_carries_a_fresh_generation(self) -> None:
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+        seen: list[tuple[str, dict]] = []
+
+        async def ok(method, params=None):
+            seen.append((method, params or {}))
+            return {"success": True, "rules_count": 0}
+
+        ops._call_inner = ok  # type: ignore[method-assign]
+
+        assert await ops.setup_port_forwards(rules=[], protected_endpoints=[]) is True
+        assert await ops.clear_port_forwards() is True
+
+        generations = [params["generation"] for _, params in seen]
+        assert [m for m, _ in seen] == ["setupPortForwards", "clearPortForwards"]
+        assert generations[0]["nonce"] == generations[1]["nonce"]
+        assert len(generations[0]["nonce"]) >= 16
+        assert generations[1]["sequence"] == generations[0]["sequence"] + 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_outcome_names_the_generation_it_sent(self, monkeypatch) -> None:
+        from squirrelops_home_sensor.privileged import xpc
+        from squirrelops_home_sensor.privileged.helper import HelperOutcomeUnknownError
+
+        monkeypatch.setattr(xpc, "PORT_FORWARD_RPC_TIMEOUT", 0.05)
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+        sent: dict = {}
+
+        async def hang(method, params=None):
+            sent.update(params or {})
+            await asyncio.sleep(1)
+
+        ops._call_inner = hang  # type: ignore[method-assign]
+
+        with pytest.raises(HelperOutcomeUnknownError) as info:
+            await ops.setup_port_forwards(rules=[], protected_endpoints=[])
+        assert info.value.generation == sent["generation"]
+
+    @pytest.mark.asyncio
+    async def test_generation_query_reads_the_helper_ledger(self) -> None:
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+        answers = [
+            {"generation": {"nonce": "abc", "sequence": 3}},
+            {"generation": None},
+            {"generation": {"nonce": "abc"}},
+        ]
+
+        async def answer(method, params=None):
+            assert method == "getPortForwardGeneration"
+            return answers.pop(0)
+
+        ops._call_inner = answer  # type: ignore[method-assign]
+
+        assert await ops.port_forward_generation() == {"nonce": "abc", "sequence": 3}
+        assert await ops.port_forward_generation() is None
+        assert await ops.port_forward_generation() is None
+
+    @pytest.mark.asyncio
+    async def test_generation_query_is_none_for_an_older_helper(self) -> None:
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+
+        async def unknown_method(method, params=None):
+            raise RuntimeError("Helper error: Method not found: getPortForwardGeneration")
+
+        ops._call_inner = unknown_method  # type: ignore[method-assign]
+
+        assert await ops.port_forward_generation() is None
+
+    @pytest.mark.asyncio
+    async def test_generation_query_is_none_when_the_helper_stays_silent(
+        self, monkeypatch,
+    ) -> None:
+        from squirrelops_home_sensor.privileged import xpc
+
+        monkeypatch.setattr(xpc, "PORT_FORWARD_RPC_TIMEOUT", 0.05)
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+
+        async def hang(method, params=None):
+            await asyncio.sleep(1)
+
+        ops._call_inner = hang  # type: ignore[method-assign]
+
+        assert await ops.port_forward_generation() is None

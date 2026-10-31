@@ -50,10 +50,15 @@ outside each call's timeout, so a port-forward load does not spend its budget wa
 and then time out mid-apply. A port-forward RPC that still times out raises
 `HelperOutcomeUnknownError`: the helper may apply the rules after the sensor gave up, so
 `PortForwardManager` does not issue a second blind anchor load to "restore" the previous
-state. It restores its in-memory view, returns failure to the caller, and reconciles the
-live anchor with a retried reload once the helper answers again. A rejected request is
-different: the helper answered, the previous rules are still live, and the restore reload
-runs at once, with the same retry if it fails.
+state. Every load is named with a per-process nonce and sequence number, and the helper
+records the name of the last load it applied. On a timeout the manager asks the helper
+for that name (`getPortForwardGeneration`, which waits its turn behind the load itself).
+A matching name means the load landed late and the caller keeps its state; an older name
+means the helper is alive and never applied it, so the previous rules are reloaded at
+once; no answer leaves the outcome unknown, and the manager restores its in-memory view,
+returns failure, and reconciles the live anchor with a retried reload once the helper
+answers again. A rejected request is different: the helper answered, the previous rules
+are still live, and the restore reload runs at once, with the same retry if it fails.
 
 ```bash
 sudo bash scripts/dev-install-helper.sh

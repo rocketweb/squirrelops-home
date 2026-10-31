@@ -331,8 +331,11 @@ class PortForwardManager:
                     protected_endpoints=list(protected_by_ip.values()),
                     interface=self._interface,
                 )
-        except HelperOutcomeUnknownError:
-            return SyncOutcome.UNKNOWN
+        except HelperOutcomeUnknownError as exc:
+            outcome = await self._resolve_unknown_outcome(exc)
+            if outcome is SyncOutcome.APPLIED:
+                self._cancel_pending_resync()
+            return outcome
         except Exception:
             logger.exception("Failed to sync port forward rules")
             return SyncOutcome.REJECTED
@@ -340,6 +343,43 @@ class PortForwardManager:
             return SyncOutcome.REJECTED
         self._cancel_pending_resync()
         return SyncOutcome.APPLIED
+
+    async def _resolve_unknown_outcome(
+        self,
+        exc: HelperOutcomeUnknownError,
+    ) -> SyncOutcome:
+        """Ask the helper what became of a load that timed out.
+
+        The query waits its turn behind the load itself, so it answers once
+        the outcome is settled. A matching generation means the load landed
+        after the sensor gave up and the caller keeps its state; an older
+        generation means the helper is alive and never applied it, so the
+        previous rules are still live. No answer leaves the outcome unknown.
+        """
+        sent = exc.generation
+        if sent is None:
+            return SyncOutcome.UNKNOWN
+        try:
+            live = await self._priv_ops.port_forward_generation()
+        except Exception:
+            logger.exception("Could not read the live port-forward generation")
+            return SyncOutcome.UNKNOWN
+        if live is None:
+            return SyncOutcome.UNKNOWN
+        if live == sent:
+            logger.info(
+                "Packet-filter load %s landed after the helper timeout; "
+                "keeping the requested state",
+                sent.get("sequence"),
+            )
+            return SyncOutcome.APPLIED
+        logger.warning(
+            "Packet-filter load %s was never applied; the helper answered "
+            "with generation %s live",
+            sent.get("sequence"),
+            live.get("sequence"),
+        )
+        return SyncOutcome.REJECTED
 
     async def _restore_after_failed_load(
         self,

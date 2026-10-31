@@ -20,6 +20,7 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 import defusedxml.ElementTree as ET
 
@@ -76,7 +77,16 @@ class HelperOutcomeUnknownError(TimeoutError):
     timed out may still be applied after the caller gave up, so callers must
     not "restore" the previous state with a second blind mutation; they
     reconcile once the helper answers again.
+
+    ``generation`` names the load that timed out, when the backend names its
+    loads. A caller can compare it with
+    :meth:`PrivilegedOperations.port_forward_generation` once the helper
+    answers again to learn whether that load was applied after all.
     """
+
+    def __init__(self, message: str, *, generation: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.generation = generation
 
 
 class PrivilegedOperations(ABC):
@@ -287,6 +297,15 @@ class PrivilegedOperations(ABC):
         bool:
             True if rules were successfully cleared.
         """
+
+    async def port_forward_generation(self) -> dict[str, Any] | None:
+        """Name the last anchor load the backend applied, if it names loads.
+
+        Returns ``{"nonce": str, "sequence": int}`` for backends that record
+        the generation the caller attached to each load, or ``None`` when the
+        backend does not name loads, has applied none, or cannot be asked.
+        """
+        return None
 
 
 class LinuxPrivilegedOps(PrivilegedOperations):

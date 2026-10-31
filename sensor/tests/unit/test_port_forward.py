@@ -444,6 +444,7 @@ class TestPortForwardRecovery:
         priv_ops = AsyncMock()
         priv_ops.setup_port_forwards = AsyncMock(return_value=True)
         priv_ops.clear_port_forwards = AsyncMock(return_value=True)
+        priv_ops.port_forward_generation = AsyncMock(return_value=None)
         mgr = PortForwardManager(
             privileged_ops=priv_ops, interface="en0", resync_delays=delays,
         )
@@ -549,3 +550,89 @@ class TestPortForwardRecovery:
         assert self._rule_ips(priv_ops.setup_port_forwards.await_args_list[-1]) == [
             "192.168.1.200", "192.168.1.201",
         ]
+
+
+class TestPortForwardGenerationResolution:
+    """A timed-out load is identified by its generation once the helper answers."""
+
+    def _make_manager(self, delays=(0,)):
+        priv_ops = AsyncMock()
+        priv_ops.setup_port_forwards = AsyncMock(return_value=True)
+        priv_ops.clear_port_forwards = AsyncMock(return_value=True)
+        priv_ops.port_forward_generation = AsyncMock(return_value=None)
+        mgr = PortForwardManager(
+            privileged_ops=priv_ops, interface="en0", resync_delays=list(delays),
+        )
+        return mgr, priv_ops
+
+    @pytest.mark.asyncio
+    async def test_load_that_landed_after_the_timeout_is_kept(self, caplog):
+        from squirrelops_home_sensor.privileged.helper import HelperOutcomeUnknownError
+
+        mgr, priv_ops = self._make_manager()
+        sent = {"nonce": "n", "sequence": 7}
+        priv_ops.setup_port_forwards.side_effect = HelperOutcomeUnknownError(
+            "late", generation=dict(sent),
+        )
+        priv_ops.port_forward_generation.return_value = dict(sent)
+
+        with caplog.at_level("INFO", logger="squirrelops_home_sensor.network"):
+            ok = await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80})
+
+        assert ok is True
+        assert mgr.active_rule_count == 1
+        assert mgr.protected_endpoint_count == 1
+        assert priv_ops.setup_port_forwards.await_count == 1
+        assert mgr.resync_pending is False
+        assert any("landed" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_load_the_helper_never_applied_is_restored_at_once(self):
+        from squirrelops_home_sensor.privileged.helper import HelperOutcomeUnknownError
+
+        mgr, priv_ops = self._make_manager(delays=[30])
+        assert await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80}) is True
+        priv_ops.setup_port_forwards.side_effect = [
+            HelperOutcomeUnknownError("late", generation={"nonce": "n", "sequence": 8}),
+            True,
+        ]
+        priv_ops.port_forward_generation.return_value = {"nonce": "n", "sequence": 7}
+
+        ok = await mgr.add_forwards(2, "192.168.1.201", {80: 10080}, {80})
+
+        assert ok is False
+        # Initial load, the timed-out load, and the immediate restore load.
+        assert priv_ops.setup_port_forwards.await_count == 3
+        assert mgr.active_rule_count == 1
+        assert mgr.resync_pending is False
+        last = priv_ops.setup_port_forwards.await_args_list[-1]
+        assert sorted({r["from_ip"] for r in last.kwargs["rules"]}) == ["192.168.1.200"]
+
+    @pytest.mark.asyncio
+    async def test_silent_or_older_helper_still_defers_the_restore(self):
+        from squirrelops_home_sensor.privileged.helper import HelperOutcomeUnknownError
+
+        mgr, priv_ops = self._make_manager(delays=[0])
+        assert await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80}) is True
+        priv_ops.setup_port_forwards.side_effect = [
+            HelperOutcomeUnknownError("late", generation={"nonce": "n", "sequence": 8}),
+            True,
+        ]
+        priv_ops.port_forward_generation.return_value = None
+
+        assert await mgr.add_forwards(2, "192.168.1.201", {80: 10080}, {80}) is False
+        assert priv_ops.setup_port_forwards.await_count == 2
+        assert mgr.resync_pending is True
+        await mgr.wait_for_pending_resync()
+        assert priv_ops.setup_port_forwards.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_unknown_outcome_without_a_generation_never_queries(self):
+        from squirrelops_home_sensor.privileged.helper import HelperOutcomeUnknownError
+
+        mgr, priv_ops = self._make_manager(delays=[0])
+        priv_ops.setup_port_forwards.side_effect = [HelperOutcomeUnknownError("late"), True]
+
+        assert await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80}) is False
+        priv_ops.port_forward_generation.assert_not_awaited()
+        await mgr.wait_for_pending_resync()
