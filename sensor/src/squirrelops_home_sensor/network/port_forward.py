@@ -15,16 +15,34 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from enum import Enum
 from functools import wraps
 from typing import Any
 
-from squirrelops_home_sensor.privileged.helper import PrivilegedOperations
+from squirrelops_home_sensor.privileged.helper import (
+    HelperOutcomeUnknownError,
+    PrivilegedOperations,
+)
 
 logger = logging.getLogger("squirrelops_home_sensor.network")
 
 PRIVILEGED_PORT_THRESHOLD = 1024
 PORT_OFFSET = 10000
+
+
+class SyncOutcome(Enum):
+    """What a full anchor load did to the live packet filter."""
+
+    APPLIED = "applied"
+    REJECTED = "rejected"  # The helper answered; the previous rules stay live.
+    UNKNOWN = "unknown"  # The helper did not answer; either set may be live.
+
+
+# Backoff between reconciling reloads after a failed restore. Each attempt
+# waits for the helper's queue, so the early retries are short and the later
+# ones give a slow scan cycle room to finish.
+DEFAULT_RESYNC_DELAYS: tuple[float, ...] = (5.0, 15.0, 45.0, 120.0, 300.0, 300.0)
 
 
 def _serialized_mutation(method: Any) -> Any:
@@ -86,12 +104,32 @@ class PortForwardManager:
         self,
         privileged_ops: PrivilegedOperations,
         interface: str = "en0",
+        resync_delays: Sequence[float] = DEFAULT_RESYNC_DELAYS,
     ) -> None:
         self._priv_ops = privileged_ops
         self._interface = interface
         self._rules: dict[int, list[dict]] = {}  # decoy_id -> list of rules
         self._protected_endpoints: dict[int, dict] = {}
         self._mutation_lock = asyncio.Lock()
+        self._resync_delays = tuple(resync_delays)
+        self._resync_task: asyncio.Task[None] | None = None
+
+    @property
+    def resync_pending(self) -> bool:
+        """Whether a reconciling reload is scheduled after a failed restore."""
+        return self._resync_task is not None and not self._resync_task.done()
+
+    async def wait_for_pending_resync(self) -> None:
+        """Wait for a scheduled reconcile to finish, if one is pending."""
+        task = self._resync_task
+        if task is None:
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
 
     @_serialized_mutation
     async def add_forwards(
@@ -182,7 +220,8 @@ class PortForwardManager:
             "direct_ports": list(NO_DIRECT_PORTS),
         }
 
-        if await self._sync_rules():
+        outcome = await self._sync_outcome()
+        if outcome is SyncOutcome.APPLIED:
             return True
 
         if previous_rules is None:
@@ -193,11 +232,9 @@ class PortForwardManager:
             self._protected_endpoints.pop(decoy_id, None)
         else:
             self._protected_endpoints[decoy_id] = previous_endpoint
-        if not await self._sync_rules():
-            logger.critical(
-                "Failed to restore packet-filter state after rejecting decoy %d",
-                decoy_id,
-            )
+        await self._restore_after_failed_load(
+            outcome, context=f"after rejecting decoy {decoy_id}",
+        )
         return False
 
     @_serialized_mutation
@@ -242,17 +279,16 @@ class PortForwardManager:
 
         previous_rules = self._rules.pop(decoy_id)
         previous_endpoint = self._protected_endpoints.pop(decoy_id, None)
-        if await self._sync_rules():
+        outcome = await self._sync_outcome()
+        if outcome is SyncOutcome.APPLIED:
             return True
 
         self._rules[decoy_id] = previous_rules
         if previous_endpoint is not None:
             self._protected_endpoints[decoy_id] = previous_endpoint
-        if not await self._sync_rules():
-            logger.critical(
-                "Failed to restore packet-filter state after retaining decoy %d",
-                decoy_id,
-            )
+        await self._restore_after_failed_load(
+            outcome, context=f"after retaining decoy {decoy_id}",
+        )
         return False
 
     @_serialized_mutation
@@ -263,6 +299,7 @@ class PortForwardManager:
                 return False
             self._rules.clear()
             self._protected_endpoints.clear()
+            self._cancel_pending_resync()
             return True
         except Exception:
             logger.exception("Failed to clear port forwards")
@@ -270,6 +307,14 @@ class PortForwardManager:
 
     async def _sync_rules(self) -> bool:
         """Sync all accumulated rules atomically to the system."""
+        return await self._sync_outcome() is SyncOutcome.APPLIED
+
+    async def _sync_outcome(self) -> SyncOutcome:
+        """Load the complete in-memory ruleset and say what happened to it.
+
+        A successful load is the full truth, so it also retires any pending
+        reconcile: there is nothing left to restore.
+        """
         all_rules: list[dict] = []
         for rules in self._rules.values():
             all_rules.extend(rules)
@@ -279,15 +324,98 @@ class PortForwardManager:
 
         try:
             if not all_rules and not self._protected_endpoints:
-                return await self._priv_ops.clear_port_forwards()
-            return await self._priv_ops.setup_port_forwards(
-                rules=all_rules,
-                protected_endpoints=list(protected_by_ip.values()),
-                interface=self._interface,
-            )
+                applied = await self._priv_ops.clear_port_forwards()
+            else:
+                applied = await self._priv_ops.setup_port_forwards(
+                    rules=all_rules,
+                    protected_endpoints=list(protected_by_ip.values()),
+                    interface=self._interface,
+                )
+        except HelperOutcomeUnknownError:
+            return SyncOutcome.UNKNOWN
         except Exception:
             logger.exception("Failed to sync port forward rules")
-            return False
+            return SyncOutcome.REJECTED
+        if not applied:
+            return SyncOutcome.REJECTED
+        self._cancel_pending_resync()
+        return SyncOutcome.APPLIED
+
+    async def _restore_after_failed_load(
+        self,
+        outcome: SyncOutcome,
+        *,
+        context: str,
+    ) -> None:
+        """Bring the live anchor back to the restored in-memory state.
+
+        After a rejection the previous rules are still live, so one reload
+        normally confirms them. After a timeout the helper may still apply
+        the failed request later; a second blind load now would race it, so
+        the reload is deferred until the helper answers again. Either way a
+        failed restore is retried, not logged once and forgotten.
+        """
+        if outcome is SyncOutcome.UNKNOWN:
+            logger.error(
+                "Packet-filter state is unknown %s because the helper did not "
+                "answer; the previous rules are not reloaded now. A "
+                "reconciling reload is scheduled.",
+                context,
+            )
+            self._schedule_resync(context)
+            return
+        if await self._sync_outcome() is SyncOutcome.APPLIED:
+            return
+        logger.error(
+            "Failed to restore packet-filter state %s; a reconciling reload "
+            "is scheduled",
+            context,
+        )
+        self._schedule_resync(context)
+
+    def _schedule_resync(self, context: str) -> None:
+        if self.resync_pending:
+            return
+        self._resync_task = asyncio.create_task(
+            self._resync_until_applied(context),
+            name="port-forward-resync",
+        )
+
+    def _cancel_pending_resync(self) -> None:
+        task = self._resync_task
+        self._resync_task = None
+        if task is None or task.done() or task is asyncio.current_task():
+            return
+        task.cancel()
+
+    async def _resync_until_applied(self, context: str) -> None:
+        attempts = len(self._resync_delays)
+        for attempt, delay in enumerate(self._resync_delays, start=1):
+            await asyncio.sleep(delay)
+            async with self._mutation_lock:
+                outcome = await self._sync_outcome()
+            if outcome is SyncOutcome.APPLIED:
+                logger.info(
+                    "Packet-filter state reconciled %s on retry %d of %d",
+                    context,
+                    attempt,
+                    attempts,
+                )
+                return
+            logger.warning(
+                "Packet-filter reconcile %s failed on retry %d of %d (%s)",
+                context,
+                attempt,
+                attempts,
+                outcome.value,
+            )
+        logger.critical(
+            "Packet-filter state could not be reconciled %s after %d attempts; "
+            "live rules may differ from the sensor's view until the next "
+            "successful change",
+            context,
+            attempts,
+        )
 
     @property
     def active_rule_count(self) -> int:

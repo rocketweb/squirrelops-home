@@ -44,6 +44,17 @@ by requiring component version strings to match.
 
 The packaged sensor delegates privileged operations to a Swift helper daemon that runs as root. The helper accepts RPC only from root and the dedicated `_squirrelops` service account. A sensor run directly as your login user cannot use the helper, so ARP scanning, virtual IP aliases, and port forwarding are unavailable in that mode and are reported as unavailable.
 
+The helper serves one RPC at a time, and an ARP scan of a full /24 can hold it for
+40 seconds. `MacOSPrivilegedOps` therefore queues calls behind a client-side lock
+outside each call's timeout, so a port-forward load does not spend its budget waiting
+and then time out mid-apply. A port-forward RPC that still times out raises
+`HelperOutcomeUnknownError`: the helper may apply the rules after the sensor gave up, so
+`PortForwardManager` does not issue a second blind anchor load to "restore" the previous
+state. It restores its in-memory view, returns failure to the caller, and reconciles the
+live anchor with a retried reload once the helper answers again. A rejected request is
+different: the helper answered, the previous rules are still live, and the restore reload
+runs at once, with the same retry if it fails.
+
 ```bash
 sudo bash scripts/dev-install-helper.sh
 ```

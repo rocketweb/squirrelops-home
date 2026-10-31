@@ -435,3 +435,117 @@ class TestPortForwardManager:
 
         call_args = priv_ops.setup_port_forwards.call_args
         assert call_args.kwargs.get("interface") == "eth0"
+
+
+class TestPortForwardRecovery:
+    """Timeouts are unknown outcomes; failed restores are retried, not logged once."""
+
+    def _make_manager(self, delays):
+        priv_ops = AsyncMock()
+        priv_ops.setup_port_forwards = AsyncMock(return_value=True)
+        priv_ops.clear_port_forwards = AsyncMock(return_value=True)
+        mgr = PortForwardManager(
+            privileged_ops=priv_ops, interface="en0", resync_delays=delays,
+        )
+        return mgr, priv_ops
+
+    @staticmethod
+    def _rule_ips(call):
+        return sorted({rule["from_ip"] for rule in call.kwargs["rules"]})
+
+    @pytest.mark.asyncio
+    async def test_timed_out_load_is_not_rolled_back_with_a_second_load(self, caplog):
+        from squirrelops_home_sensor.privileged.helper import HelperOutcomeUnknownError
+
+        mgr, priv_ops = self._make_manager(delays=[0])
+        assert await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80}) is True
+        priv_ops.setup_port_forwards.side_effect = [
+            HelperOutcomeUnknownError("helper did not answer"),
+            True,
+        ]
+
+        with caplog.at_level("INFO", logger="squirrelops_home_sensor.network"):
+            ok = await mgr.add_forwards(2, "192.168.1.201", {80: 10080}, {80})
+            # Exactly one load for decoy 2 and no immediate rollback load.
+            assert ok is False
+            assert priv_ops.setup_port_forwards.await_count == 2
+            assert mgr.active_rule_count == 1
+            assert mgr.protected_endpoint_count == 1
+            assert not any(r.levelname == "CRITICAL" for r in caplog.records)
+
+            await mgr.wait_for_pending_resync()
+
+        # The deferred reconcile reloads the restored state (decoy 1 only).
+        assert priv_ops.setup_port_forwards.await_count == 3
+        last = priv_ops.setup_port_forwards.await_args_list[-1]
+        assert self._rule_ips(last) == ["192.168.1.200"]
+        assert any("reconciled" in r.getMessage() for r in caplog.records)
+        assert not any(r.levelname == "CRITICAL" for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_failed_restore_is_retried_until_it_succeeds(self, caplog):
+        mgr, priv_ops = self._make_manager(delays=[0, 0, 0])
+        assert await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80}) is True
+        # Rejection, failed restore, failed retry, successful retry.
+        priv_ops.setup_port_forwards.side_effect = [False, False, False, True]
+
+        with caplog.at_level("INFO", logger="squirrelops_home_sensor.network"):
+            assert await mgr.add_forwards(2, "192.168.1.201", {80: 10080}, {80}) is False
+            await mgr.wait_for_pending_resync()
+
+        assert priv_ops.setup_port_forwards.await_count == 5
+        assert self._rule_ips(priv_ops.setup_port_forwards.await_args_list[-1]) == ["192.168.1.200"]
+        assert not any(r.levelname == "CRITICAL" for r in caplog.records)
+        assert any("reconciled" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_exhausted_restore_retries_escalate_to_critical(self, caplog):
+        mgr, priv_ops = self._make_manager(delays=[0, 0])
+        assert await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80}) is True
+        priv_ops.setup_port_forwards.side_effect = None
+        priv_ops.setup_port_forwards.return_value = False
+
+        with caplog.at_level("INFO", logger="squirrelops_home_sensor.network"):
+            assert await mgr.add_forwards(2, "192.168.1.201", {80: 10080}, {80}) is False
+            await mgr.wait_for_pending_resync()
+
+        critical = [r for r in caplog.records if r.levelname == "CRITICAL"]
+        assert len(critical) == 1
+        assert "2 attempts" in critical[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_a_later_successful_change_cancels_the_pending_resync(self):
+        mgr, priv_ops = self._make_manager(delays=[30])
+        assert await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80}) is True
+        priv_ops.setup_port_forwards.side_effect = [False, False]
+        assert await mgr.add_forwards(2, "192.168.1.201", {80: 10080}, {80}) is False
+        assert mgr.resync_pending is True
+
+        priv_ops.setup_port_forwards.side_effect = None
+        priv_ops.setup_port_forwards.return_value = True
+        assert await mgr.add_forwards(3, "192.168.1.202", {80: 10080}, {80}) is True
+
+        assert mgr.resync_pending is False
+        await mgr.wait_for_pending_resync()
+        assert priv_ops.setup_port_forwards.await_count == 4
+
+    @pytest.mark.asyncio
+    async def test_remove_timeout_defers_its_restore_too(self):
+        from squirrelops_home_sensor.privileged.helper import HelperOutcomeUnknownError
+
+        mgr, priv_ops = self._make_manager(delays=[0])
+        assert await mgr.add_forwards(1, "192.168.1.200", {80: 10080}, {80}) is True
+        assert await mgr.add_forwards(2, "192.168.1.201", {80: 10080}, {80}) is True
+        priv_ops.setup_port_forwards.side_effect = [
+            HelperOutcomeUnknownError("helper did not answer"),
+            True,
+        ]
+
+        assert await mgr.remove_forwards(2) is False
+        assert priv_ops.setup_port_forwards.await_count == 3
+        assert mgr.active_rule_count == 2
+        await mgr.wait_for_pending_resync()
+        assert priv_ops.setup_port_forwards.await_count == 4
+        assert self._rule_ips(priv_ops.setup_port_forwards.await_args_list[-1]) == [
+            "192.168.1.200", "192.168.1.201",
+        ]

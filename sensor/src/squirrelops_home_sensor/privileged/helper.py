@@ -69,6 +69,16 @@ class DNSQuery:
     timestamp: datetime
 
 
+class HelperOutcomeUnknownError(TimeoutError):
+    """The privileged helper did not answer, so the live state is unknown.
+
+    A rejected request leaves the previous state in place. A request that
+    timed out may still be applied after the caller gave up, so callers must
+    not "restore" the previous state with a second blind mutation; they
+    reconcile once the helper answers again.
+    """
+
+
 class PrivilegedOperations(ABC):
     """Abstract interface for privileged network operations.
 
@@ -240,6 +250,11 @@ class PrivilegedOperations(ABC):
         protected_endpoints: list[dict] | None = None,
     ) -> bool:
         """Set up port forwarding and virtual-IP isolation for mimic decoys.
+
+        Returns ``False`` when the helper rejected the request, which leaves
+        the previous rules live. Raises :class:`HelperOutcomeUnknownError`
+        when the helper did not answer in time, because the request may still
+        be applied after this call returns.
 
         Each rule redirects traffic from one IP:port to another IP:port,
         allowing unprivileged processes to serve on privileged ports.
