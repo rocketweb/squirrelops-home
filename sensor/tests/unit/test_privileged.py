@@ -997,3 +997,108 @@ class TestMacOSPortForwardTimeout:
         assert PORT_FORWARD_RPC_TIMEOUT >= 120.0
         for call in ops._call.await_args_list:
             assert call.kwargs.get("timeout") == PORT_FORWARD_RPC_TIMEOUT, call
+
+
+# ---------------------------------------------------------------------------
+# macOS helper client: serialization, unknown outcomes, and quiet DAD rejects
+# ---------------------------------------------------------------------------
+
+
+class TestMacOSHelperClientStructure:
+    """The helper serves one RPC at a time; the client must behave accordingly."""
+
+    @pytest.mark.asyncio
+    async def test_rpc_calls_are_serialized_and_wait_outside_the_timeout(self) -> None:
+        """A port-forward call queued behind a scan must not burn its timeout waiting."""
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+        in_flight = 0
+        peak = 0
+        order: list[str] = []
+
+        async def fake_inner(method, params=None):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            order.append(method)
+            if method == "runARPScan":
+                await asyncio.sleep(0.3)
+            in_flight -= 1
+            return {"success": True}
+
+        ops._call_inner = fake_inner  # type: ignore[method-assign]
+
+        scan = asyncio.create_task(ops._call("runARPScan", {"subnet": "10.0.0.0/24"}))
+        await asyncio.sleep(0.01)
+        forward = await ops._call("setupPortForwards", {}, timeout=0.1)
+        await scan
+
+        assert forward == {"success": True}
+        assert peak == 1
+        assert order == ["runARPScan", "setupPortForwards"]
+
+    @pytest.mark.asyncio
+    async def test_port_forward_timeout_is_an_unknown_outcome_not_a_rejection(
+        self, monkeypatch,
+    ) -> None:
+        from squirrelops_home_sensor.privileged import xpc
+        from squirrelops_home_sensor.privileged.helper import HelperOutcomeUnknownError
+
+        monkeypatch.setattr(xpc, "PORT_FORWARD_RPC_TIMEOUT", 0.05)
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+
+        async def hang(method, params=None):
+            await asyncio.sleep(1)
+
+        ops._call_inner = hang  # type: ignore[method-assign]
+
+        with pytest.raises(HelperOutcomeUnknownError):
+            await ops.setup_port_forwards(rules=[], protected_endpoints=[])
+        with pytest.raises(HelperOutcomeUnknownError):
+            await ops.clear_port_forwards()
+
+    @pytest.mark.asyncio
+    async def test_port_forward_helper_error_is_still_a_plain_rejection(self) -> None:
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+
+        async def reject(method, params=None):
+            raise RuntimeError("Helper error: PF request contains duplicate advertised ports")
+
+        ops._call_inner = reject  # type: ignore[method-assign]
+
+        assert await ops.setup_port_forwards(rules=[], protected_endpoints=[]) is False
+
+    @pytest.mark.asyncio
+    async def test_dad_rejection_of_a_candidate_is_info_without_a_traceback(
+        self, caplog,
+    ) -> None:
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+
+        async def occupied(method, params=None):
+            raise RuntimeError(
+                "Helper error: Virtual IP candidate responded to duplicate-address probing"
+            )
+
+        ops._call_inner = occupied  # type: ignore[method-assign]
+
+        with caplog.at_level("INFO", logger="squirrelops_home_sensor.privileged"):
+            assert await ops.add_ip_alias("192.168.1.231") is False
+
+        records = [r for r in caplog.records if "192.168.1.231" in r.getMessage()]
+        assert records, "the rejected candidate was not logged"
+        assert all(r.levelname == "INFO" for r in records)
+        assert "Traceback" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_other_alias_failures_keep_their_traceback(self, caplog) -> None:
+        ops = MacOSPrivilegedOps(socket_path="/nonexistent/helper.sock")
+
+        async def broken(method, params=None):
+            raise RuntimeError("Helper error: ifconfig failed")
+
+        ops._call_inner = broken  # type: ignore[method-assign]
+
+        with caplog.at_level("INFO", logger="squirrelops_home_sensor.privileged"):
+            assert await ops.add_ip_alias("192.168.1.231") is False
+
+        assert any(r.levelname == "ERROR" for r in caplog.records)
+        assert "Traceback" in caplog.text

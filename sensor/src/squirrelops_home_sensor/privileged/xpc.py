@@ -19,6 +19,7 @@ from typing import Any
 from squirrelops_home_sensor.netvalidation import is_valid_ipv4
 from squirrelops_home_sensor.privileged.helper import (
     DNSQuery,
+    HelperOutcomeUnknownError,
     PrivilegedOperations,
     ServiceResult,
 )
@@ -67,6 +68,10 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         self._socket_path = socket_path
         self._request_id = 0
         self._rpc_timeout = rpc_timeout
+        # The helper serves one request at a time. Queueing here, outside each
+        # call's timeout, keeps a port-forward load from spending its budget
+        # waiting behind a 40 second ARP scan and then timing out mid-apply.
+        self._rpc_lock = asyncio.Lock()
 
     async def is_available(self) -> bool:
         """Prove this process can use the expected helper RPC protocol."""
@@ -138,10 +143,11 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         Raises asyncio.TimeoutError if the helper does not respond within the
         operation timeout.
         """
-        return await asyncio.wait_for(
-            self._call_inner(method, params),
-            timeout=self._rpc_timeout if timeout is None else timeout,
-        )
+        async with self._rpc_lock:
+            return await asyncio.wait_for(
+                self._call_inner(method, params),
+                timeout=self._rpc_timeout if timeout is None else timeout,
+            )
 
     async def _call_inner(self, method: str, params: dict[str, Any] | None = None) -> Any:
         """Inner implementation of _call without timeout wrapper.
@@ -316,6 +322,18 @@ class MacOSPrivilegedOps(PrivilegedOperations):
                 {"ip": ip, "interface": interface, "mask": mask},
             )
             return result.get("success", False)
+        except RuntimeError as exc:
+            if "duplicate-address prob" in str(exc):
+                # Expected on a dense pool: another host answered for the
+                # candidate. The allocator moves on; no stack trace needed.
+                logger.info(
+                    "Virtual IP candidate %s is in use on the LAN; the "
+                    "helper rejected it after duplicate-address probing",
+                    ip,
+                )
+                return False
+            logger.exception("Failed to add IP alias %s via helper", ip)
+            return False
         except Exception:
             logger.exception("Failed to add IP alias %s via helper", ip)
             return False
@@ -352,6 +370,15 @@ class MacOSPrivilegedOps(PrivilegedOperations):
             count = result.get("rules_count", 0)
             logger.info("Port forwarding: %d pfctl rules loaded", count)
             return result.get("success", False)
+        except TimeoutError as exc:
+            logger.error(
+                "Helper did not answer setupPortForwards within %.0fs; the "
+                "live packet-filter state is unknown until it answers again",
+                PORT_FORWARD_RPC_TIMEOUT,
+            )
+            raise HelperOutcomeUnknownError(
+                "setupPortForwards timed out; packet-filter state unknown"
+            ) from exc
         except Exception:
             logger.exception("Failed to set up port forwards via helper")
             return False
@@ -361,6 +388,15 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         try:
             result = await self._call("clearPortForwards", timeout=PORT_FORWARD_RPC_TIMEOUT)
             return result.get("success", False)
+        except TimeoutError as exc:
+            logger.error(
+                "Helper did not answer clearPortForwards within %.0fs; the "
+                "live packet-filter state is unknown until it answers again",
+                PORT_FORWARD_RPC_TIMEOUT,
+            )
+            raise HelperOutcomeUnknownError(
+                "clearPortForwards timed out; packet-filter state unknown"
+            ) from exc
         except Exception:
             logger.exception("Failed to clear port forwards via helper")
             return False
