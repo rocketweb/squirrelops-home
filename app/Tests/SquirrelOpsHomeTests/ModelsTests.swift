@@ -815,6 +815,50 @@ struct ModelsTests {
         #expect(inventory.summary.hostListenerCount == 1)
     }
 
+    @Test("Stopped deep host stays listed so its enable control is reachable")
+    func stoppedDeepHostStaysListedWithoutCountingAsDeployed() {
+        func decoy(
+            id: Int,
+            type: String,
+            address: String,
+            port: Int,
+            status: String,
+            hostId: Int
+        ) -> DecoySummary {
+            DecoySummary(
+                id: id,
+                name: "Studio Build Mac",
+                decoyType: type,
+                bindAddress: address,
+                port: port,
+                status: status,
+                connectionCount: 0,
+                credentialTripCount: 0,
+                createdAt: "2026-09-01T00:00:00Z",
+                updatedAt: "2026-09-03T00:00:00Z",
+                hostId: hostId
+            )
+        }
+
+        let inventory = OperationalDecoyInventory([
+            decoy(id: 1045, type: "deep", address: "192.168.1.203", port: 445, status: "stopped", hostId: 20),
+            decoy(id: 1046, type: "deep", address: "192.168.1.203", port: 22, status: "stopped", hostId: 20),
+            decoy(id: 1603, type: "mimic", address: "192.168.1.245", port: 22, status: "stopped", hostId: 21),
+            decoy(id: 1700, type: "mimic", address: "192.168.1.200", port: 80, status: "active", hostId: 22),
+        ])
+
+        // The Decoys tab is the only place a deep host can be enabled, so a
+        // stopped one must still render its host card and toggle.
+        #expect(inventory.decoys.map(\.id) == [1045, 1046, 1700])
+        #expect(inventory.virtualHostGroups.map(\.bindAddress) == ["192.168.1.200", "192.168.1.203"])
+        #expect(inventory.virtualHostGroups.last?.services.map(\.port) == [22, 445])
+        // A stopped mimic is still dropped: its lifecycle lives in Scouts.
+        #expect(inventory.mimicGroups.flatMap(\.services).map(\.id) == [1700])
+        // Listing it is not the same as counting it as deployed.
+        #expect(inventory.summary.fakeHostCount == 1)
+        #expect(inventory.summary.serviceDecoyCount == 1)
+    }
+
     @Test("Mimic summaries decode host identity and group per service")
     func mimicServicesDecodeAndGroup() throws {
         let json = """

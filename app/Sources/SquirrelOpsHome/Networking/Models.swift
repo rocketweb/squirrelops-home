@@ -925,6 +925,16 @@ public struct DecoySummary: Codable, Sendable, Identifiable, Equatable, Hashable
         status == "active" || status == "degraded"
     }
 
+    /// Whether the Decoys tab lists this record.
+    ///
+    /// Operational records are listed because they are deployed. A deep host
+    /// is listed in every state because the Decoys tab holds its only
+    /// lifecycle control: hiding it while stopped left no way to enable it.
+    /// A stopped mimic stays out; its lifecycle lives in Scouts.
+    public var isListedInDecoyInventory: Bool {
+        isOperationalDeployment || isDeepDecoy
+    }
+
     public var isVirtualMimic: Bool {
         decoyType == "mimic"
     }
@@ -1120,10 +1130,12 @@ public struct DecoyHostGroup: Sendable, Identifiable, Equatable, Hashable {
 }
 
 public struct OperationalDecoyInventory: Sendable, Equatable {
+    /// Records the Decoys tab renders. This is wider than the deployed set:
+    /// `summary` still counts only operational records.
     public let decoys: [DecoySummary]
 
     public init(_ decoys: [DecoySummary]) {
-        self.decoys = decoys.filter(\.isOperationalDeployment)
+        self.decoys = decoys.filter(\.isListedInDecoyInventory)
     }
 
     public var virtualHostGroups: [DecoyHostGroup] {
