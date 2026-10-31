@@ -218,7 +218,9 @@ class DeepDecoyOrchestrator:
             row = await cursor.fetchone()
             if row is None:
                 return await self._provision()
-            if row["status"] != "active":
+            if row["status"] == "stopped":
+                # Only an operator stop is intent. A persisted "degraded" row
+                # is a host that should run but failed, so it is retried.
                 self._startup_status = "stopped"
                 self._failure_reason = None
                 return False
@@ -839,10 +841,48 @@ class DeepDecoyOrchestrator:
             return False if row is None else await self._activate_existing(row)
 
     async def restart(self, decoy_id: int) -> bool:
-        if self._active is not None:
-            if not await self.disable(decoy_id):
-                return False
-        return await self.enable(decoy_id)
+        """Stop and re-enable the host without turning a failure into a stop.
+
+        ``disable`` persists ``stopped`` so a crash between the two halves
+        fails closed. When the re-enable half fails the operator still wants
+        the host running, so the rows are returned to ``degraded`` with the
+        failure recorded, and the next startup or reconcile retries them
+        instead of reading the interrupted restart as an intentional stop.
+        """
+        was_running = self._active is not None
+        if was_running and not await self.disable(decoy_id):
+            return False
+        if await self.enable(decoy_id):
+            return True
+        if was_running:
+            await self._record_restart_failure(decoy_id)
+        return False
+
+    async def _record_restart_failure(self, decoy_id: int) -> None:
+        cursor = await self._db.execute(
+            """SELECT host_id FROM decoys
+               WHERE decoy_type = 'deep' AND retired_at IS NULL AND id = ?""",
+            (decoy_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None or row["host_id"] is None:
+            return
+        now = datetime.now(UTC).isoformat()
+        await self._db.execute(
+            """UPDATE decoys
+               SET status = 'degraded',
+                   failure_count = failure_count + 1,
+                   last_failure_at = ?,
+                   updated_at = ?
+               WHERE host_id = ? AND retired_at IS NULL""",
+            (now, now, row["host_id"]),
+        )
+        await self._db.commit()
+        logger.warning(
+            "Studio Mini deep decoy restart failed after its stop completed; "
+            "saved as degraded for retry: %s",
+            self._failure_reason or "no reason recorded",
+        )
 
     async def handle_ip_conflict(self, ip: str) -> bool:
         """Stop the deep host if a real LAN device claims its address."""
