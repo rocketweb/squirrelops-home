@@ -1293,9 +1293,11 @@ async def run_sensor(
                     return await mimic_orchestrator.reconcile_ip_conflicts(arp_results)
                 conflicts = await ip_manager.find_conflicts(arp_results)
                 evacuated = 0
-                for conflict_ip in conflicts:
+                for conflict_ip, owner_mac in conflicts.items():
                     if conflict_ip == deep_orchestrator.active_virtual_ip:
-                        removed = await deep_orchestrator.handle_ip_conflict(conflict_ip)
+                        removed = await deep_orchestrator.handle_ip_conflict(
+                            conflict_ip, owner_mac
+                        )
                     else:
                         removed = await mimic_orchestrator.handle_ip_conflict(conflict_ip)
                     if removed:

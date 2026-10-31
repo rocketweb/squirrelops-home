@@ -693,7 +693,7 @@ class TestEntryPointStartup:
         mock_subsystems["deep_orchestrator"].reconcile.assert_awaited_once()
         mock_subsystems["ip_manager"].find_conflicts.assert_awaited_once_with(raw_arp)
         mock_subsystems["deep_orchestrator"].handle_ip_conflict.assert_awaited_once_with(
-            deep_ip
+            deep_ip, "00:11:22:33:44:55"
         )
         mock_subsystems[
             "mimic_orchestrator"
