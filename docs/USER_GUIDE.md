@@ -493,8 +493,10 @@ reload that evidence; refreshing does not bypass startup checks or restart the g
 host whose startup failed is retried on a later network scan, no more often
 than once per minute. An intentionally stopped host stays stopped, and the
 sensor startup log says so: "Studio Mini deep decoy is stopped by the operator;
-enable it from the Decoys tab to publish it". A startup failure is logged as a
-warning that carries the reason shown on the Degraded badge.
+enable it from the Decoys tab to publish it". A stopped host stays listed on
+Decoys with its host toggle off; turn the toggle on to publish it again, since
+the Decoys tab is the only place a Studio host is enabled. A startup failure is
+logged as a warning that carries the reason shown on the Degraded badge.
 
 A Restart that stops the host but fails to bring it back saves the host as
 Degraded with the failure recorded, not as stopped. It is retried like any
