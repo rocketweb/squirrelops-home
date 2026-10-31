@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
 import socket
 from datetime import datetime
 from typing import Any
@@ -72,6 +73,12 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         # call's timeout, keeps a port-forward load from spending its budget
         # waiting behind a 40 second ARP scan and then timing out mid-apply.
         self._rpc_lock = asyncio.Lock()
+        # Every anchor load is named so a load that timed out can be
+        # identified afterwards. The nonce scopes sequence numbers to this
+        # process; a helper that outlives a sensor restart never confuses an
+        # old sequence 3 with a new one.
+        self._pf_generation_nonce = secrets.token_hex(8)
+        self._pf_generation_sequence = 0
 
     async def is_available(self) -> bool:
         """Prove this process can use the expected helper RPC protocol."""
@@ -350,6 +357,13 @@ class MacOSPrivilegedOps(PrivilegedOperations):
             logger.exception("Failed to remove IP alias %s via helper", ip)
             return False
 
+    def _next_port_forward_generation(self) -> dict[str, Any]:
+        self._pf_generation_sequence += 1
+        return {
+            "nonce": self._pf_generation_nonce,
+            "sequence": self._pf_generation_sequence,
+        }
+
     async def setup_port_forwards(
         self,
         rules: list[dict],
@@ -357,6 +371,7 @@ class MacOSPrivilegedOps(PrivilegedOperations):
         protected_endpoints: list[dict] | None = None,
     ) -> bool:
         """Delegate pfctl forwarding and virtual-IP isolation to the helper."""
+        generation = self._next_port_forward_generation()
         try:
             result = await self._call(
                 "setupPortForwards",
@@ -364,6 +379,7 @@ class MacOSPrivilegedOps(PrivilegedOperations):
                     "rules": rules,
                     "protected_endpoints": protected_endpoints or [],
                     "interface": interface,
+                    "generation": generation,
                 },
                 timeout=PORT_FORWARD_RPC_TIMEOUT,
             )
@@ -377,7 +393,8 @@ class MacOSPrivilegedOps(PrivilegedOperations):
                 PORT_FORWARD_RPC_TIMEOUT,
             )
             raise HelperOutcomeUnknownError(
-                "setupPortForwards timed out; packet-filter state unknown"
+                "setupPortForwards timed out; packet-filter state unknown",
+                generation=generation,
             ) from exc
         except Exception:
             logger.exception("Failed to set up port forwards via helper")
@@ -385,8 +402,13 @@ class MacOSPrivilegedOps(PrivilegedOperations):
 
     async def clear_port_forwards(self) -> bool:
         """Delegate pfctl port forward cleanup to the helper."""
+        generation = self._next_port_forward_generation()
         try:
-            result = await self._call("clearPortForwards", timeout=PORT_FORWARD_RPC_TIMEOUT)
+            result = await self._call(
+                "clearPortForwards",
+                {"generation": generation},
+                timeout=PORT_FORWARD_RPC_TIMEOUT,
+            )
             return result.get("success", False)
         except TimeoutError as exc:
             logger.error(
@@ -395,8 +417,47 @@ class MacOSPrivilegedOps(PrivilegedOperations):
                 PORT_FORWARD_RPC_TIMEOUT,
             )
             raise HelperOutcomeUnknownError(
-                "clearPortForwards timed out; packet-filter state unknown"
+                "clearPortForwards timed out; packet-filter state unknown",
+                generation=generation,
             ) from exc
         except Exception:
             logger.exception("Failed to clear port forwards via helper")
             return False
+
+    async def port_forward_generation(self) -> dict[str, Any] | None:
+        """Ask the helper which named anchor load is live.
+
+        The helper serves one request at a time, so this waits behind a load
+        that is still being applied and answers once its outcome is settled.
+        ``None`` means the question could not be answered: an older helper
+        without the method, a helper that stays silent, or a ledger that
+        names no generation. Callers treat ``None`` as unknown.
+        """
+        try:
+            result = await self._call(
+                "getPortForwardGeneration", timeout=PORT_FORWARD_RPC_TIMEOUT,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Helper did not answer getPortForwardGeneration within %.0fs",
+                PORT_FORWARD_RPC_TIMEOUT,
+            )
+            return None
+        except RuntimeError as exc:
+            if "Method not found" in str(exc):
+                logger.info("Helper predates named port-forward loads; outcome stays unknown")
+                return None
+            logger.exception("Failed to read the helper's port-forward generation")
+            return None
+        except Exception:
+            logger.exception("Failed to read the helper's port-forward generation")
+            return None
+        generation = result.get("generation") if isinstance(result, dict) else None
+        if (
+            not isinstance(generation, dict)
+            or not isinstance(generation.get("nonce"), str)
+            or isinstance(generation.get("sequence"), bool)
+            or not isinstance(generation.get("sequence"), int)
+        ):
+            return None
+        return {"nonce": generation["nonce"], "sequence": generation["sequence"]}
