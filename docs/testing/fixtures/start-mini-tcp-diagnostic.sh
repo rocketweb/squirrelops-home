@@ -27,8 +27,8 @@ verify_digest() {
         exit 1
     fi
 }
-verify_digest mini_tcp_diagnostic.py 8d3330aca67038485c0b8cf9ede00c8cb1864cc60363455a39ac7f4c2001d370
-verify_digest approved-scope.md 6f75109eb6cc4bb633411e47522638b8958cc1cc3fb7c148515fb54063471b61
+verify_digest mini_tcp_diagnostic.py 26d36c3eb53630dd0c3ec104ddbf0d61d75a8c03b9facae3bb8aa06dfce8b403
+verify_digest approved-scope.md 8c16143c93d67bd5b09eb79909c748e62e2c319a246e42105241212a6a3427d4
 
 echo "Inputs verified. Checking the stopped mini baseline; no installer or filter changes."
 exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \

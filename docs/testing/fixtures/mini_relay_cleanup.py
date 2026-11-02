@@ -18,7 +18,7 @@ base, upgrade, single = post.base, post.upgrade, post.single
 require = base.require
 PACKAGE_SHA = "3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea"
 
-EXPECTED = [*post.EXPECTED_INTENT, [7, "home_assistant", "192.168.1.115", 51232, "active"]]
+EXPECTED = [*post.EXPECTED_INTENT, [7, "home_assistant", "192.168.20.115", 51232, "active"]]
 CONTAINER = Path("/Library/SquirrelOps/acceptance-backups")
 CLAIM = CONTAINER / f"relay-{post.BOOT}-{PACKAGE_SHA[:12]}-attempt.json"
 PUBLIC = Path("/private/var/tmp/squirrelops-mini-relay-results.b0fp2kjt")
@@ -26,13 +26,13 @@ STAGE = Path("/private/var/root/squirrelops-mini-relay.r2RulhrI")
 CONSENT = "RELEASE DIAGNOSTIC TEST PF REFERENCE"
 PINS = {
     "mini_relay_diagnostic_acceptance.py": "d0869d08e99ca8054f319649cb9f7023a09dcfe84692158355f5bd9cbc4e8298",
-    "mini_acceptance.py": "47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a",
-    "mini_upgrade_acceptance.py": "4c732720e89da4b4a872b56e951b1b70b121e2db603185ecb36d298c99c464d3",
-    "mini_ownership_acceptance.py": "98d8729e112e8ff48bbf320b094ab96471e597dd48cec6a726b17807d07986e6",
-    "mini_launchd_acceptance.py": "7b2517b3c59fff71741be115267b1687e50c26c5e48c40b903bb3bfdebffa6ba",
-    "mini_single_ip_acceptance.py": "3a37156ff54ee8e0086b84036cbe155f4758509d93471047e6a28262e165e943",
-    "mini_post_reboot_acceptance.py": "b97147d63a35f8a7b93eade3f01c7a2dfc03a80a6f09b3c29cec7156885cc068",
-    "approved-scope.md": "0a1faf62ad5c5a301a43a775316da538ef448b710e3a1026932006de4f25dc6b",
+    "mini_acceptance.py": "46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f",
+    "mini_upgrade_acceptance.py": "bb5e7b1c8155f7301f25139e6bd6091a3d5c116f6dc4efe39207937b08e3ae5a",
+    "mini_ownership_acceptance.py": "1edd5706b7dd5f0fc8285b50ce2d895a9952208218c19d1ddf66934715191287",
+    "mini_launchd_acceptance.py": "d03b69614bfb1cfae3eb4e545ac54717b083361ced1cdc12ffab5cd45a6e91f0",
+    "mini_single_ip_acceptance.py": "d2bd94df4abd88663cd07ed5df316ae667eb51c66f8fd2dacc6045225e7d4cde",
+    "mini_post_reboot_acceptance.py": "5aeabcf7cb3a99a852a35c9582c3042642de49c4968d107824328f0c00b33c21",
+    "approved-scope.md": "1b096ec147851f2aeeaafeeb2296d1affabfbab0f5dc1bc63418e7bc56e4f4f8",
 }
 EVIDENCE = {
     "status.json": "f81698909aa28568604a5998906a78b74e3378a4fd32a5da7f3b117a28b8df73",
@@ -89,7 +89,7 @@ def recover_baseline(records, token):
     endpoints = base.listener_endpoints(listeners[0]["stdout"])
     require(not any(uid == "309" for uid, _ in endpoints) and all(
         any(address == endpoint for _, address in endpoints)
-        for endpoint in ("*:22", "*:445", "*:5900", "192.168.1.115:11434")), "Incomplete native baseline")
+        for endpoint in ("*:22", "*:445", "*:5900", "192.168.20.115:11434")), "Incomplete native baseline")
 
     # Replay only fixed reads issued by the concrete-anchor parser. Commands
     # loaded from logs are data, never passed to a shell or subprocess.
@@ -247,7 +247,7 @@ class Cleanup(post.PostRebootUpgrade):
             shutil.copyfile(PUBLIC / name, self.backup / ("original-" + name))
         require(self.command(["/usr/bin/uname", "-m"]).stdout.strip() == "arm64" and
                 self.command(["/usr/bin/sw_vers", "-buildVersion"]).stdout.strip() == post.BUILD, "Host/OS changed")
-        require("100.108.203.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong host")
+        require("100.64.0.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong host")
         user, group = base.pwd.getpwnam("_squirrelops"), base.grp.getgrnam("_squirrelops")
         require((user.pw_uid, user.pw_gid, user.pw_dir, user.pw_shell) ==
                 (309, 309, "/var/empty", "/usr/bin/false") and group.gr_gid == 309 and not group.gr_mem,
@@ -323,7 +323,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "boot_seconds": post.BOOT,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "boot_seconds": post.BOOT,
                           "source_results": str(PUBLIC), "reviewed_decoy_count": 7,
                           "only_mutation": "release_original_test_pf_reference_once",
                           "install": False, "restart": False, "database_edits": False,

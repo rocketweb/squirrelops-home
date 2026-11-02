@@ -6,12 +6,12 @@ The reboot recovery is complete as observed, not a successful upgrade test.
 
 ## Exact target and artifact
 
-- Mini only: `matt@100.108.203.27`, LAN `192.168.1.115`, ARM64, macOS build
+- Mini only: `operator@100.64.0.27`, LAN `192.168.20.115`, ARM64, macOS build
   `26A434`, current observed boot `1790777754`.
 - Current sensor/helper jobs are disabled and unloaded. No product runtime or
   test alias was observed. PF is disabled with zero states; Apple's concrete
   anchors are empty except for their anchor declarations.
-- Preserve the root-owned stale ledger entry `192.168.1.240|en0` for the
+- Preserve the root-owned stale ledger entry `192.168.20.240|en0` for the
   installer's guarded retirement, not ad-hoc deletion.
 - Existing unsigned/ad-hoc local-test package:
   `build/test-artifacts/SquirrelOpsHome-2.1.0-launchd-budget-20260930-local-test.pkg`.
@@ -45,9 +45,9 @@ The reboot recovery is complete as observed, not a successful upgrade test.
    Verify guest exit, alias withdrawal, policy cleanup and intent preservation
    before restart; a survivor stops the test with protection retained.
 5. Only after fresh `READY FOR TESTS`, run the previously scoped bounded laptop
-   checks from `192.168.1.7` against `.240`: SSH/SFTP, SMB synthetic file
+   checks from `192.168.20.7` against `.240`: SSH/SFTP, SMB synthetic file
    roundtrip, the three synthetic AI endpoints and direct backend refusal.
-   Maximum observation is 20 minutes. No native mini service, `.241` or Studio
+   Maximum observation is 20 minutes. No native mini service, `.241` or test host A
    probe. Guest credentials stay private. No Little Snitch rule decisions.
 6. Stop the mini product runtime; verify guest exit before withdrawing owned
    aliases/product rules. Stop the helper, restore both disabled overrides,
@@ -58,11 +58,11 @@ The reboot recovery is complete as observed, not a successful upgrade test.
 ## Failure, inverse and release limits
 
 No automatic data downgrade, broad config restore, force-kill, PF reset, old
-reference-token reuse, Studio operation or third-party firewall change.
+reference-token reuse, test host A operation or third-party firewall change.
 If a partial install or surviving runtime prevents cleanup, stop with evidence
 and remaining protection retained; no blind retry. Restoring older payloads or
 data is a separate reviewed recovery, not the automatic inverse. The old pool
-must not be restored or started while the Studio owns `.241`.
+must not be restored or started while test host A owns `.241`.
 
 Configuration inverse requires the verified pre-change backup, matching current
 new config, stopped runtime and separate approval after resolving `.241`.

@@ -8,10 +8,10 @@ The revised run has now completed all eight phases and scoped cleanup. See the
 The paths and 24-test count below describe the original bundle. Do not rerun it;
 the corrected bundle must be separately pinned and verified before another run.
 
-Matt approved Mini-only temporary IPs 192.168.1.239 and .240 after conflict
+Matt approved Mini-only temporary IPs 192.168.20.239 and .240 after conflict
 checks, disposable listeners, packet captures, deliberate listener/state-cleanup
 failures and scoped cleanup. This does not authorize changing the installed
-services/data, Little Snitch, Studio, .241, or releasing a package.
+services/data, Little Snitch, test host A, .241, or releasing a package.
 
 The [runner scope and rollback](fixtures/pf-acceptance/README.md) describe all
 eight phases. A standalone binary compiles the unchanged production helper
@@ -27,7 +27,7 @@ the installed helper socket or edit its alias ledger.
   Service UID/GID 309:309 and Matt UID/GID 501:20 remain unchanged.
 - Installed child Python hash remains
   `d2555cd22a33506826f9eb069bb13fb0cc41303c7da41da5b761967d616f4147`.
-- Laptop routes both targets through wlp0s20f3 as 192.168.1.7. The default
+- Laptop routes both targets through wlp0s20f3 as 192.168.20.7. The default
   interpreter has no Scapy, so the new client uses tested standard-library
   AF_PACKET frames instead. No dependency was installed.
 - Root-only PF inventory, database/config fingerprints and address-conflict
@@ -56,7 +56,7 @@ Production code was not changed.
 Reproduction:
 
 ```sh
-SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
+SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
   /usr/bin/python3 -m unittest discover \
   -s docs/testing/fixtures/pf-acceptance -p test_runner.py -v
 ```
@@ -68,7 +68,7 @@ not replace those suites or turn a local check into live PF acceptance.
 ## Staged artifacts
 
 - Local generated bundle: `/private/tmp/squirrelops-a5-build.NWUKgiwu/stage`.
-- Mini: `/Users/matt/squirrelops-mini-a5.WSuVNfcd`.
+- Mini: `/Users/operator/squirrelops-mini-a5.WSuVNfcd`.
 - Laptop client: `/root/squirrelops-a5-client.CCB2C2V6/client.py`.
 - Bundle `SHA256SUMS` hash:
   `55316c1801d7688680aa3b3865ae1a0ee331ac4aceb2e9ec45d42ff7beb37c90`.
@@ -80,10 +80,10 @@ not replace those suites or turn a local check into live PF acceptance.
 The Mini launcher copies fixed inputs into a fresh root-private durable backup,
 checks the pinned manifest and only then starts the attended preflight.
 
-Run on the **Mini**, not the Studio:
+Run on the **Mini**, not test host A:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-a5.WSuVNfcd/start-mini-a5.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-a5.WSuVNfcd/start-mini-a5.sh
 ```
 
 Leave Terminal open. On `READY: healthy`, notify Codex promptly. Do not press

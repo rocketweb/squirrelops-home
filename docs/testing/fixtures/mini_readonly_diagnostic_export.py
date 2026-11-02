@@ -21,15 +21,15 @@ BACKUP = Path('/Library/SquirrelOps/acceptance-backups/mini-post-reboot-20260930
 RECEIPT = Path('/private/var/tmp/squirrelops-mini-reference-cleanup-results.22mxy1fp/status.json')
 RECEIPT_SHA = '3a0a7c6a63e73b779d7e3552c9e2fdf42c67acb80676960d27813b61cc488cfc'
 LOG = Path('/Library/SquirrelOps/sensor/logs/squirrelops-sensor.log')
-CLIENT, VIP = '192.168.1.7', '192.168.1.240'
+CLIENT, VIP = '192.168.20.7', '192.168.20.240'
 PORTS = {22, 445, 11434, 1234, 8765, 49878, 49879, 49880, 49881, 49882}
 LS = '/Applications/Little Snitch.app/Contents/Components/littlesnitch'
 LISTENERS = ['/usr/sbin/lsof', '-nP', '-iTCP', '-sTCP:LISTEN', '-Fpun']
-PACKET = re.compile(r'(2026-09-30 \d{2}:\d{2}:\d{2}\.\d{1,9}) IP (192\.168\.1\.(?:7|240))\.(\d+) > (192\.168\.1\.(?:7|240))\.(\d+): tcp (\d+)')
+PACKET = re.compile(r'(2026-09-30 \d{2}:\d{2}:\d{2}\.\d{1,9}) IP (192\.168\.20\.(?:7|240))\.(\d+) > (192\.168\.20\.(?:7|240))\.(\d+): tcp (\d+)')
 LOG_LINE = re.compile(r'(2026-09-30 (?:12|16):(?:1[2-9]|2[0-7]):\d{2},\d{3}) \[(INFO|WARNING|ERROR|CRITICAL)\] ([a-zA-Z0-9_.]+): (.*)')
 EVENTS = (
     ('guest_exit', r'Deep-decoy runtime exited unexpectedly with status (-?\d+)'),
-    ('deep_active', r'Studio Mini deep decoy active at 192\.168\.1\.240'),
+    ('deep_active', r'Studio Mini deep decoy active at 192\.168\.20\.240'),
     ('classic_activation', r'Activated (\d+) classic decoys \((\d+) recovered, (\d+) newly deployed\)'),
     ('classic_deployed', r"Deployed decoy '.*' \(id=(\d+)\) on port (\d+)"),
     ('classic_resumed', r'Resumed (\d+) active decoys from database'),
@@ -142,7 +142,7 @@ def listener_records(record: dict) -> list:
         elif re.fullmatch(r'u\d+', line):
             uid = int(line[1:])
         else:
-            match = re.fullmatch(r'n192\.168\.1\.240:(\d+)', line)
+            match = re.fullmatch(r'n192\.168\.20\.240:(\d+)', line)
             if match and int(match[1]) in PORTS and pid is not None and uid is not None:
                 result.append(dict(pid=pid, uid=uid, ip=VIP, port=int(match[1])))
     return result

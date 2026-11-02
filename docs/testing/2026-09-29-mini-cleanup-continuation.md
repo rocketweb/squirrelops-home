@@ -35,7 +35,7 @@ continuation uses the corrected wait when stopping the remaining helper.
 | New private child of this baseline | Preserve initial status, script, scope, command logs and an integrity-checked pre-cleanup SQLite backup |
 | Guest PID 27646 and VM PID 27647 | Revalidate UID, executable path and process start identity; SIGTERM only these identities, at most 45 seconds each; no SIGKILL |
 | `distnoted` PID 27648 | Inspect identity only; never signal it |
-| Owned VIP `192.168.1.240` | After runtime/listener absence, apply block-only quarantine, remove its alias and proxy ARP, then verify both approved VIPs absent |
+| Owned VIP `192.168.20.240` | After runtime/listener absence, apply block-only quarantine, remove its alias and proxy ARP, then verify both approved VIPs absent |
 | Product forwarding anchor and helper | Clear product forwards only after alias withdrawal, then boot out only `com.squirrelops.helper` with a bounded wait |
 | This run's PF reference | Match the private saved token to original successful acquisition and current references; release only that token after network absence, empty-policy inventory and original native listener/interface parity |
 | App, installed runtime, account, config, database, logs, earlier backups | Retain; no uninstall, recursive deletion, permission reset or restart |
@@ -72,15 +72,15 @@ concurrent or repeated mutation attempts. Never delete that marker to retry.
 
 ## Staging verification
 
-The new files were copied into `/Users/matt/squirrelops-mini-test.yktIwbVu`
+The new files were copied into `/Users/operator/squirrelops-mini-test.yktIwbVu`
 only after verifying they did not already exist. Original setup files and the
 candidate package were not overwritten. Remote checks matched these digests:
 
 | File | SHA-256 |
 | --- | --- |
-| `finish-mini-cleanup.sh` | `a207ecf6c1a7a1d6a4a418f88e17d52e444a62bcff1198f4b0fa0ebd531adadf` |
-| `mini_cleanup.py` | `ee842b733f72c0cba2343d1abc29a614b1f9790d9fa5ac33a375729397c328ad` |
-| Unchanged `mini_acceptance.py` | `47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a` |
+| `finish-mini-cleanup.sh` | `c8d360d7d4663907c741a3fcfd43857a93dce5b96b2a1617b2f45573316a77dc` |
+| `mini_cleanup.py` | `b956a22a8b3dc47eaa916a0f42202d98a59cb8a162db7ac1eac32d79e64c6c5c` |
+| Unchanged `mini_acceptance.py` | `46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f` |
 | Unchanged `candidate.pkg` | `3e8c0fc78befad3365fdbff5583d9f85c6b6fe01816b5863edbebeceaa4b8f5f` |
 
 Remote `/bin/bash -n` passed. Running `mini_cleanup.py` without `--run` using
@@ -95,7 +95,7 @@ subsequently completed using the attended command below.
 Executed once on the mini after staged checksum verification. **Do not rerun:**
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-test.yktIwbVu/finish-mini-cleanup.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-test.yktIwbVu/finish-mini-cleanup.sh
 ```
 
 ## Live completion and independent verification

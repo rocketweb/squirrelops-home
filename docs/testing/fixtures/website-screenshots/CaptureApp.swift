@@ -10,7 +10,7 @@ private enum SyntheticScreens {
         let bytes = try JSONEncoder().encode(value)
         let text = String(decoding: bytes, as: UTF8.self)
             .replacingOccurrences(of: "192.168.1.", with: "192.168.50.")
-            .replacingOccurrences(of: "matts-macbook-pro", with: "office-macbook")
+            .replacingOccurrences(of: "home-macbook-pro", with: "office-macbook")
             .replacingOccurrences(of: "Matt's MacBook Pro", with: "Office MacBook Pro")
             .replacingOccurrences(of: "2026-02-23", with: "2026-10-02")
             .replacingOccurrences(of: "2026-02-22", with: "2026-10-01")

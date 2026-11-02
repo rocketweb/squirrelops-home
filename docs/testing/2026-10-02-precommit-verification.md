@@ -74,7 +74,7 @@ still requires a new, attended, isolated maintenance scope. A proposed scope
 has been presented for approval: Mini only, provisional `.239` and `.240` VIPs
 after conflict checks, disposable listeners, packet evidence and injected
 listener/state-cleanup failures. Existing data and held jobs, Little Snitch,
-the Studio and `.241` remain outside that scope. No live runner is authorized
+test host A and `.241` remain outside that scope. No live runner is authorized
 merely by the contents of this report, and no old runner is reusable.
 
 The official Home release workflow has no current 2.1 artifact. The latest

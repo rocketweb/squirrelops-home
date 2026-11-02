@@ -1,12 +1,12 @@
 # Approved mini-only .240 continuation
 
-Matt approved narrowing the mini's test pool after diagnosis showed that the
-Mac Studio owns `.241`. This continuation leaves the Studio, its sensor and its
+Matt approved narrowing the mini's test pool after diagnosis showed that
+test host A owns `.241`. This continuation leaves test host A, its sensor and its
 aliases unchanged. It does not bypass conflict detection.
 
 ## Exact change, backup and inverse
 
-Target host: `matt@100.108.203.27`, macOS 27.0 build `26A428`, ARM64.
+Target host: `operator@100.64.0.27`, macOS 27.0 build `26A428`, ARM64.
 Target file: `/Library/SquirrelOps/sensor/config.yaml`, UID/GID 309, mode 0600.
 The existing receipt remains `1790731448`; product services, guest and owned
 aliases must be absent before any change.
@@ -20,8 +20,8 @@ aliases must be absent before any change.
 +  max_virtual_ips: 1
 ```
 
-- Original file SHA-256: `6e210567e3baae3950d91153b44090876ae6978b2a67677b1690aaf5c8f02330`.
-- Revised file SHA-256: `6b492246632eee7bc3975e84fc7c75699d3dcdfc15f2ec542ec673ab243b4bd8`.
+- Original file SHA-256: `10f6f8c800308a47f5fd728aaf9a6ae6eeed9f6d437427a43bae3039ea663087`.
+- Revised file SHA-256: `1318489677a7143395487f4a07703cac31b77577daf276000c36ca39414c2aa5`.
 - Only those two YAML values change. All other bytes are preserved.
 - No database rows, statuses, credentials, counters or history are rewritten.
 
@@ -70,7 +70,7 @@ guest exit, alias withdrawal and unchanged intended state, then bootstrap the
 installed sensor once and repeat readiness. The classic `.115:60556` listener
 is preserved, not a client-probe target.
 
-Only `READY FOR TESTS` permits laptop probes from `192.168.1.7` through
+Only `READY FOR TESTS` permits laptop probes from `192.168.20.7` through
 `wlp0s20f3`. The client checks the exact candidate, fresh readiness, verified
 configuration, and `mini-single-ip-240` scope before any traffic. `.241` is not
 a valid guest, mapping, ownership entry, test alias or packet-capture target.

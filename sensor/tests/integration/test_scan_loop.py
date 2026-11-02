@@ -94,7 +94,7 @@ def device_manager(
 def mock_ops() -> AsyncMock:
     """Mocked privileged operations."""
     ops = AsyncMock(spec=PrivilegedOperations)
-    ops.local_interface_macs.return_value = {"1C:1D:D3:E0:7D:03"}
+    ops.local_interface_macs.return_value = {"1C:1D:D3:5A:6B:03"}
     ops.arp_scan.return_value = [
         ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
         ("192.168.1.2", "AA:BB:CC:DD:EE:02"),
@@ -178,7 +178,7 @@ class TestScanLoopExecution:
         mock_ops.arp_scan.return_value = [
             ("192.168.1.1", "AA:BB:CC:DD:EE:01"),
             ("192.168.1.99", "AA:BB:CC:DD:EE:02"),  # remapped known MAC
-            ("192.168.1.200", "1C:1D:D3:E0:7D:03"),  # local proxy-ARP
+            ("192.168.1.200", "1C:1D:D3:5A:6B:03"),  # local proxy-ARP
             ("192.168.1.50", "AA:BB:CC:DD:EE:50"),  # unknown identity
         ]
 
@@ -192,7 +192,7 @@ class TestScanLoopExecution:
         assert events[-1]["inventory_degraded"] is True
 
         mock_ops.local_interface_macs.side_effect = None
-        mock_ops.local_interface_macs.return_value = {"1C:1D:D3:E0:7D:03"}
+        mock_ops.local_interface_macs.return_value = {"1C:1D:D3:5A:6B:03"}
         await scan_loop.run_single_scan()
         await asyncio.sleep(0)
         assert events[-1]["inventory_degraded"] is False
@@ -439,7 +439,7 @@ class TestScanLoopExecution:
         db: aiosqlite.Connection,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        local_mac = "1c:1d:d3:e0:7d:03"
+        local_mac = "1c:1d:d3:5a:6b:03"
         external_mac = "38:42:0b:48:51:07"
         monkeypatch.setattr(
             "squirrelops_home_sensor.scanner.loop._local_interface_macs",
@@ -471,12 +471,12 @@ class TestScanLoopExecution:
     ) -> None:
         monkeypatch.setattr(
             "squirrelops_home_sensor.scanner.loop._local_interface_macs",
-            AsyncMock(return_value={"1C:1D:D3:E0:7D:03"}),
+            AsyncMock(return_value={"1C:1D:D3:5A:6B:03"}),
             raising=False,
         )
         mock_ops.arp_scan.return_value = [
-            ("192.168.1.203", "AE:29:0A:E5:CC:C5"),
-            ("192.168.1.209", "AE:29:0A:E5:CC:C5"),
+            ("192.168.1.203", "AE:29:0C:5D:6E:7F"),
+            ("192.168.1.209", "AE:29:0C:5D:6E:7F"),
         ]
 
         await scan_loop.run_single_scan()
@@ -499,7 +499,7 @@ class TestScanLoopExecution:
         """Ambiguous MAC claims quarantine both targets and preserve inventory."""
         monkeypatch.setattr(
             "squirrelops_home_sensor.scanner.loop._local_interface_macs",
-            AsyncMock(return_value={"1C:1D:D3:E0:7D:03"}),
+            AsyncMock(return_value={"1C:1D:D3:5A:6B:03"}),
             raising=False,
         )
         victim_mac = "AA:BB:CC:00:00:50"
@@ -1631,7 +1631,7 @@ class TestScanLoopPhase3:
             ),
         )
         ops = AsyncMock(spec=PrivilegedOperations)
-        ops.local_interface_macs.return_value = {"1C:1D:D3:E0:7D:03"}
+        ops.local_interface_macs.return_value = {"1C:1D:D3:5A:6B:03"}
         ops.arp_scan.return_value = [
             ("192.168.1.77", "02:00:00:00:00:77"),
         ]

@@ -285,15 +285,15 @@ class TestD13SlackFormatting:
             "title": "t",
             "detail": "d",
             "source_ip": "192.168.1.101",
-            "source_mac": "AE:29:0A:E5:CC:C5",
+            "source_mac": "AE:29:0C:5D:6E:7F",
             "device_id": 21,
             "created_at": "2026-08-07T00:00:00Z",
             "alert_type": "decoy.trip",
         }
         without = json.dumps(format_slack_payload(alert))
         with_info = json.dumps(format_slack_payload(alert, include_device_info=True))
-        assert "AE:29:0A:E5:CC:C5" not in without
-        assert "AE:29:0A:E5:CC:C5" in with_info
+        assert "AE:29:0C:5D:6E:7F" not in without
+        assert "AE:29:0C:5D:6E:7F" in with_info
 
 
 class TestD14DeliveryFailureKeepsEvidence:

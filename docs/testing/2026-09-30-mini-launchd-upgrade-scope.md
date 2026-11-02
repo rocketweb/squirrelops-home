@@ -11,7 +11,7 @@ SHA-256 `707399a27e4e66f62dedc90b9c8b7f6a9cb369dc8c45ba22ea9ffa7caa886042`.
 It records stopped services/guest, no test aliases, native listener parity,
 release of only the test's PF reference, and disabled PF.
 
-- Target: `matt@100.108.203.27`, ARM64 macOS 27.0 build `26A428`.
+- Target: `operator@100.64.0.27`, ARM64 macOS 27.0 build `26A428`.
 - Existing installed receipt timestamp: `1790731448`. Old app, helper, guest,
   sensor entry point, classic orchestrator, Python and bounded configuration
   must match the ownership-fix package. The existing `_squirrelops` identity
@@ -55,7 +55,7 @@ attempt marker prevents silent retries. Return declines without installation.
 5. Bootstrap the installed sensor once, repeat readiness and intent checks,
    then report `READY FOR TESTS` and observe for at most 20 minutes.
 6. Only after readiness, permit the existing bounded laptop client from
-   `192.168.1.7` via `wlp0s20f3`. It requires a fresh readiness snapshot for this
+   `192.168.20.7` via `wlp0s20f3`. It requires a fresh readiness snapshot for this
    exact package. Synthetic guest credentials stay in private files.
 
 The client checks SSH banner, login and SFTP operations; SMB shares, login and

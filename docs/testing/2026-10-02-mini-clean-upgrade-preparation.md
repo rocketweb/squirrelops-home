@@ -6,7 +6,7 @@ installation failed; Mini work paused at Matt's request.
 Historical attended command, **do not rerun**:
 
 ```bash
-sudo /bin/bash /Users/matt/squirrelops-mini-clean-upgrade.LtUQXpyS/resume-mini-clean-upgrade.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-clean-upgrade.LtUQXpyS/resume-mini-clean-upgrade.sh
 ```
 
 The copied package and script digests, shell syntax, read-only runner output
@@ -81,11 +81,11 @@ Directory Service merely to make an old check pass.
 Corrected uninstaller SHA-256:
 `1f2e64b73b20db7cbacf5caf9ac0d79053c7a1db754684dbc96b4e6a9f3166b6`.
 Resume runner SHA-256:
-`9aafd26e22f9bdb2bb4b66e7f9d71c7cd023f278856a8ea50b160c1c70db300e`.
+`3f89a2268b94f911755b27b52853b59d5b9fcc39a86a1489f4e995fbeaf2d4d2`.
 Shared runner SHA-256:
-`90504c8a7a1f422e5692bac138ecd7e15f5ad0479cb51579f2f4284cd065afe0`.
+`940bbe44675f80f7a074722b3e6c231b1214f281413269b971cbbbd8c0d3c320`.
 Resume bootstrap SHA-256:
-`d568bbb48a4183804b484062fb3f28dc39c33e4e9dc01098b211fe98af58c4d7`.
+`cf4b0c011224f2628df4deee6357c217aad7bd35c696f541acdc3cfd24109a97`.
 
 The source fixes still need commit/review, inclusion in a rebuilt 2.1 package
 and release acceptance. They do not retroactively repair the previously built
@@ -120,7 +120,7 @@ The same staged command is used; package bytes and destructive scope are unchang
 Matt explicitly authorized wiping the existing SquirrelOps installation and
 data on the Mini, installing an older version, and testing an in-place upgrade.
 This supersedes the macOS VM proposal. It does not authorize wiping the Mac,
-changing Home Assistant, Tailscale, Little Snitch, native services, the Studio,
+changing Home Assistant, Tailscale, Little Snitch, native services, test host A,
 `.241`, or global PF policy.
 
 ## First attended operation

@@ -42,7 +42,7 @@ class Resume(base.Reset):
         os.umask(0o077)
         for p in (Path('/Library/SquirrelOps'), base.ARCHIVES, PRIOR, self.task):
             base.safe_root(p)
-        require('d0:11:e5:12:9a:c2' in self.command(['/sbin/ifconfig', 'en0']).stdout,
+        require('d0:11:e5:3c:4d:5e' in self.command(['/sbin/ifconfig', 'en0']).stdout,
                 'Wrong machine: this operation is for the Mini only')
         for label in base.JOBS:
             require(not self.loaded(label), 'Product job reappeared; no recovery authorized')

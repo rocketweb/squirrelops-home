@@ -119,7 +119,7 @@ class MaintenanceHoldTests(unittest.TestCase):
         s.hold_state = Mock(return_value=dict.fromkeys(m.JOBS, False))
         s.rows = Mock(return_value=s.original_rows)
         s.job = Mock(side_effect=lambda job: f"system/{job} = {{\n\tpid = {887 if job == m.JOBS[0] else 888}\n}}")
-        s.owned = Mock(return_value=["192.168.1.240"])
+        s.owned = Mock(return_value=["192.168.20.240"])
         s.inventory_policy = Mock(return_value=s.policy)
         s.pf_enabled = Mock(return_value=True)
         s.pf = Mock(return_value=s.references)

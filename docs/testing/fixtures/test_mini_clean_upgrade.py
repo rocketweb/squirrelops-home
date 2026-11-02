@@ -17,7 +17,7 @@ def test_plan_is_read_only():
     result = subprocess.run([__import__('sys').executable, spec.origin], text=True, capture_output=True, check=True)
     plan = json.loads(result.stdout)
     assert plan['mode'] == 'plan_only'
-    assert plan['host'] == '100.108.203.27'
+    assert plan['host'] == '100.64.0.27'
     assert plan['upgrade_run'] is False
     assert '/Library/SquirrelOps/acceptance-backups' not in plan['targets']
     assert '/Library/SquirrelOps' not in plan['targets']

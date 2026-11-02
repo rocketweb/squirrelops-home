@@ -1,6 +1,6 @@
 # SquirrelOps Home 2.1 release-fix results
 
-Date: September 4, 2026. Local verification completed on Matt's arm64 Mac Studio.
+Date: September 4, 2026. Local verification completed on an Apple Silicon (arm64) test Mac.
 
 ## Outcome
 
@@ -62,11 +62,11 @@ The extracted app passed `codesign --verify --deep --strict`. That proves local 
 
 ## Installer and identity
 
-[Download the new arm64 local-test installer](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-release-fixes-20260904-local-test.pkg)
+[Download the new arm64 local-test installer](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-release-fixes-20260904-local-test.pkg)
 
 | Identity | Value |
 | --- | --- |
-| Checkout | `/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current` |
+| Checkout | `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current` |
 | Branch | `feature/deception-depth-2.1.0-current` |
 | Base commit | `6b6ef8b5fe3d694695a9bc74982cbe80d05baeb5` plus this uncommitted working diff |
 | Distribution, app, sensor version | `2.1.0` |

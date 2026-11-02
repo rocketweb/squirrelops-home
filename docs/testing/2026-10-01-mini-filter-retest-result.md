@@ -11,11 +11,11 @@ source, configuration or filter rules were changed by the agent in this run.
 ## Exact run
 
 - [Approved scope](2026-10-01-mini-filter-retest-scope.md).
-- Mini `100.108.203.27`, boot `1790777754`, VIP `192.168.1.240` only.
-- Laptop `192.168.1.7`, route `wlp0s20f3`.
+- Mini `100.64.0.27`, boot `1790777754`, VIP `192.168.20.240` only.
+- Laptop `192.168.20.7`, route `wlp0s20f3`.
 - Installed package SHA-256:
   `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
-- Mini staging: `/Users/matt/squirrelops-mini-filter-retest.1moGrUKm`.
+- Mini staging: `/Users/operator/squirrelops-mini-filter-retest.1moGrUKm`.
 - Root-produced results: `/private/var/tmp/squirrelops-mini-filter-retest-results.4nf8sas0`.
 - Laptop staging: `/root/squirrelops-mini-upgrade-client.ROWFDZto`.
 - Private backend mapping: SSH 64244, SMB 64245, Ollama 64246,
@@ -94,7 +94,7 @@ therefore remain unverified by this run.
 ## New filter prompt
 
 Matt reported a new prompt and supplied `Screenshot 2026-10-01 at 7.33.13 AM.png`.
-It shows **python3.12 connecting out to 192.168.1.13**, not the deception
+It shows **python3.12 connecting out to 192.168.20.13**, not the deception
 guest accepting laptop `.7`. The screenshot does not show the executable path,
 PID or port. It is not evidence of an SMB-connection approval barrier, nor
 proof that no other prompt was pending. Matt was asked to leave it unanswered.

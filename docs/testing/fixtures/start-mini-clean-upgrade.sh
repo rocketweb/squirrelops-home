@@ -26,7 +26,7 @@ verify_digest() {
 }
 verify_digest old.pkg 252bd6bd559b4dbf578410aa959611675d3b627163ee885f404857cb67ab23f8
 verify_digest current.pkg 47774088cd9eadc5aaddf38949e00a8b8f6eeb56c2192a5a72830d06d84a8aec
-verify_digest mini_clean_upgrade.py 90504c8a7a1f422e5692bac138ecd7e15f5ad0479cb51579f2f4284cd065afe0
+verify_digest mini_clean_upgrade.py 940bbe44675f80f7a074722b3e6c231b1214f281413269b971cbbbd8c0d3c320
 echo "Reset inputs verified. Preparing private Python; no product files removed yet."
 # This is the already-reviewed current candidate, used only for its interpreter
 # and retained recovery artifact. It is NOT installed by this operation.

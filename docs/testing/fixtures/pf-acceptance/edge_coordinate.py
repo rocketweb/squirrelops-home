@@ -1,4 +1,4 @@
-"""Studio coordinator for one ready, approved Mini run. Default: no action."""
+"""Test host A coordinator for one ready, approved Mini run. Default: no action."""
 import argparse
 import json
 from pathlib import Path
@@ -18,7 +18,7 @@ def ssh(host):
     return ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=8",
             "-o", "ControlMaster=auto", "-o", "ControlPersist=600", "-o",
             "ControlPath=" + CONTROL + ("mini.sock" if host == "mini" else "laptop.sock"),
-            "matt@100.108.203.27" if host == "mini" else "root@192.168.1.7"]
+            "operator@100.64.0.27" if host == "mini" else "root@192.168.20.7"]
 
 
 class Coordinator:
@@ -35,8 +35,8 @@ class Coordinator:
 
     def status(self):
         value = json.loads(self.remote("/bin/cat " + shlex.quote(self.status_path)))
-        if (value.get("scope") != "mini-a5-disposable" or value.get("vips") != ["192.168.1.239", "192.168.1.240"]
-                or value.get("peer") != "192.168.1.7" or value.get("public_ports") != [22, 445]
+        if (value.get("scope") != "mini-a5-disposable" or value.get("vips") != ["192.168.20.239", "192.168.20.240"]
+                or value.get("peer") != "192.168.20.7" or value.get("public_ports") != [22, 445]
                 or value.get("backend_ports") != [61322, 61445]
                 or not re.fullmatch(r"[a-f0-9]{12}", value.get("nonce", ""))
                 or value.get("inbox") != str(Path(self.status_path).parent / "acknowledgements")

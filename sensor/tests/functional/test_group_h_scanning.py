@@ -24,7 +24,7 @@ class TestH03UnpaddedArpOctets:
     """
 
     def test_a_single_unpadded_octet_is_padded(self):
-        assert normalize_mac("ae:29:a:e5:cc:c5") == "AE:29:0A:E5:CC:C5"
+        assert normalize_mac("ae:29:c:5d:6e:7f") == "AE:29:0C:5D:6E:7F"
 
     def test_every_octet_may_be_unpadded(self):
         assert normalize_mac("a:b:c:d:e:f") == "0A:0B:0C:0D:0E:0F"
@@ -34,8 +34,8 @@ class TestH03UnpaddedArpOctets:
 
     def test_the_live_laptop_address_round_trips(self):
         # The exact form observed from `arp -an` on this machine.
-        assert normalize_mac("ae:29:a:e5:cc:c5") == normalize_mac(
-            "AE:29:0A:E5:CC:C5"
+        assert normalize_mac("ae:29:c:5d:6e:7f") == normalize_mac(
+            "AE:29:0C:5D:6E:7F"
         )
 
     def test_an_over_long_octet_is_still_rejected(self):

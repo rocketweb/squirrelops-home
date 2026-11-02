@@ -18,9 +18,9 @@ import subprocess
 import tempfile
 import time
 
-ADDRESS = "192.168.1.115"
-PEER = "192.168.1.7"
-ETHER = "d0:11:e5:12:9a:c2"
+ADDRESS = "192.168.20.115"
+PEER = "192.168.20.7"
+ETHER = "d0:11:e5:3c:4d:5e"
 PYTHON = "/Library/SquirrelOps/sensor/python/bin/python3.12"
 PYTHON_SHA = "d2555cd22a33506826f9eb069bb13fb0cc41303c7da41da5b761967d616f4147"
 ACCOUNTS = ((309, 309), (501, 20))
@@ -139,7 +139,7 @@ def validate_snapshot(snapshot):
     require(snapshot["address"].strip() == ADDRESS and "ether " + ETHER in snapshot["en0"], "Mini interface identity changed")
     require(re.search(r"interface:\s+en0\b", snapshot["route"]), "Laptop route changed")
     require(re.search(r"^Status:\s+Disabled\b", snapshot["pf"], re.M), "PF no longer disabled; no change authorized")
-    for ip in ("192.168.1.240", "192.168.1.241"):
+    for ip in ("192.168.20.240", "192.168.20.241"):
         require(not re.search(r"\binet\s+" + re.escape(ip) + r"\s", snapshot["interfaces"]), "Test VIP is assigned")
         require(not any(ip in line and ("published" in line or "permanent" in line)
                         for line in snapshot["arp"].splitlines()), "Test proxy ARP exists")
@@ -270,7 +270,7 @@ class Session:
                 "Unexpected private directory")
         for path in (self.folder, self.folder / "mini_tcp_diagnostic.py", self.folder / "approved-scope.md"):
             trusted(path)
-        validate_accounts([(pwd.getpwnam(name).pw_uid, pwd.getpwnam(name).pw_gid) for name in ("_squirrelops", "matt")])
+        validate_accounts([(pwd.getpwnam(name).pw_uid, pwd.getpwnam(name).pw_gid) for name in ("_squirrelops", "operator")])
         validate_runtime()
         return self.baseline()
 
@@ -372,7 +372,7 @@ def main(argv=None):
     parser.add_argument("--run", type=Path)
     args = parser.parse_args(argv)
     if args.run is None:
-        print("PLAN ONLY: two fixed-banner listeners on 192.168.1.115, UIDs 309/501; maximum 180 seconds. No host operations.")
+        print("PLAN ONLY: two fixed-banner listeners on 192.168.20.115, UIDs 309/501; maximum 180 seconds. No host operations.")
         return 0
     os.umask(0o077)
     try:

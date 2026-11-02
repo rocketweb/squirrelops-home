@@ -6,7 +6,7 @@ consumed installation runner. Keep SquirrelOps closed and retain PF protection.
 ## Exact attempt
 
 - Candidate SHA-256: `2d5f4d287ca3ce971fd201f539d27a9272431f160a5a5debddc8d1b0b4dc7c82`.
-- Attended runner: `/Users/matt/squirrelops-mini-ownership-v2.290wspVB/start-mini-ownership-acceptance.sh`.
+- Attended runner: `/Users/operator/squirrelops-mini-ownership-v2.290wspVB/start-mini-ownership-acceptance.sh`.
 - Root staging: `/private/var/root/squirrelops-mini-ownership.s4L9F0BA`.
 - Private backup: `/Library/SquirrelOps/acceptance-backups/mini-upgrade-20260929.z8rfqzvz`.
 - Sanitized results: `/private/var/tmp/squirrelops-mini-upgrade-results.w3qacnps`.
@@ -24,9 +24,9 @@ Cleanup incomplete: Guest/runtime remains; no force-kill or PF release
 
 ## Read-only observations
 
-`first-start.json` reports rows 1 to 5 active at `192.168.1.240` on ports 445,
+`first-start.json` reports rows 1 to 5 active at `192.168.20.240` on ports 445,
 22, 11434, 1234 and 8765. Row 6, the existing classic dev server on
-`192.168.1.115:60556`, is still active. All recorded counters remain zero;
+`192.168.20.115:60556`, is still active. All recorded counters remain zero;
 connection and alert inventories are empty. The guest's five advertised
 ports have tag/UID-guarded PF mappings in that startup snapshot.
 

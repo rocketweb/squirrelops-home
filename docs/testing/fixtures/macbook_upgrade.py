@@ -28,8 +28,8 @@ spec.loader.exec_module(base)
 require = base.require
 
 PACKAGE_SHA = '669e4b2b5762f819b4b07c4f5cddc5b6797bae4cd7519282280ee049d3533c17'
-MAC = 'ae:29:0a:e5:cc:c5'
-ADDRESS = '192.168.1.97'
+MAC = 'ae:29:0c:5d:6e:7f'
+ADDRESS = '192.168.20.97'
 APP = Path('/Applications/SquirrelOps Home.app')
 SENSOR = Path('/Library/SquirrelOps/sensor')
 DATABASE = SENSOR / 'data/squirrelops.db'

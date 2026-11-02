@@ -63,7 +63,7 @@ class ResolverAcceptance(unittest.TestCase):
             self.assertIn("plan", result.stdout.lower())
         plan = json.loads(subprocess.check_output([sys.executable, "-B", server.__file__], text=True))
         self.assertEqual(plan["package_sha256"], server.PACKAGE_SHA)
-        self.assertEqual(plan["test_vips"], ["192.168.1.240"])
+        self.assertEqual(plan["test_vips"], ["192.168.20.240"])
         self.assertFalse(plan["third_party_filter_rule_changes"])
 
     def test_approval_still_required_and_methods_are_inherited(self):
@@ -122,21 +122,21 @@ class ResolverAcceptance(unittest.TestCase):
 class ResolverClient(unittest.TestCase):
     def inputs(self):
         now = 1790888400
-        endpoints = {"guest_ip": "192.168.1.240", "mappings": [
-            {"ip": "192.168.1.240", "port": port, "backend": 50000 + i}
+        endpoints = {"guest_ip": "192.168.20.240", "mappings": [
+            {"ip": "192.168.20.240", "port": port, "backend": 50000 + i}
             for i, port in enumerate((22, 445, 1234, 11434, 8765))]}
-        login = {"ip": "192.168.1.240", "username": "buildbot", "password": "Juniper!123456"}
+        login = {"ip": "192.168.20.240", "username": "buildbot", "password": "Juniper!123456"}
         status = {"phase": "ready_for_tests", "sensor_uid": 309, "remaining_seconds": 1100,
                   "package_sha256": server.PACKAGE_SHA, "test_scope": server.SCOPE,
-                  "test_vips": ["192.168.1.240"], "boot_seconds": server.post.BOOT,
+                  "test_vips": ["192.168.20.240"], "boot_seconds": server.post.BOOT,
                   "configuration_unchanged": True, "config_change_verified": True,
                   "time": datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
         return endpoints, login, status, now
 
     def test_readiness_scope_pin_and_freshness(self):
-        self.assertEqual(client.validate_inputs(*self.inputs()), "192.168.1.240")
+        self.assertEqual(client.validate_inputs(*self.inputs()), "192.168.20.240")
         for key, value in (("package_sha256", server.PREVIOUS_PACKAGE_SHA), ("test_scope", "old"),
-                           ("test_vips", ["192.168.1.241"]), ("boot_seconds", 1),
+                           ("test_vips", ["192.168.20.241"]), ("boot_seconds", 1),
                            ("configuration_unchanged", False), ("config_change_verified", False),
                            ("remaining_seconds", 599), ("phase", "stopped")):
             endpoints, login, status, now = self.inputs()
@@ -149,7 +149,7 @@ class ResolverClient(unittest.TestCase):
 
     def test_exact_five_private_mappings_only(self):
         endpoints, login, status, now = self.inputs()
-        endpoints["mappings"].append({"ip": "192.168.1.240", "port": 8080, "backend": 51000})
+        endpoints["mappings"].append({"ip": "192.168.20.240", "port": 8080, "backend": 51000})
         with self.assertRaises(RuntimeError):
             client.validate_inputs(endpoints, login, status, now)
         endpoints["mappings"].pop()
@@ -158,12 +158,12 @@ class ResolverClient(unittest.TestCase):
             client.validate_inputs(endpoints, login, status, now)
 
     def test_smb_uses_empty_config_no_kerberos_and_direct_445(self):
-        arguments = client.smb_arguments("192.168.1.240")
-        for value in ("/dev/null", "--use-kerberos=off", "192.168.1.240", "445"):
+        arguments = client.smb_arguments("192.168.20.240")
+        for value in ("/dev/null", "--use-kerberos=off", "192.168.20.240", "445"):
             self.assertIn(value, arguments)
         self.assertNotIn("-N", arguments)  # Authenticated calls must still prompt once.
-        self.assertEqual(client.anonymous_arguments("192.168.1.240")[-5:],
-                         ["-L", "//192.168.1.240", "-N", "-U", "%"])
+        self.assertEqual(client.anonymous_arguments("192.168.20.240")[-5:],
+                         ["-L", "//192.168.20.240", "-N", "-U", "%"])
 
     def test_slow_success_cannot_pass_resolver_gate(self):
         self.assertTrue(client.timing_ok("smb_share_discovery", 0.8))
@@ -192,7 +192,7 @@ class ResolverClient(unittest.TestCase):
             stack.enter_context(patch.object(client.time, "time", return_value=now))
             stack.enter_context(patch.object(client.time, "monotonic", side_effect=[100, 120.841]))
             stack.enter_context(patch.object(client.subprocess, "run", return_value=SimpleNamespace(
-                stdout='[{"dev":"wlp0s20f3","prefsrc":"192.168.1.7"}]')))
+                stdout='[{"dev":"wlp0s20f3","prefsrc":"192.168.20.7"}]')))
             banner = stack.enter_context(patch.object(client, "banner_probe", return_value={"passed": True}))
             network = stack.enter_context(patch.object(client.socket, "create_connection",
                                                        side_effect=AssertionError("Unapproved later probe")))
@@ -212,7 +212,7 @@ class ResolverClient(unittest.TestCase):
             self.assertFalse(rows[-1]["passed"])
             fake_pexpect.spawn.assert_called_once()
             self.assertEqual(fake_pexpect.spawn.call_args.args,
-                             ("/usr/bin/smbclient", client.anonymous_arguments("192.168.1.240")[1:]))
+                             ("/usr/bin/smbclient", client.anonymous_arguments("192.168.20.240")[1:]))
             child.sendline.assert_not_called()
             network.assert_not_called()
             banner.reset_mock()

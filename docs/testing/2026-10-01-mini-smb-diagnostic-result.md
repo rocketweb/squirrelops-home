@@ -34,11 +34,11 @@ causal before/after runtime comparison has been performed.
 
 - [Approved scope](2026-10-01-mini-smb-diagnostic-scope.md).
 - [Preparation and regression evidence](2026-10-01-mini-smb-diagnostic-preparation.md).
-- Mini `100.108.203.27`, boot `1790777754`, VIP `.240` only.
+- Mini `100.64.0.27`, boot `1790777754`, VIP `.240` only.
 - Package SHA-256:
   `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
 - Root-produced results: `/private/var/tmp/squirrelops-mini-smb-results.rsylu0_t`.
-- Mini staging: `/Users/matt/squirrelops-mini-smb.HvkPvRep`.
+- Mini staging: `/Users/operator/squirrelops-mini-smb.HvkPvRep`.
 - Laptop staging: `/root/squirrelops-mini-smb-client.7xhb0h1T`.
 - Laptop source `.7` through `wlp0s20f3`; route rechecked before launch.
 - Guest PID 99708; SMB backend 51169. Other mappings: SSH 51168,
@@ -47,7 +47,7 @@ causal before/after runtime comparison has been performed.
 Root-owned 0755 result directory and regular, single-link root-owned 0644
 metadata files were verified before transfer. The laptop directory was
 root-owned 0700 and its client was root-owned 0600, with matching SHA-256
-`203404d31a5476dced345fbc4db0fdb2c7fe27d9e008a5be45465209c0c220da`.
+`2bc07a0a4ec0ac624a7fb0d8bc197e15e97799d8772007b59857773a1528b892`.
 Only status and endpoint metadata were transferred, privately. No synthetic
 login file was read or transferred. The client validated fresh readiness,
 scope, remaining time, package, boot, UID, configuration, mappings and route.

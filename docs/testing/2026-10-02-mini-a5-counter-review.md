@@ -126,5 +126,5 @@ tuples. That new laptop filter scope was **not authorized or applied at the
 time of this review**. Matt subsequently approved it; the
 [staged edge-run record](2026-10-02-mini-a5-edge-preparation.md) tracks its
 separate verification and execution status.
-Existing product data, services, Little Snitch rules, Studio and .241 stay out
+Existing product data, services, Little Snitch rules, test host A and .241 stay out
 of scope. This review did not commit, push, merge, install or publish anything.

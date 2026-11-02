@@ -12,7 +12,7 @@ enum PreviewData {
             id: 1,
             ipAddress: "192.168.1.10",
             macAddress: "A4:83:E7:2F:1B:04",
-            hostname: "matts-macbook-pro.local",
+            hostname: "home-macbook-pro.local",
             vendor: "Apple",
             deviceType: "computer",
             modelName: nil,
@@ -406,7 +406,7 @@ enum PreviewData {
         FingerprintEntry(
             id: 1,
             macAddress: "A4:83:E7:2F:1B:04",
-            mdnsHostname: "matts-macbook-pro.local",
+            mdnsHostname: "home-macbook-pro.local",
             signalCount: 12,
             confidence: 0.72,
             firstSeen: "2026-01-15T10:23:00Z",
@@ -415,7 +415,7 @@ enum PreviewData {
         FingerprintEntry(
             id: 2,
             macAddress: "A4:83:E7:2F:1B:04",
-            mdnsHostname: "matts-macbook-pro.local",
+            mdnsHostname: "home-macbook-pro.local",
             signalCount: 48,
             confidence: 0.95,
             firstSeen: "2026-01-20T14:01:00Z",

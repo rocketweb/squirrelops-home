@@ -15,7 +15,7 @@ spec = importlib.util.spec_from_file_location('saved_review', SCRIPT)
 review = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(review)
 
-RULE = '@0 block drop in quick inet from any to 192.168.1.240'
+RULE = '@0 block drop in quick inet from any to 192.168.20.240'
 COUNTS = '[ Evaluations: 10 Packets: 2 Bytes: 120 States: 0 ]'
 
 
@@ -60,7 +60,7 @@ def test_original_bad_counter_blocks_retained():
 
 
 @pytest.mark.parametrize('event', [
-    dict(event='ready', uid=309, gid=309, pid=124, address='192.168.1.240', port=61445),
+    dict(event='ready', uid=309, gid=309, pid=124, address='192.168.20.240', port=61445),
     dict(event='ready', uid=501, gid=20, pid=125, address='0.0.0.0', port=61445),
     dict(event='bind_failed', uid=501, pid=125, errno=48),
     dict(event='listener_closed', uid=309, clients=2),
@@ -73,7 +73,7 @@ def test_strict_additional_child_events(event):
 
 
 @pytest.mark.parametrize('event', [
-    dict(event='ready', uid=309, gid=309, pid=True, address='192.168.1.240', port=61445),
+    dict(event='ready', uid=309, gid=309, pid=True, address='192.168.20.240', port=61445),
     dict(event='ready', uid=501, gid=309, pid=125, address='0.0.0.0', port=61445),
     dict(event='bind_failed', uid=501, pid=125, errno=48, credential='private-secret'),
     dict(event='listener_closed', uid=309, clients=True),
@@ -88,11 +88,11 @@ def test_unknown_event_stays_private(event):
 
 def test_states_only_retain_scoped_tcp():
     text = '\n'.join((
-        'all tcp 192.168.1.203:22 <- 192.168.1.7:50333 ESTABLISHED:ESTABLISHED',
-        'all tcp 192.168.1.97:443 -> 192.0.2.50:443 ESTABLISHED:ESTABLISHED',
-        'all tcp 192.168.1.203:22 <- 192.168.1.7:50333 UNRECOGNIZED',
+        'all tcp 192.168.20.203:22 <- 192.168.20.7:50333 ESTABLISHED:ESTABLISHED',
+        'all tcp 192.168.20.97:443 -> 192.0.2.50:443 ESTABLISHED:ESTABLISHED',
+        'all tcp 192.168.20.203:22 <- 192.168.20.7:50333 UNRECOGNIZED',
     ))
-    result = review.scoped_states(text, {'192.168.1.203'})
+    result = review.scoped_states(text, {'192.168.20.203'})
     assert len(result['selected']) == 1
     assert result['unrelated_lines'] == result['unrecognized_scoped_lines'] == 1
     assert '192.0.2.50' not in json.dumps(result)
@@ -117,7 +117,7 @@ def test_archived_database_excludes_private_fields_and_never_changes_file(tmp_pa
         db.execute('CREATE TABLE decoys (id INTEGER, decoy_type TEXT, bind_address TEXT, port INTEGER, '
                    'status TEXT, name TEXT, config TEXT' +
                    (', retired_at TEXT, retirement_reason TEXT)' if new_schema else ')'))
-        row = [1, 'deep', '192.168.1.203', 22, 'active', 'private-name', 'private-secret']
+        row = [1, 'deep', '192.168.20.203', 22, 'active', 'private-name', 'private-secret']
         if new_schema:
             row.extend(['2026-10-02', 'private-reason'])
         db.execute('INSERT INTO decoys VALUES (' + ','.join('?' for _ in row) + ')', row)

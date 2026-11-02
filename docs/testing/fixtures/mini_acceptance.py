@@ -1,4 +1,4 @@
-"""One-shot, operator-authorized Mac mini install/observe/stop session.
+"""One-shot, operator-authorized test host B (mini) install/observe/stop session.
 
 No general command interface and no fault injection. No arguments prints a plan.
 The bootstrap copies this and the pinned package into root-private storage.
@@ -24,14 +24,14 @@ import subprocess
 import tempfile
 import time
 
-VIPS = {"192.168.1.240", "192.168.1.241"}
+VIPS = {"192.168.20.240", "192.168.20.241"}
 SENSOR = Path("/Library/SquirrelOps/sensor")
 APP = Path("/Applications/SquirrelOps Home.app")
 HELPER = Path("/Library/PrivilegedHelperTools/com.squirrelops.helper")
 LEDGER = Path("/var/db/com.squirrelops.helper/owned-aliases")
 FAILED_BASELINE = Path("/Library/SquirrelOps/acceptance-backups/mini-20260928.4e0684b8")
 PACKAGE_SHA = "3e8c0fc78befad3365fdbff5583d9f85c6b6fe01816b5863edbebeceaa4b8f5f"
-CONFIG_SHA = "6e210567e3baae3950d91153b44090876ae6978b2a67677b1690aaf5c8f02330"
+CONFIG_SHA = "10f6f8c800308a47f5fd728aaf9a6ae6eeed9f6d437427a43bae3039ea663087"
 EXECUTABLES = {
     APP / "Contents/MacOS/SquirrelOpsHome": "ebab6cb0da72201487eafc8452efc81d1540c1f3a7c0b41cdc7563dc1cc598a4",
     HELPER: "56e6986ddedb26f31fb0fc24866b12ddab1d55dad8ff8cb4f55f41ce8150c66a",
@@ -326,12 +326,12 @@ class Session:
         safe_directory(self.task_dir)
         require(self.command(["/usr/bin/uname", "-m"]).stdout.strip() == "arm64", "Wrong architecture")
         require(self.command(["/usr/bin/sw_vers", "-buildVersion"]).stdout.strip() == "26A428", "OS drift")
-        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en0"]).stdout.strip() == "192.168.1.115", "Wrong Ethernet address")
-        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en1"]).stdout.strip() == "192.168.1.254", "Wi-Fi drift")
-        require("100.108.203.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong Tailscale host")
+        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en0"]).stdout.strip() == "192.168.20.115", "Wrong Ethernet address")
+        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en1"]).stdout.strip() == "192.168.20.254", "Wi-Fi drift")
+        require("100.64.0.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong Tailscale host")
         route = self.command(["/sbin/route", "-n", "get", "-inet", "default"]).stdout
         require(re.search(r"interface:\s+en0\b", route) is not None
-                and re.search(r"gateway:\s+192\.168\.1\.1\b", route) is not None, "Route drift")
+                and re.search(r"gateway:\s+192\.168\.20\.1\b", route) is not None, "Route drift")
         require(shutil.disk_usage("/Library").free > 5 * 1024**3, "Less than 5 GiB free")
         if self.resume_failed_install:
             self.verify_partial_install()
@@ -396,7 +396,7 @@ class Session:
         listeners = self.command(["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpun"]).stdout
         self.baseline_listeners = listener_endpoints(listeners)
         require(not any(endpoint.endswith(":8443") for _, endpoint in self.baseline_listeners), "API port occupied")
-        for endpoint in ("*:22", "*:445", "*:5900", "192.168.1.115:11434", "127.0.0.1:49199"):
+        for endpoint in ("*:22", "*:445", "*:5900", "192.168.20.115:11434", "127.0.0.1:49199"):
             require(any(address == endpoint for _, address in self.baseline_listeners), f"Baseline service missing: {endpoint}")
         self.publish("preflight_passed", private_baseline=str(self.backup))
 
@@ -470,7 +470,7 @@ class Session:
                     "Unexpected synthetic guest credential format")
             require(db.execute("SELECT count(*) FROM decoys WHERE decoy_type='deep' AND bind_address=? AND port=445 AND status='active' AND retired_at IS NULL", (ip,)).fetchone()[0] == 1,
                     "Matching guest SMB endpoint is not active")
-        require(pwd.getpwnam("matt").pw_uid == 501, "Operator UID changed")
+        require(pwd.getpwnam("operator").pw_uid == 501, "Operator UID changed")
         target = self.public / "synthetic-guest-login.json"
         target.write_text(json.dumps({"ip": ip, "username": "buildbot", "password": password}) + "\n")
         target.chmod(0o600)
@@ -483,7 +483,7 @@ class Session:
             report = {
                 "decoys": [dict(row) for row in db.execute("SELECT id,decoy_type,bind_address,port,status,connection_count,credential_trip_count FROM decoys ORDER BY id")],
                 "connections": [dict(row) for row in db.execute("SELECT decoy_id,source_ip,port,protocol,count(*) AS count FROM decoy_connections GROUP BY decoy_id,source_ip,port,protocol")],
-                "alerts": [dict(row) for row in db.execute("SELECT id,alert_type,severity,source_ip,decoy_id,created_at FROM home_alerts WHERE source_ip='192.168.1.7' ORDER BY id")],
+                "alerts": [dict(row) for row in db.execute("SELECT id,alert_type,severity,source_ip,decoy_id,created_at FROM home_alerts WHERE source_ip='192.168.20.7' ORDER BY id")],
                 "virtual_ips": [dict(row) for row in db.execute("SELECT ip_address,interface,released_at FROM virtual_ips ORDER BY ip_address")],
             }
         require(all(row["ip_address"] in VIPS for row in report["virtual_ips"]), "Database VIP outside approved pool")
@@ -518,7 +518,7 @@ class Session:
             capture = subprocess.Popen([
                 "/usr/sbin/tcpdump", "-i", interface, "-n", "-U", "-s", "96", "-w",
                 str(self.backup / f"capture-{interface}.pcap"),
-                "host 192.168.1.7 and (host 192.168.1.240 or host 192.168.1.241)",
+                "host 192.168.20.7 and (host 192.168.20.240 or host 192.168.20.241)",
             ], stdout=subprocess.DEVNULL, stderr=error_file)
             self.captures.append((capture, error_file, interface))
         time.sleep(1)
@@ -602,8 +602,8 @@ class Session:
         self.command(["/sbin/pfctl", "-s", "References"])
         after = listener_endpoints(self.command(["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpun"]).stdout)
         require(self.baseline_listeners <= after, "Baseline listener parity not restored")
-        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en0"]).stdout.strip() == "192.168.1.115", "Ethernet changed")
-        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en1"]).stdout.strip() == "192.168.1.254", "Wi-Fi changed")
+        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en0"]).stdout.strip() == "192.168.20.115", "Ethernet changed")
+        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en1"]).stdout.strip() == "192.168.20.254", "Wi-Fi changed")
         self.command(["/sbin/route", "-n", "get", "-inet", "default"])
         require(self.backup is not None, "No private backup path")
         database = SENSOR / "data/squirrelops.db"
@@ -646,7 +646,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.run is None:
         print(json.dumps({"mode": "plan_only", "resume_failed_install": args.resume_failed_install,
-                          "host": "100.108.203.27", "vips": sorted(VIPS),
+                          "host": "100.64.0.27", "vips": sorted(VIPS),
                           "package_sha256": PACKAGE_SHA, "fault_injection": False,
                           "observe_seconds": 1200, "cleanup": "stop only; preserve installation and data"}, indent=2))
         return

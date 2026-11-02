@@ -17,15 +17,15 @@ rules changed. The attended root command below remains pending.
 
 ## Fresh read-only host evidence
 
-SSH inspection of `matt@100.108.203.27` confirmed:
+SSH inspection of `operator@100.64.0.27` confirmed:
 
-- Host `Matts-Mini-2.localdomain`, macOS build `26A434`, boot `1790777754`.
+- Host `test-host-b.localdomain`, macOS build `26A434`, boot `1790777754`.
 - Both `com.squirrelops.sensor` and `com.squirrelops.helper` explicitly disabled;
   neither system job loaded.
 - No SquirrelOps or Virtualization processes, or UID 309 processes, in the
   inspected process inventory.
 - Native LAN addresses `.115` on `en0` and `.254` on `en1`; no `.240` or `.241`
-  local aliases. Tailscale address remains `100.108.203.27`.
+  local aliases. Tailscale address remains `100.64.0.27`.
 - Exact receipt IDs `com.squirrelops.home.app` and `com.squirrelops.home.sensor`
   both remain 2.1.0, install time `1790731448`.
 - Installed Python SHA-256 remains
@@ -45,7 +45,7 @@ Its checksum-pinned text is preserved, including its original proposed status.
 Matt subsequently approved the itemized mini-only install, two-field config
 change, temporary sensor/helper and test-owned PF enablement, restart and
 laptop probes, and restoration of the stopped/disabled hold. That approval does
-not cover Studio, `.241`, Little Snitch, a commit or publication.
+not cover test host A, `.241`, Little Snitch, a commit or publication.
 
 `mini_post_reboot_acceptance.py` implements a new preflight directly on the
 shared upgrade utilities. It never invokes the historical recovery or cleanup
@@ -113,16 +113,16 @@ signed/notarized public artifact.
 | --- | --- |
 | `mini_post_reboot_acceptance.py` | `b02554ecf5025ac3201589daa212816f9ec3b1de098d28a5591d7867b9c2c91c` |
 | `start-mini-post-reboot-acceptance.sh` | `a36c8f117d4bf0cb5e1c00af75e30886680f3970f5005a00e76de8f4ebbaa853` |
-| Proposed scope | `288eb8eb45a50caaac9538f02ac1cc23ca697573e967771a06314cfb2725f24e` |
-| `mini_post_reboot_client.py` | `17fe8d27b16e2edb0bfb520f050cef3846d5236ac606630f1aa31cddd33c94a1` |
-| Shared `mini_upgrade_client.py` | `15b3bb270b77d3801870d2a81b64dee266a8f823ce234f6b2be2ff360b02b7f6` |
+| Proposed scope | `881abc0e7cdc378aa6d84ca1380990a14b341daed8f9e5cedcc3670feb27cd05` |
+| `mini_post_reboot_client.py` | `063eaf6ff023d2ff7363288cccbdfda43b112e4f65d577f5edf8c9db0d624f3b` |
+| Shared `mini_upgrade_client.py` | `f10d1b894eac9c05f13e2677f790d2f398d26e750eada6be2d63fdfcd44aab63` |
 
 ## Approved staging completed
 
-- Mini: `/Users/matt/squirrelops-mini-post-reboot.tzFZw7KI` on
-  `matt@100.108.203.27`.
+- Mini: `/Users/operator/squirrelops-mini-post-reboot.tzFZw7KI` on
+  `operator@100.64.0.27`.
 - Laptop: `/root/squirrelops-mini-upgrade-client.VNbggFA7` on
-  `root@192.168.1.7`.
+  `root@192.168.20.7`.
 - Both new directories are mode 0700. All ten mini inputs and both laptop
   scripts are regular single-link mode-0600 files, owned by their staging user.
   All remote SHA-256 values match the reviewed local files and package.
@@ -141,7 +141,7 @@ signed/notarized public artifact.
 Run in the mini's Terminal, keeping its SquirrelOps app closed:
 
 ```bash
-sudo /bin/bash /Users/matt/squirrelops-mini-post-reboot.tzFZw7KI/start-mini-post-reboot-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-post-reboot.tzFZw7KI/start-mini-post-reboot-acceptance.sh
 ```
 
 After fresh backups and the scope preview, confirm with

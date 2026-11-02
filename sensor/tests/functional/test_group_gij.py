@@ -25,11 +25,11 @@ class TestG07AddressRedaction:
     @pytest.mark.parametrize(
         "mac",
         [
-            "AE:29:0A:E5:CC:C5",
-            "ae:29:0a:e5:cc:c5",
+            "AE:29:0C:5D:6E:7F",
+            "ae:29:0c:5d:6e:7f",
             "AE-29-0A-E5-CC-C5",
             "ae29.0ae5.ccc5",
-            "AE:29:A:E5:CC:C5",
+            "AE:29:C:5D:6E:7F",
         ],
     )
     def test_every_mac_form_is_redacted(self, mac):
@@ -64,19 +64,19 @@ class TestG07AddressRedaction:
 
     def test_several_addresses_in_one_value_are_all_redacted(self):
         sanitized = _sanitize_signal(
-            "AE:29:0A:E5:CC:C5 at 192.168.1.101 and 192.168.1.212"
+            "AE:29:0C:5D:6E:7F at 192.168.1.101 and 192.168.1.212"
         )
-        assert "AE:29:0A:E5:CC:C5" not in sanitized
+        assert "AE:29:0C:5D:6E:7F" not in sanitized
         assert "192.168.1.101" not in sanitized
         assert "192.168.1.212" not in sanitized
 
     def test_the_live_laptop_identifiers_do_not_survive(self):
         # The exact values observed on this network during the session.
-        sanitized = _sanitize_signal("matt-m1 AE:29:0A:E5:CC:C5 192.168.1.101")
-        assert "AE:29:0A:E5:CC:C5" not in sanitized
+        sanitized = _sanitize_signal("office-m1 AE:29:0C:5D:6E:7F 192.168.1.101")
+        assert "AE:29:0C:5D:6E:7F" not in sanitized
         assert "192.168.1.101" not in sanitized
         # The non-identifying part is what the classifier actually needs.
-        assert "matt-m1" in sanitized
+        assert "office-m1" in sanitized
 
     def test_a_vendor_string_is_not_destroyed_by_redaction(self):
         # Over-redaction would make the classifier useless, so the guard has to
@@ -98,6 +98,6 @@ class TestG07PromptLevelRedaction:
         # The OUI is the vendor half and is needed to classify. The device half
         # is what identifies a household, and must not travel.
         oui = _sanitize_signal("AE:29:0A"[:8])
-        full = _sanitize_signal("AE:29:0A:E5:CC:C5")
+        full = _sanitize_signal("AE:29:0C:5D:6E:7F")
         assert full != oui
         assert _REDACTED_ADDRESS in full

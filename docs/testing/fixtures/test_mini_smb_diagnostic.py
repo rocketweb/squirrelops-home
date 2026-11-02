@@ -43,11 +43,11 @@ class ClientTests(unittest.TestCase):
                              ("package_sha256", "other"), ("boot_seconds", 0),
                              ("remaining_seconds", 599), ("sensor_uid", 0),
                              ("configuration_unchanged", False), ("config_change_verified", False),
-                             ("test_scope", "other"), ("test_vips", ["192.168.1.241"]),
+                             ("test_scope", "other"), ("test_vips", ["192.168.20.241"]),
                              ("time", "2026-09-30T11:00:00Z")):
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 c.validate_inputs(endpoints, {**status, field: value}, time.time())
-        for bad in ({**endpoints, "guest_ip": "192.168.1.241"},
+        for bad in ({**endpoints, "guest_ip": "192.168.20.241"},
                     {**endpoints, "mappings": endpoints["mappings"][:-1]},
                     {**endpoints, "mappings": endpoints["mappings"] + endpoints["mappings"][:1]}):
             with self.assertRaises(RuntimeError):
@@ -56,9 +56,9 @@ class ClientTests(unittest.TestCase):
     def test_one_fixed_anonymous_smb_command_no_credential_reuse(self):
         args = c.command()
         self.assertEqual(args[0], "/usr/bin/smbclient")
-        self.assertEqual(args[args.index("-L") + 1], "//192.168.1.240")
+        self.assertEqual(args[args.index("-L") + 1], "//192.168.20.240")
         self.assertEqual(args[args.index("-p") + 1], "445")
-        self.assertEqual(args[args.index("-I") + 1], "192.168.1.240")
+        self.assertEqual(args[args.index("-I") + 1], "192.168.20.240")
         self.assertEqual(args[args.index("-U") + 1], "%")
         self.assertIn("--use-kerberos=off", args)
         self.assertIn("--configfile=/dev/null", args)
@@ -66,7 +66,7 @@ class ClientTests(unittest.TestCase):
         self.assertNotIn("login.json", Path(c.__file__).read_text())
 
     def test_sanitized_events_do_not_copy_untrusted_text(self):
-        raw = ("secret=do-not-export\nConnecting to 192.168.1.240 at port 445\n"
+        raw = ("secret=do-not-export\nConnecting to 192.168.20.240 at port 445\n"
                "negotiated dialect[SMB3_11] against [private-host]\n"
                "Anonymous login successful\nSharename Type Comment\n"
                " Engineering Disk private-comment\n Builds Disk secret\n"

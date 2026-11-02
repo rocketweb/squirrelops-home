@@ -11,7 +11,7 @@ import struct
 import sys
 import time
 
-IPS = ("192.168.1.239", "192.168.1.240")
+IPS = ("192.168.20.239", "192.168.20.240")
 PUBLIC_PORTS = (22, 445)
 BACKEND_PORTS = (61322, 61445)
 PHASES = ("healthy", "retained_states", "quarantined", "healthy_again",
@@ -24,7 +24,7 @@ def fresh(ip, port, source_port=0, keep=False):
     stream.settimeout(2)
     row = {"ip": ip, "port": port, "requested_source_port": source_port}
     try:
-        stream.bind(("192.168.1.7", source_port))
+        stream.bind(("192.168.20.7", source_port))
         row["source_port"] = stream.getsockname()[1]
         stream.connect((ip, port))
         row["connected"] = True
@@ -108,7 +108,7 @@ def second_ingress_frames(source_mac):
     if len(source_mac) != 6:
         raise ValueError("Invalid interface MAC")
     result = []
-    src = socket.inet_aton("192.168.1.7")
+    src = socket.inet_aton("192.168.20.7")
     ethernet = bytes.fromhex("ea0372637e01") + source_mac + b"\x08\x00"
     for index, ip in enumerate(IPS):
         dst = socket.inet_aton(ip)

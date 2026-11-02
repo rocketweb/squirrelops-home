@@ -14,7 +14,7 @@ Fresh read-only inspection found the mini still on the September 28 package.
 Both product launchd jobs were absent, no matching product runtime was found,
 and neither test VIP was assigned. Installed app, helper and guest executable
 hashes matched the older acceptance package. The private configuration was not
-readable as `matt`; its current digest remains a root preflight requirement.
+readable as `operator`; its current digest remains a root preflight requirement.
 PF state was last verified by the completed diagnostic, not by this unprivileged
 inspection. Recheck it before any startup.
 
@@ -24,8 +24,8 @@ or recovery scripts is unsafe against the now-installed baseline.
 
 ## Exact artifact and verification
 
-- Server: `matt@100.108.203.27`, mini, macOS 27.0 build `26A428`, ARM64.
-- Client: existing authorized laptop `root@192.168.1.7`, `wlp0s20f3`.
+- Server: `operator@100.64.0.27`, mini, macOS 27.0 build `26A428`, ARM64.
+- Client: existing authorized laptop `root@192.168.20.7`, `wlp0s20f3`.
 - Package: `build/test-artifacts/SquirrelOpsHome-2.1.0-shutdown-fix-20260929-local-test.pkg`.
 - SHA-256: `541fc783c41fd2f9a6baba1fe8edae93078a0a24089b8e6d4ede77ba051b7fb1`.
 - Source fix: `3b990e83d43c232dec142c1d665381e9f64375c5`.
@@ -38,7 +38,7 @@ passed against the extracted installer Python/runtime:
 
 ```sh
 # From this checkout's sensor directory; no installed service is started.
-SQUIRRELOPS_TEST_SENSOR_PYTHON='/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/shutdown-fix-extracted-20260929/sensor.pkg/Payload/Library/SquirrelOps/sensor/python/bin/python3.12' .venv/bin/python -m pytest tests/unit/test_runtime_shutdown.py -k server_signal -q
+SQUIRRELOPS_TEST_SENSOR_PYTHON='/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/shutdown-fix-extracted-20260929/sensor.pkg/Payload/Library/SquirrelOps/sensor/python/bin/python3.12' .venv/bin/python -m pytest tests/unit/test_runtime_shutdown.py -k server_signal -q
 ```
 
 Result: **2 passed, 9 deselected**. Earlier broader results and their limits are
@@ -51,9 +51,9 @@ Those broader suites were not rerun during this proposal preparation.
 | --- | --- |
 | One installed app bundle, sensor runtime, helper and two product LaunchDaemons | Upgrade to the checksum-pinned package; retain version label 2.1.0 |
 | Existing `_squirrelops` account, configuration, database and pairing material | Back up privately; preserve account and configuration, allow normal package migrations without resetting data |
-| `192.168.1.240` and `.241` | At most two temporary /32 aliases with proxy ARP on mini `en0` after fresh conflict checks |
+| `192.168.20.240` and `.241` | At most two temporary /32 aliases with proxy ARP on mini `en0` after fresh conflict checks |
 | PF | After inspecting loaded policy, acquire only a test-owned enable reference; permit product-owned containment/redirect rules |
-| Test services | One deep guest, up to three classic host listeners, management API on 8443 and existing bounded discovery on `192.168.1.0/24` |
+| Test services | One deep guest, up to three classic host listeners, management API on 8443 and existing bounded discovery on `192.168.20.0/24` |
 | Laptop client | Bounded protocol and synthetic file tests against verified decoy endpoints only |
 
 Before mutation, an existing-install-aware harness must validate the exact old

@@ -15,7 +15,7 @@ The observation results below remain unchanged: no new protocol probes ran.
 ## Exact run and retained evidence
 
 - Package SHA-256: `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
-- Approved target: Mini `100.108.203.27`, decoy `.240` only.
+- Approved target: Mini `100.64.0.27`, decoy `.240` only.
 - Private execution: `/private/var/root/squirrelops-mini-relay.r2RulhrI`.
 - Private backup: `/Library/SquirrelOps/acceptance-backups/mini-relay-20260930.m06dh5r3`.
 - Sanitized results: `/private/var/tmp/squirrelops-mini-relay-results.b0fp2kjt`.
@@ -54,19 +54,19 @@ The wrapper deliberately hides potentially sensitive reference values from
 exceptions. This message alone does not establish whether release was attempted,
 whether it succeeded, or whether a preceding check failed. The underlying
 private command records and current PF state are required. Do not rerun the
-installer, release a reference blindly, reset PF, or start the Studio sensor.
+installer, release a reference blindly, reset PF, or start the sensor on test host A.
 
-At follow-up inspection the Studio sensor's disabled override was still present
+At follow-up inspection the test host A sensor's disabled override was still present
 and its `.240` loopback alias was absent. No live networking, service, package,
 database or third-party filter changes were made during this review.
 
 ## Read-only next check
 
 `inspect_mini_relay_cleanup.py` was prepared and staged as
-`/Users/matt/squirrelops-mini-relay.C5Jt9KuC/inspect-relay-cleanup.py` on the Mini.
+`/Users/operator/squirrelops-mini-relay.C5Jt9KuC/inspect-relay-cleanup.py` on the Mini.
 Local and remote SHA-256 match:
 `e1186cc9561ceb47d71201d3495858cc982de6e37393c9c2e12406b1d5efaf5d`.
-The staged file is single-linked, mode 0600, owned by `matt`.
+The staged file is single-linked, mode 0600, owned by `operator`.
 
 The inspector reads only this run's retained reference/command evidence and
 executes two fixed read-only commands: `pfctl -s info` and
@@ -81,7 +81,7 @@ installed Python hash was rechecked against the pinned runtime. Privileged
 execution has not occurred: `sudo -n` still requires the operator's password.
 
 ```sh
-sudo /Library/SquirrelOps/sensor/python/bin/python3.12 -I -B /Users/matt/squirrelops-mini-relay.C5Jt9KuC/inspect-relay-cleanup.py
+sudo /Library/SquirrelOps/sensor/python/bin/python3.12 -I -B /Users/operator/squirrelops-mini-relay.C5Jt9KuC/inspect-relay-cleanup.py
 ```
 
 The engineering-constraints skill kept diagnosis separate from speculative

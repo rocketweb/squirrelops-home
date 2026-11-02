@@ -441,13 +441,13 @@ async def test_find_conflicts_canonicalizes_unpadded_macos_proxy_mac(db):
     ops = AsyncMock()
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.update({"192.168.1.200", "192.168.1.201"})
-    manager._local_interface_macs = AsyncMock(return_value={"1c:1d:d3:e0:7d:03"})
+    manager._local_interface_macs = AsyncMock(return_value={"1c:1d:d3:5a:6b:03"})
 
     conflicts = await manager.find_conflicts(
         arp_results=[
             ("192.168.1.1", "00:11:22:33:44:55"),
-            ("192.168.1.200", "1c:1d:d3:e0:7d:3"),
-            ("192.168.1.201", "1c:1d:d3:e0:7d:3"),
+            ("192.168.1.200", "1c:1d:d3:5a:6b:3"),
+            ("192.168.1.201", "1c:1d:d3:5a:6b:3"),
         ]
     )
 
@@ -467,7 +467,7 @@ async def test_find_conflicts_ignores_malformed_mac_but_keeps_foreign_claim(db):
     ops = AsyncMock()
     manager = VirtualIPManager(privileged_ops=ops, allocator=allocator, db=db)
     manager._active.update({"192.168.1.200", "192.168.1.201"})
-    manager._local_interface_macs = AsyncMock(return_value={"1c:1d:d3:e0:7d:03"})
+    manager._local_interface_macs = AsyncMock(return_value={"1c:1d:d3:5a:6b:03"})
 
     conflicts = await manager.find_conflicts(
         arp_results=[
@@ -497,7 +497,7 @@ async def test_find_conflicts_preserves_alias_when_local_mac_inventory_fails(db)
     conflicts = await manager.find_conflicts(
         arp_results=[
             ("192.168.1.1", "00:11:22:33:44:55"),
-            ("192.168.1.200", "1c:1d:d3:e0:7d:3"),
+            ("192.168.1.200", "1c:1d:d3:5a:6b:3"),
         ]
     )
 

@@ -23,7 +23,7 @@ def main():
     directory = args.directory.resolve()
     credentials = json.loads((directory / "login.json").read_text())
     ip = credentials["ip"]
-    assert ip == "192.168.1.240" and credentials["username"] == "buildbot"
+    assert ip == "192.168.20.240" and credentials["username"] == "buildbot"
     password = credentials["password"]
     records = []
 

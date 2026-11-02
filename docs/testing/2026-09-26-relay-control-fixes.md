@@ -8,7 +8,7 @@ This report does not establish a final public release.
 
 ## Scope and source
 
-Checkout: `/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current`.
+Checkout: `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current`.
 Base commit: `66bda11a97ea8bf6192e812e9fae4584bfb16d85`.
 This batch is uncommitted source on that base. It is not the earlier
 `66bda11` installer. No installation, push, tag, notarization, or publication is
@@ -182,7 +182,7 @@ The explicit local-test installer requires a one-attempt, root-owned opt-in:
 
 ```bash
 sudo /usr/bin/install -o root -g wheel -m 600 /dev/null /var/db/com.squirrelops.allow-local-test
-sudo /usr/sbin/installer -pkg "/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-relay-control-local-test.pkg" -target /
+sudo /usr/sbin/installer -pkg "/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-relay-control-local-test.pkg" -target /
 ```
 
 The opt-in is consumed when installation is accepted, even if a later step

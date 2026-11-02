@@ -21,14 +21,14 @@ class LaunchdAcceptanceTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.session = module.LaunchdUpgrade(self.root)
         self.rows = [{"id": ident, "port": port, "status": "active", "decoy_type": "deep",
-                      "bind_address": "192.168.1.240", "retired_at": None, "host_id": 7,
+                      "bind_address": "192.168.20.240", "retired_at": None, "host_id": 7,
                       "is_primary": ident == 1} for ident, port in module.ownership.EXPECTED.items()]
-        self.intent = [(row["id"], "deep", "192.168.1.240", row["port"], "active") for row in self.rows]
-        self.intent += [(6, "dev_server", "192.168.1.115", 60556, "active")]
+        self.intent = [(row["id"], "deep", "192.168.20.240", row["port"], "active") for row in self.rows]
+        self.intent += [(6, "dev_server", "192.168.20.115", 60556, "active")]
 
     def test_active_rows_only_no_second_recovery(self):
         module.validate_active_rows(self.rows)
-        for field, value in (("status", "stopped"), ("id", 99), ("port", 99), ("bind_address", "192.168.1.115"),
+        for field, value in (("status", "stopped"), ("id", 99), ("port", 99), ("bind_address", "192.168.20.115"),
                              ("retired_at", "today"), ("decoy_type", "mimic"), ("host_id", 99), ("is_primary", False)):
             rows = copy.deepcopy(self.rows)
             rows[0][field] = value

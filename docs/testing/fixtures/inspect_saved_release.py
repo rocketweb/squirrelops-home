@@ -122,7 +122,7 @@ def extra_events(text):
             valid = (set(row) == {'event', 'pid', 'uid', 'gid', 'address', 'port'}
                      and type(row['pid']) is int and 0 < row['pid'] < 2**31
                      and type(row['gid']) is int and row['gid'] == (309 if row['uid'] == 309 else 20)
-                     and row['address'] in {'127.0.0.1', '0.0.0.0', '192.168.1.239', '192.168.1.240'}
+                     and row['address'] in {'127.0.0.1', '0.0.0.0', '192.168.20.239', '192.168.20.240'}
                      and type(row['port']) is int and 1 <= row['port'] <= 65535)
         elif valid and row.get('event') == 'bind_failed':
             valid = (set(row) == {'event', 'pid', 'uid', 'errno'}
@@ -228,7 +228,7 @@ def collect_macbook():
     for side in ('before', 'after'):
         result[side] = dict(decoys=saved_database_rows(root / (side + '.sqlite')))
     addresses = {row['bind_address'] for side in ('before', 'after') for row in result[side]['decoys']
-                 if row['bind_address'] not in {'192.168.1.97', '0.0.0.0', '127.0.0.1'}}
+                 if row['bind_address'] not in {'192.168.20.97', '0.0.0.0', '127.0.0.1'}}
     for side in ('before', 'after'):
         text = inspector.read_safe(root / ('pf-' + side + '.json'))
         value = json.loads(text)

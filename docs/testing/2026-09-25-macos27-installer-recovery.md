@@ -1,6 +1,6 @@
 # macOS 27 installer recovery candidate
 
-Date: September 25, 2026. Host: Matt's arm64 Mac Studio, macOS 27.0 (26A428).
+Date: September 25, 2026. Host: Apple Silicon (arm64) test Mac, macOS 27.0 (26A428).
 
 ## Confirmed failure
 
@@ -53,7 +53,7 @@ Evidence is retained in [evidence/2026-09-25-macos27](evidence/2026-09-25-macos2
 
 ## Exact recovery artifact
 
-[SquirrelOpsHome-2.1.0-macos27-recovery-20260925-local-test.pkg](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-macos27-recovery-20260925-local-test.pkg)
+[SquirrelOpsHome-2.1.0-macos27-recovery-20260925-local-test.pkg](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-macos27-recovery-20260925-local-test.pkg)
 
 - Architecture: arm64.
 - Version: 2.1.0.

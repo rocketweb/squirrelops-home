@@ -15,8 +15,8 @@ import time
 import uuid
 
 PACKAGE_SHA = "541fc783c41fd2f9a6baba1fe8edae93078a0a24089b8e6d4ede77ba051b7fb1"
-VIPS = {"192.168.1.240", "192.168.1.241"}
-SOURCE = "192.168.1.7"
+VIPS = {"192.168.20.240", "192.168.20.241"}
+SOURCE = "192.168.20.7"
 
 
 def require(condition, message):

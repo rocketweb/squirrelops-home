@@ -84,22 +84,22 @@ Laptop `.240` routing remains `wlp0s20f3`, source `.7`. SSH, SFTP, Samba
 `4.19.5-Ubuntu` and Python `pexpect` are available. No dependency was installed.
 
 Mini staging is mode 0700, UID 501:
-`/Users/matt/squirrelops-mini-relay.C5Jt9KuC`.
+`/Users/operator/squirrelops-mini-relay.C5Jt9KuC`.
 The package and every script/config-reference/scope hash matched the local files.
 
 | Input | SHA-256 |
 | --- | --- |
 | Bootstrap | `fd25b2326f1d463946cb2bdf031803e4b76657ab60a2ddbbd7793ccfddfd9b60` |
 | Runner | `d0869d08e99ca8054f319649cb9f7023a09dcfe84692158355f5bd9cbc4e8298` |
-| Scope | `0a1faf62ad5c5a301a43a775316da538ef448b710e3a1026932006de4f25dc6b` |
+| Scope | `1b096ec147851f2aeeaafeeb2296d1affabfbab0f5dc1bc63418e7bc56e4f4f8` |
 
 Fresh root-private laptop staging:
 `/root/squirrelops-mini-upgrade-client.GWA3Ee6a`.
 Only two scripts were copied. Plan mode passed without traffic. No credentials,
 live snapshots or results file were supplied. Client SHA-256:
-`bc36f73427a1a2f9b15260b922e72636b138d13330ad8329d32212ab0ab91c03`.
+`b0864df795a10c9bf7062ec620889cb276d4a53f28babc631e62bec183b897d2`.
 Underlying client SHA-256:
-`15b3bb270b77d3801870d2a81b64dee266a8f823ce234f6b2be2ff360b02b7f6`.
+`f10d1b894eac9c05f13e2677f790d2f398d26e750eada6be2d63fdfcd44aab63`.
 After staging, the Mini remained disabled, with no product process or test alias.
 
 ## Next attended action
@@ -108,7 +108,7 @@ Review the [exact scope](2026-09-30-mini-relay-diagnostic-scope.md). On the Mini
 with SquirrelOps closed:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-relay.C5Jt9KuC/start-mini-relay-diagnostic-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-relay.C5Jt9KuC/start-mini-relay-diagnostic-acceptance.sh
 ```
 
 After fresh checks and verified backups, enter `INSTALL DIAGNOSTICS AND TEST 240`

@@ -8,10 +8,10 @@ import sys
 import time
 
 directory = Path(sys.argv[1])
-ip = "192.168.1.240"
+ip = "192.168.20.240"
 capture = subprocess.Popen([
     "/usr/bin/tcpdump", "-i", "wlp0s20f3", "-n", "-U", "-s", "96", "-w", str(directory / "handshake.pcap"),
-    "host 192.168.1.240 and (tcp port 22 or tcp port 445)",
+    "host 192.168.20.240 and (tcp port 22 or tcp port 445)",
 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 results = []
 try:

@@ -33,7 +33,7 @@ DATABASE = base.SENSOR / "data/squirrelops.db"
 EXPECTED_INTENT = [
     [1, "deep", single.VIP, 445, "active"], [2, "deep", single.VIP, 22, "active"],
     [3, "deep", single.VIP, 11434, "active"], [4, "deep", single.VIP, 1234, "active"],
-    [5, "deep", single.VIP, 8765, "active"], [6, "dev_server", "192.168.1.115", 60556, "active"],
+    [5, "deep", single.VIP, 8765, "active"], [6, "dev_server", "192.168.20.115", 60556, "active"],
 ]
 MAX_PAYLOAD_BYTES = 64 * 1024**2
 
@@ -117,7 +117,7 @@ with closing(sqlite3.connect('file:' + source + '?mode=ro', uri=True, timeout=5)
         value = {
             'decoys': [dict(row) for row in db.execute('SELECT id,decoy_type,bind_address,port,status,connection_count,credential_trip_count FROM decoys ORDER BY id')],
             'connections': [dict(row) for row in db.execute('SELECT decoy_id,source_ip,port,protocol,count(*) AS count FROM decoy_connections GROUP BY decoy_id,source_ip,port,protocol')],
-            'alerts': [dict(row) for row in db.execute("SELECT id,alert_type,severity,source_ip,decoy_id,created_at FROM home_alerts WHERE source_ip='192.168.1.7' ORDER BY id")],
+            'alerts': [dict(row) for row in db.execute("SELECT id,alert_type,severity,source_ip,decoy_id,created_at FROM home_alerts WHERE source_ip='192.168.20.7' ORDER BY id")],
             'virtual_ips': [dict(row) for row in db.execute('SELECT ip_address,interface,released_at FROM virtual_ips ORDER BY ip_address')],
         }
     elif operation == 'login':
@@ -188,7 +188,7 @@ class PostRebootUpgrade(upgrade.Upgrade):
         require((user.pw_uid, user.pw_gid, user.pw_dir, user.pw_shell) ==
                 (309, 309, "/var/empty", "/usr/bin/false") and group.gr_gid == 309 and not group.gr_mem,
                 "Service account drift")
-        require(base.pwd.getpwnam("matt").pw_uid == 501, "Operator account drift")
+        require(base.pwd.getpwnam("operator").pw_uid == 501, "Operator account drift")
         for path, expected in {**self.old_executables, upgrade.RUNTIME: upgrade.PYTHON_SHA}.items():
             check_payload(path, expected)
         _, config = single.checked_config(single.CONFIG)
@@ -301,7 +301,7 @@ class PostRebootUpgrade(upgrade.Upgrade):
         require(base.digest(self.task_dir / "candidate.pkg") == self.package_sha, "Package checksum mismatch")
         require(self.command(["/usr/bin/uname", "-m"]).stdout.strip() == "arm64", "Wrong architecture")
         require(self.command(["/usr/bin/sw_vers", "-buildVersion"]).stdout.strip() == BUILD, "OS drift")
-        require("100.108.203.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong host")
+        require("100.64.0.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong host")
         container = Path("/Library/SquirrelOps/acceptance-backups")
         for path in (container.parent, container):
             base.safe_directory(path)
@@ -318,7 +318,7 @@ class PostRebootUpgrade(upgrade.Upgrade):
         self.baseline_listeners = base.listener_endpoints(self.command(upgrade.LISTENERS).stdout)
         require(not any(uid == "309" or endpoint.endswith(":8443") for uid, endpoint in self.baseline_listeners),
                 "Unexpected service/API listener")
-        for endpoint in ("*:22", "*:445", "*:5900", "192.168.1.115:11434"):
+        for endpoint in ("*:22", "*:445", "*:5900", "192.168.20.115:11434"):
             require(any(address == endpoint for _, address in self.baseline_listeners), "Native listener missing")
         self.host_baseline()
         info = self.pf(["-s", "info"])
@@ -413,7 +413,7 @@ class PostRebootUpgrade(upgrade.Upgrade):
         self.host_baseline()
         self.verify_intent()
         current = base.listener_endpoints(self.command(upgrade.LISTENERS).stdout)
-        require(("309", "192.168.1.115:60556") in current, "Existing classic listener not restored")
+        require(("309", "192.168.20.115:60556") in current, "Existing classic listener not restored")
         self.export_guest_login()
         endpoints = json.dumps({"guest_ip": single.VIP, "mappings": upgrade.verify_guarded_snapshot(report)}, indent=2)
         for parent, mode in ((self.public, 0o644), (self.backup, 0o600)):
@@ -492,7 +492,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "boot_seconds": BOOT,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "boot_seconds": BOOT,
                           "package_sha256": launchd.PACKAGE_SHA, "test_scope": SCOPE,
                           "test_vips": [single.VIP], "database_recovery": False,
                           "restore_disabled_jobs": True, "confirmation": CONSENT}, indent=2))

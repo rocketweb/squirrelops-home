@@ -95,7 +95,7 @@ full pairing and concurrency tests still pass.
 
 ## Local verification
 
-Checkout: `/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current`.
+Checkout: `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current`.
 Branch: `feature/deception-depth-2.1.0-current`. Base commit:
 `6b6ef8b5fe3d694695a9bc74982cbe80d05baeb5`, plus the preserved dirty release
 work. The base commit alone does not identify these bytes.

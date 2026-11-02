@@ -33,7 +33,7 @@ def syn_packet(index):
     if index not in (0, 1):
         raise ValueError("Invalid fixed target")
     ip, port, source_port = TARGETS[index]
-    src, dst = socket.inet_aton("192.168.1.7"), socket.inet_aton(ip)
+    src, dst = socket.inet_aton("192.168.20.7"), socket.inet_aton(ip)
     tcp = struct.pack("!HHIIBBHHH", source_port, port, 202610020 + index, 0, 0x50, 2, 64240, 0, 0)
     pseudo = src + dst + struct.pack("!BBH", 0, 6, len(tcp))
     tcp = tcp[:16] + struct.pack("!H", base.checksum(pseudo + tcp)) + tcp[18:]
@@ -50,7 +50,7 @@ def response_metadata(packet):
         return None
     ip, destination = socket.inet_ntoa(packet[12:16]), socket.inet_ntoa(packet[16:20])
     src_port, dst_port, seq, ack, offset, flags, *_ = struct.unpack("!HHIIBBHHH", packet[size:size + 20])
-    if (destination != "192.168.1.7" or (ip, src_port, dst_port) not in TARGETS
+    if (destination != "192.168.20.7" or (ip, src_port, dst_port) not in TARGETS
             or offset >> 4 < 5 or len(packet) < size + (offset >> 4) * 4):
         return None
     return {"ip": ip, "port": src_port, "source_port": dst_port, "seq": seq, "ack": ack, "flags": flags}
@@ -68,7 +68,7 @@ class EdgeClient:
             result = subprocess.run(["/usr/sbin/ip", "-j", "route", "get", ip],
                                     capture_output=True, text=True, timeout=3)
             rows = json.loads(result.stdout)
-            if result.returncode or len(rows) != 1 or rows[0].get("dev") != "wlp0s20f3" or rows[0].get("prefsrc") != "192.168.1.7":
+            if result.returncode or len(rows) != 1 or rows[0].get("dev") != "wlp0s20f3" or rows[0].get("prefsrc") != "192.168.20.7":
                 raise RuntimeError("Approved source route changed")
 
     def start_guard(self):
@@ -77,7 +77,7 @@ class EdgeClient:
         for _, _, port in TARGETS:
             stream = socket.socket()
             self.reservations.append(stream)
-            stream.bind(("192.168.1.7", port))
+            stream.bind(("192.168.20.7", port))
         self.guard_log = (self.root / "guard-stderr.log").open("wb")
         nonce = uuid.uuid4().hex[:12]
         self.guard_started = time.monotonic()

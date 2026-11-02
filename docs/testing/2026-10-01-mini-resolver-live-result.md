@@ -117,7 +117,7 @@ sudo -u _squirrelops /usr/bin/sqlite3 -batch -init /dev/null -readonly -header -
    json_extract(detail,'$.last_seen') AS last_seen,
    json_extract(detail,'$.service_counts') AS services
    FROM home_alerts
-   WHERE id=3 AND source_ip='192.168.1.7' AND alert_type='decoy.trip';"
+   WHERE id=3 AND source_ip='192.168.20.7' AND alert_type='decoy.trip';"
 ```
 
 Do not acknowledge or clear the alert to manufacture a new one. Do not send
@@ -157,7 +157,7 @@ SQLite row. That syntax check was not counted as live alert evidence; the
 subsequent operator-provided result closes the live detail check.
 
 No Little Snitch rule was edited, no global PF reset was performed, and no
-Studio or `.241` tests were made. No commit, push or publication occurred.
+test host A or `.241` tests were made. No commit, push or publication occurred.
 The engineering-constraints skill required reconciling the supplied alert
 detail with the exact saved connection counts before closing that gate.
 The operator's no-new-prompt confirmation closes the final observation for

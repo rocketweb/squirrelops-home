@@ -1112,7 +1112,7 @@ struct PFIsolationTests {
         let networks = try interfaceIPv4Networks(
             from: """
             en0: flags=8863<UP,BROADCAST,RUNNING> mtu 1500
-                ether 1c:1d:d3:e0:7d:03
+                ether 1c:1d:d3:5a:6b:03
                 inet 192.168.1.18 netmask 0xffffff00 broadcast 192.168.1.255
             """
         )
@@ -1579,7 +1579,7 @@ struct PFIsolationTests {
     @Test("Unowned alias removal rejects scoped or global proxy publication")
     func rejectsUnownedPublishedProxyARP() {
         let published =
-            "? (192.168.1.200) at 1c:1d:d3:e0:7d:03 "
+            "? (192.168.1.200) at 1c:1d:d3:5a:6b:03 "
             + "on en0 ifscope permanent published "
             + "(proxy only) [ethernet]\n"
 
@@ -1669,10 +1669,10 @@ struct PFIsolationTests {
             proxyARPSetArguments(
                 ip: "192.168.1.200",
                 interface: "en0",
-                ethernetAddress: "1c:1d:d3:e0:7d:03"
+                ethernetAddress: "1c:1d:d3:5a:6b:03"
             )
                 == [
-                    "-s", "192.168.1.200", "1c:1d:d3:e0:7d:03", "pub", "only",
+                    "-s", "192.168.1.200", "1c:1d:d3:5a:6b:03", "pub", "only",
                     "ifscope", "en0",
                 ]
         )
@@ -1691,12 +1691,12 @@ struct PFIsolationTests {
         let output = """
         en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
             options=567<RXCSUM,TXCSUM,VLAN_MTU,TSO4,TSO6,AV,CHANNEL_IO>
-            ether 1c:1d:d3:e0:7d:03
+            ether 1c:1d:d3:5a:6b:03
             inet 192.168.1.18 netmask 0xffffff00 broadcast 192.168.1.255
         """
 
         #expect(
-            ethernetAddressFromIfconfig(output) == "1c:1d:d3:e0:7d:03"
+            ethernetAddressFromIfconfig(output) == "1c:1d:d3:5a:6b:03"
         )
         #expect(ethernetAddressFromIfconfig("ether auto") == nil)
         #expect(ethernetAddressFromIfconfig("ether aa:bb:cc:dd:ee") == nil)
@@ -1780,7 +1780,7 @@ struct PFIsolationTests {
             stdout:
                 "? (192.168.1.200) at (incomplete) "
                 + "on en0 ifscope [ethernet]\n"
-                + "? (192.168.1.200) at 1c:1d:d3:e0:7d:3 "
+                + "? (192.168.1.200) at 1c:1d:d3:5a:6b:3 "
                 + "on en0 ifscope permanent published "
                 + "(proxy only) [ethernet]\n",
             stderr: ""
@@ -1790,7 +1790,7 @@ struct PFIsolationTests {
                 matchingLookup,
                 ip: "192.168.1.200",
                 interface: "en0",
-                ethernetAddress: "1c:1d:d3:e0:7d:03"
+                ethernetAddress: "1c:1d:d3:5a:6b:03"
             )
         )
 
@@ -1806,14 +1806,14 @@ struct PFIsolationTests {
                 incompleteOnly,
                 ip: "192.168.1.200",
                 interface: "en0",
-                ethernetAddress: "1c:1d:d3:e0:7d:03"
+                ethernetAddress: "1c:1d:d3:5a:6b:03"
             )
         )
 
         let plainPublished = CommandResult(
             status: 0,
             stdout:
-                "? (192.168.1.200) at 1c:1d:d3:e0:7d:3 "
+                "? (192.168.1.200) at 1c:1d:d3:5a:6b:3 "
                 + "on en0 ifscope permanent published [ethernet]\n",
             stderr: ""
         )
@@ -1822,14 +1822,14 @@ struct PFIsolationTests {
                 plainPublished,
                 ip: "192.168.1.200",
                 interface: "en0",
-                ethernetAddress: "1c:1d:d3:e0:7d:03"
+                ethernetAddress: "1c:1d:d3:5a:6b:03"
             )
         )
 
         let splitEvidence = CommandResult(
             status: 0,
             stdout:
-                "? (192.168.1.200) at 1c:1d:d3:e0:7d:3 "
+                "? (192.168.1.200) at 1c:1d:d3:5a:6b:3 "
                 + "on en0 ifscope permanent [ethernet]\n"
                 + "? (192.168.1.200) at aa:bb:cc:dd:ee:ff "
                 + "on en1 ifscope permanent published "
@@ -1841,7 +1841,7 @@ struct PFIsolationTests {
                 splitEvidence,
                 ip: "192.168.1.200",
                 interface: "en0",
-                ethernetAddress: "1c:1d:d3:e0:7d:03"
+                ethernetAddress: "1c:1d:d3:5a:6b:03"
             )
         )
         #expect(
@@ -1853,7 +1853,7 @@ struct PFIsolationTests {
                 ),
                 ip: "192.168.1.200",
                 interface: "en0",
-                ethernetAddress: "1c:1d:d3:e0:7d:03"
+                ethernetAddress: "1c:1d:d3:5a:6b:03"
             )
         )
     }
@@ -1882,7 +1882,7 @@ struct PFIsolationTests {
                 ip: "192.168.1.200",
                 interface: "en0",
                 prefixLength: 32,
-                ethernetAddress: "1c:1d:d3:e0:7d:03"
+                ethernetAddress: "1c:1d:d3:5a:6b:03"
             ) { executable, arguments in
                 commands.append([executable] + arguments)
                 return results.removeFirst()
@@ -1905,7 +1905,7 @@ struct PFIsolationTests {
                 ],
                 [
                     "/usr/sbin/arp", "-s", "192.168.1.200",
-                    "1c:1d:d3:e0:7d:03", "pub", "only",
+                    "1c:1d:d3:5a:6b:03", "pub", "only",
                     "ifscope", "en0",
                 ],
                 [
@@ -1936,7 +1936,7 @@ struct PFIsolationTests {
             CommandResult(
                 status: 0,
                 stdout:
-                    "? (192.168.1.200) at 1c:1d:d3:e0:7d:3 "
+                    "? (192.168.1.200) at 1c:1d:d3:5a:6b:3 "
                     + "on en0 ifscope permanent published "
                     + "(proxy only) [ethernet]\n",
                 stderr: ""
@@ -1947,7 +1947,7 @@ struct PFIsolationTests {
             ip: "192.168.1.200",
             interface: "en0",
             prefixLength: 32,
-            ethernetAddress: "1c:1d:d3:e0:7d:03"
+            ethernetAddress: "1c:1d:d3:5a:6b:03"
         ) { executable, arguments in
             commands.append([executable] + arguments)
             return results.removeFirst()
@@ -1978,7 +1978,7 @@ struct PFIsolationTests {
             CommandResult(
                 status: 0,
                 stdout:
-                    "? (192.168.1.200) at 1c:1d:d3:e0:7d:3 "
+                    "? (192.168.1.200) at 1c:1d:d3:5a:6b:3 "
                     + "on en0 ifscope permanent published "
                     + "(proxy only) [ethernet]\n",
                 stderr: ""

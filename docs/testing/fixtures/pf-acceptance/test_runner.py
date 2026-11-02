@@ -237,7 +237,7 @@ class Contracts(unittest.TestCase):
             session = runner.Session(Path(tmp))
             with patch.object(runner.subprocess, "Popen") as spawn:
                 for values in ((0, "127.0.0.1", 0, "127.0.0.1"),
-                               (501, "192.168.1.241", 61322, runner.PEER),
+                               (501, "192.168.20.241", 61322, runner.PEER),
                                (309, "127.0.0.1", 61322, runner.PEER)):
                     with self.assertRaises(RuntimeError):
                         session.spawn_child(*values)
@@ -252,38 +252,38 @@ class Contracts(unittest.TestCase):
 
     def test_public_packet_metadata_excludes_payload_and_unrelated_addresses(self):
         lines = [
-            "2026-10-02 03:00:00.000001 IP 192.168.1.7.42739 > 192.168.1.239.22: Flags [S], seq 1, length 0",
-            "2026-10-02 03:00:00.000002 IP 192.168.1.9.22 > 192.168.1.7.1234: Flags [P.], length 8",
+            "2026-10-02 03:00:00.000001 IP 192.168.20.7.42739 > 192.168.20.239.22: Flags [S], seq 1, length 0",
+            "2026-10-02 03:00:00.000002 IP 192.168.20.9.22 > 192.168.20.7.1234: Flags [P.], length 8",
             "payload-secret",
-            "2026-10-02 03:00:00.000003 IP 192.168.1.240.61445 > 192.168.1.7.43000: Flags [P.], length 11",
+            "2026-10-02 03:00:00.000003 IP 192.168.20.240.61445 > 192.168.20.7.43000: Flags [P.], length 11",
         ]
         rows = runner.packet_metadata("\n".join(lines))
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["source_port"], 42739)
         self.assertEqual(rows[0]["flags"], "S")
         self.assertNotIn("secret", json.dumps(rows))
-        self.assertNotIn("192.168.1.9", json.dumps(rows))
+        self.assertNotIn("192.168.20.9", json.dumps(rows))
 
     def test_public_states_only_include_approved_endpoints(self):
-        source = ("all tcp 192.168.1.239:61322 (192.168.1.239:22) <- 192.168.1.7:43000 ESTABLISHED:ESTABLISHED\n"
-                  "all tcp 192.168.1.239:61322 <- 192.168.1.9:43000 ESTABLISHED:ESTABLISHED\n"
+        source = ("all tcp 192.168.20.239:61322 (192.168.20.239:22) <- 192.168.20.7:43000 ESTABLISHED:ESTABLISHED\n"
+                  "all tcp 192.168.20.239:61322 <- 192.168.20.9:43000 ESTABLISHED:ESTABLISHED\n"
                   "private arbitrary line\n")
         self.assertEqual(len(runner.scoped_states(source)), 1)
 
     def test_observed_macos_uppercase_prefix_and_closing_states_are_exported(self):
         # Numeric, synthetic reconstruction of the completed Mini export.
-        source = ("ALL tcp 192.168.1.239:61322 <- 192.168.1.7:35301 ESTABLISHED:ESTABLISHED\n"
-                  "ALL tcp 192.168.1.240:61445 <- 192.168.1.7:44733 FIN_WAIT_2:FIN_WAIT_2\n"
-                  "en0 tcp 192.168.1.239:61322 <- 192.168.1.7:38657 TIME_WAIT:TIME_WAIT\n")
+        source = ("ALL tcp 192.168.20.239:61322 <- 192.168.20.7:35301 ESTABLISHED:ESTABLISHED\n"
+                  "ALL tcp 192.168.20.240:61445 <- 192.168.20.7:44733 FIN_WAIT_2:FIN_WAIT_2\n"
+                  "en0 tcp 192.168.20.239:61322 <- 192.168.20.7:38657 TIME_WAIT:TIME_WAIT\n")
         rows = runner.scoped_states(source)
         self.assertEqual([row["state"] for row in rows],
                          ["ESTABLISHED:ESTABLISHED", "FIN_WAIT_2:FIN_WAIT_2", "TIME_WAIT:TIME_WAIT"])
         self.assertEqual(rows[1]["endpoints"][1], {"ip": runner.PEER, "port": 44733})
 
     def test_state_export_rejects_invalid_ports_and_unknown_state_names(self):
-        for tail in ("192.168.1.7:70000 ESTABLISHED:ESTABLISHED", "192.168.1.7:42 SECRET:TOKEN"):
+        for tail in ("192.168.20.7:70000 ESTABLISHED:ESTABLISHED", "192.168.20.7:42 SECRET:TOKEN"):
             with self.subTest(tail=tail):
-                self.assertEqual(runner.scoped_states("all tcp 192.168.1.239:61322 <- " + tail), [])
+                self.assertEqual(runner.scoped_states("all tcp 192.168.20.239:61322 <- " + tail), [])
 
 
 class ChildRuntime(unittest.TestCase):
@@ -375,7 +375,7 @@ class ClientContract(unittest.TestCase):
             self.assertEqual(frame[:6], bytes.fromhex("ea0372637e01"))
             header, tcp = frame[14:34], frame[34:]
             self.assertEqual(client.checksum(header), 0)
-            self.assertEqual(socket.inet_ntoa(header[12:16]), "192.168.1.7")
+            self.assertEqual(socket.inet_ntoa(header[12:16]), "192.168.20.7")
             self.assertEqual(socket.inet_ntoa(header[16:20]), client.IPS[index])
             self.assertEqual(struct.unpack("!HH", tcp[:4]), (42739 + index, client.PUBLIC_PORTS[index]))
             self.assertEqual(tcp[13], 2)
@@ -397,11 +397,11 @@ class ClientContract(unittest.TestCase):
 
     def test_fresh_probe_binds_only_approved_source(self):
         stream = Mock()
-        stream.getsockname.return_value = ("192.168.1.7", 43000)
+        stream.getsockname.return_value = ("192.168.20.7", 43000)
         stream.recv.return_value = b"A5 uid=309\n"
         with patch.object(client.socket, "socket", return_value=stream):
             row, held = client.fresh(client.IPS[0], client.PUBLIC_PORTS[0], keep=True)
-        stream.bind.assert_called_once_with(("192.168.1.7", 0))
+        stream.bind.assert_called_once_with(("192.168.20.7", 0))
         stream.connect.assert_called_once_with((client.IPS[0], client.PUBLIC_PORTS[0]))
         self.assertTrue(row["connected"])
         self.assertIs(held, stream)

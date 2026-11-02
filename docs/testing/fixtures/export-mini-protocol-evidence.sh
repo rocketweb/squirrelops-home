@@ -36,8 +36,8 @@ for name in mini_protocol_evidence_export.py mini_readonly_diagnostic_export.py;
     fi
     /usr/bin/install -o root -g wheel -m 600 "$source_file" "$task_dir/$name"
     case "$name" in
-        mini_protocol_evidence_export.py) expected=9d436c96a4e32cbe18197ecb85bf2f3f1efe6d2491e06e236673a1017cc809eb ;;
-        mini_readonly_diagnostic_export.py) expected=ff85896f538b1ff5410d06a06b2129d9035dfe6edb9a51cfdb88b4026bab0380 ;;
+        mini_protocol_evidence_export.py) expected=77188076e308febc2b46d501b7b7585d80bdfea06276f42cfa29597f37b2b8fd ;;
+        mini_readonly_diagnostic_export.py) expected=ffcabccb69fd9700ebf62ba91ebb1cf685abae91e9838ac6a2761ff2a5e13cfc ;;
     esac
     actual="$(/usr/bin/shasum -a 256 "$task_dir/$name" | /usr/bin/awk '{print $1}')"
     if [ "$actual" != "$expected" ]; then

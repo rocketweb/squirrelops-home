@@ -2,8 +2,8 @@
 
 Matt approved preparing a guarded mini-only recovery after the boot at
 2026-09-30 07:08:51 local restarted the installed sensor. Current observed OS
-build is `26A434`, boot seconds `1790766531`, Tailscale `100.108.203.27`, native
-LAN address `192.168.1.115`. The old installed sensor receipt is `1790731448`.
+build is `26A434`, boot seconds `1790766531`, Tailscale `100.64.0.27`, native
+LAN address `192.168.20.115`. The old installed sensor receipt is `1790731448`.
 
 ## Exact targets and changes
 
@@ -52,7 +52,7 @@ requires revalidation even though the disabled-state hold persists.
 ## Inverse and failure
 
 Config and installed launch plists are backed up but not edited. No installer,
-database SQL mutations, credential changes, Studio operations, native-service
+database SQL mutations, credential changes, test host A operations, native-service
 changes or Little Snitch decisions are included. Backups are not automatic data
 downgrades. No previous PF tokens are reused.
 
@@ -63,7 +63,7 @@ one-shot replacement or inert process may need separately reviewed completion.
 The inverse of the hold is to restore effective enablement of those same two
 jobs at an explicitly reviewed upgrade boundary, with `launchctl enable`.
 Unloading the exact sensor job clears its one-shot debug replacement. Do not
-bootstrap the old configuration while it can allocate the Studio's `.241`.
+bootstrap the old configuration while it can allocate test host A's `.241`.
 The next acceptance runner must explicitly restore enablement immediately before
 its authorized installation and restore the hold on teardown. It must use fresh
 durable evidence and the current OS/PF baseline, not the old temporary receipt

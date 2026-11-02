@@ -18,14 +18,14 @@ CLAIM = BASE / "protocol-1790777754-3d18ebac2fae-attempt.json"
 RECEIPT = Path("/private/var/tmp/squirrelops-mini-protocol-results.75e9py0n/status.json")
 RECEIPT_SHA = "796977f62c6f4e67bf1350c7f2094ebce8325a5f01b75583ea6f9343f523d7c0"
 PACKAGE_SHA = "3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea"
-CLIENT, VIP = "192.168.1.7", "192.168.1.240"
+CLIENT, VIP = "192.168.20.7", "192.168.20.240"
 PORTS = {22, 445, 1234, 11434, 8765, 59738, 59739, 59740, 59741, 59742}
 PF_STATES = ["/sbin/pfctl", "-s", "states"]
 STATE_NAMES = {"CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED", "CLOSE_WAIT",
                "FIN_WAIT_1", "CLOSING", "LAST_ACK", "FIN_WAIT_2", "TIME_WAIT"}
 WINDOW = ["2026-10-01 05:28:50", "2026-10-01 05:29:45"]
 common.PORTS = PORTS
-common.PACKET = re.compile(r"(2026-10-01 \d{2}:\d{2}:\d{2}\.\d{1,9}) IP (192\.168\.1\.(?:7|240))\.(\d+) > (192\.168\.1\.(?:7|240))\.(\d+): tcp (\d+)")
+common.PACKET = re.compile(r"(2026-10-01 \d{2}:\d{2}:\d{2}\.\d{1,9}) IP (192\.168\.20\.(?:7|240))\.(\d+) > (192\.168\.20\.(?:7|240))\.(\d+): tcp (\d+)")
 
 
 def require(condition, message):
@@ -70,7 +70,7 @@ def pf_states(record):
         if not line.strip():
             continue
         addresses = re.findall(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])", line)
-        endpoints = re.findall(r"(?<![\d.])(192\.168\.1\.(?:7|240)):(\d{1,5})(?!\d)", line)
+        endpoints = re.findall(r"(?<![\d.])(192\.168\.20\.(?:7|240)):(\d{1,5})(?!\d)", line)
         pairs = re.findall(r"\b([A-Z_0-9]+):([A-Z_0-9]+)\b", line)
         pairs = [(left, right) for left, right in pairs if left in STATE_NAMES and right in STATE_NAMES]
         valid = (re.search(r"\btcp\b", line) and set(addresses) == {CLIENT, VIP}

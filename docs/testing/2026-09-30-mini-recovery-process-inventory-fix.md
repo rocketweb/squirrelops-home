@@ -53,18 +53,18 @@ should have excluded only that verified observer.
 
 ## New staging, same approved scope
 
-Use `/Users/matt/squirrelops-mini-reboot-v2.qegfyw1y` on the mini. The original
+Use `/Users/operator/squirrelops-mini-reboot-v2.qegfyw1y` on the mini. The original
 staging and root evidence were preserved. Only the parser/observer fix and its
 bootstrap checksum changed; the approved recovery scope is unchanged.
 
 | File | SHA-256 |
 | --- | --- |
 | mini_reboot_recovery.py | 9632faaac479ab98898191ef1866117bb8f2982a55759446ec796d8561ee4048 |
-| stop-mini-reboot-recovery.sh | ca7aab8e9550dd589836bbb3d35ac10085f72845a40eeaa547c1b96d46a6c52d |
-| approved-scope.md | a23cf3bbbcd97eff1f6a971cc5989fdfd4660c8c2ee6d50dea318ceeb6c7d48a |
+| stop-mini-reboot-recovery.sh | 4d57b6c91c1442e986b72ed1b65b8f022f8c8b68ede1361212f42bc71bd530eb |
+| approved-scope.md | c9fc034e585acdb925fc2db6e26b4c9775105ea668d64c2bb35eba92f3e0fe0e |
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-reboot-v2.qegfyw1y/stop-mini-reboot-recovery.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-reboot-v2.qegfyw1y/stop-mini-reboot-recovery.sh
 ```
 
 Confirmation remains `STOP MINI AND HOLD`, only after preflight and the native

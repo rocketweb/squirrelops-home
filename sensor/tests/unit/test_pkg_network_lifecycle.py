@@ -1477,7 +1477,7 @@ mock_dscl() {
                 PrimaryGroupID) printf 'PrimaryGroupID: 309\n' ;;
                 GroupMembership)
                     if [ "$MODE" = "has-member" ]; then
-                        printf 'GroupMembership: matt\n'
+                        printf 'GroupMembership: operator\n'
                     else
                         printf 'No such key: GroupMembership\n' >&2
                     fi ;;

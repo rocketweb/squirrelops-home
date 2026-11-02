@@ -16,8 +16,8 @@ import subprocess
 import time
 
 NFT = "/usr/sbin/nft"
-SOURCE = "192.168.1.7"
-TARGETS = (("192.168.1.239", 22, 42839), ("192.168.1.240", 445, 42840))
+SOURCE = "192.168.20.7"
+TARGETS = (("192.168.20.239", 22, 42839), ("192.168.20.240", 445, 42840))
 TTL = 80
 WATCH_SECONDS = 65
 ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C"}

@@ -7,8 +7,8 @@ import socket
 import subprocess
 import time
 
-ADDRESS = "192.168.1.115"
-SOURCE = "192.168.1.7"
+ADDRESS = "192.168.20.115"
+SOURCE = "192.168.20.7"
 BANNER = b"SquirrelOps TCP diagnostic v3\r\n"
 
 

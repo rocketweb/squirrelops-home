@@ -10,9 +10,9 @@ records; those records were preserved.
 
 ## Scope and identity
 
-- Client: existing SSH access to `root@192.168.1.7`, known host-key verification
+- Client: existing SSH access to `root@192.168.20.7`, known host-key verification
   enabled. Remote hostname `laptop`, Linux `7.0.0-30-generic`.
-- Client interface: `wlp0s20f3`, source `192.168.1.7/24`. Routes to the sensor
+- Client interface: `wlp0s20f3`, source `192.168.20.7/24`. Routes to the sensor
   Mac and both tested VIPs use this physical LAN, not Tailscale or Docker.
 - Existing tools included SSH, SFTP, smbclient, Python, netcat, arping, nmap,
   tcpdump, and timeout. No package installation was necessary.
@@ -21,26 +21,26 @@ records; those records were preserved.
   latest local-test candidate. The installed helper hash was rechecked and
   remains `9790f88bc8ce7f685d43f11acda79de3ec00a5314c469fbd01cbf7e85be525f2`.
 - Active targets, verified from the live database before probing:
-  `docs.local` at `192.168.1.201` and `office.local` at `192.168.1.208`.
+  `docs.local` at `192.168.20.201` and `office.local` at `192.168.20.208`.
   Both are `mimic` hosts, not disposable OpenSSH/Samba guests.
 
 All five unretired Studio Build Mac rows, IDs 1045 through 1049, were **stopped**
-at their recorded address `192.168.1.203`. No attempt was made to use that
+at their recorded address `192.168.20.203`. No attempt was made to use that
 historical address as a live target or to restart the stopped host.
 
 ## Results
 
 | Check | Observation | Interpretation |
 | --- | --- | --- |
-| Proxy ARP | Three replies from each VIP, all from `1c:1d:d3:e0:7d:03` | Both resolve to the Mac's Ethernet interface |
+| Proxy ARP | Three replies from each VIP, all from `1c:1d:d3:5a:6b:03` | Both resolve to the Mac's Ethernet interface |
 | Advertised SSH | Port 22 connected on both VIPs; both sent `SSH-2.0-OpenSSH_7.6` | Banner-replay reachability passed; not authenticated SSH |
 | Advertised SMB | Port 445 connected on both VIPs | TCP reachability passed; not proof of SMB negotiation |
 | Private SSH/SMB backends | `.201:49445`, `.201:49448`, `.208:49511`, `.208:49514` each timed out at three seconds | Direct backend access was not available in these four probes |
 | Backend listener verification | All four exact backend binds were present under sensor PID 599, `_squirrelops` | The timeout result was not explained by absent listeners at the follow-up observation |
 | Anonymous SMB share listing | Both `smbclient -L` attempts exited 1 with `NT_STATUS_CONNECTION_DISCONNECTED` during SMB2/SMB3 negotiation | No share enumeration or real SMB acceptance passed |
-| Connection attribution | Six new records, IDs 1789 through 1794, all from `192.168.1.7` | Every successful application-side connection was recorded |
+| Connection attribution | Six new records, IDs 1789 through 1794, all from `192.168.20.7` | Every successful application-side connection was recorded |
 | Counters | Each SSH card increased by one; each SMB card increased by two | Six total increments match four TCP/banner probes plus two SMB negotiations |
-| Alert persistence | New high-severity `decoy.trip` alert 435, titled `Port scan detected from 192.168.1.7`, incident 16 | Alert generation verified in the database; native notification presentation not tested |
+| Alert persistence | New high-severity `decoy.trip` alert 435, titled `Port scan detected from 192.168.20.7`, incident 16 | Alert generation verified in the database; native notification presentation not tested |
 
 The connection cursors were captured before probing: connection ID 1788 and
 alert ID 434. Attribution used these cursors, source address, decoy IDs, and
