@@ -1,4 +1,4 @@
-# Proposed Mac mini acceptance configuration. Not installed.
+# Proposed test host B (mini) acceptance configuration. Not installed.
 profile: standard
 
 sensor:
@@ -8,7 +8,7 @@ sensor:
 
 network:
   interface: en0
-  subnet: 192.168.1.0/24
+  subnet: 192.168.20.0/24
 
 decoys:
   deep_enabled: true

@@ -1,4 +1,4 @@
-# Mac mini A5 test-host preflight
+# Test host B (mini) A5 preflight
 
 Date: 2026-09-28. Status: read-only host and client checks completed; Matt supplied
 privileged PF and listener output from Terminal on the mini and confirmed both
@@ -8,26 +8,26 @@ This is not a passing A5 record and does not authorize release publication.
 
 ## Verified hosts
 
-Matt selected the Mac mini and corrected its Tailscale address to
-`100.108.203.27`. Existing SSH credentials for `matt` connected with strict
+Matt selected test host B (the mini) and corrected its Tailscale address to
+`100.64.0.27`. Existing SSH credentials for `operator` connected with strict
 host-key verification. No host-key exception or SSH configuration change was
 needed. Serial commands reuse a temporary local SSH control connection.
 
 | Item | Observed value |
 | --- | --- |
-| Mini identity | Matt's Mac mini, `matts-mac-mini.tail3fdb08.ts.net` |
+| Mini identity | Test host B, `test-host-b.tailnet.example` |
 | OS | macOS 27.0, build `26A428`, ARM64 |
-| Hardware | `Mac16,11`, 24 GiB RAM, hardware virtualization available |
+| Hardware | Apple M4 Pro, 24 GiB RAM, hardware virtualization available |
 | Available disk space | Approximately 41 GiB at the snapshot |
-| SSH and console user | `matt`, UID 501, administrator group membership |
+| SSH and console user | `operator`, UID 501, administrator group membership |
 | Noninteractive administrator access | Unavailable; no password requested or read |
-| Ethernet | `en0`, `192.168.1.115/24`, MAC `d0:11:e5:12:9a:c2` |
-| Wi-Fi | `en1`, `192.168.1.254/24`, current MAC `ea:03:72:63:7e:01` |
-| Default physical route | `en0` through `192.168.1.1` |
-| Tailscale management | `100.108.203.27` on `utun4` |
+| Ethernet | `en0`, `192.168.20.115/24`, MAC `d0:11:e5:3c:4d:5e` |
+| Wi-Fi | `en1`, `192.168.20.254/24`, current MAC `ea:03:9b:4c:2d:01` |
+| Default physical route | `en0` through `192.168.20.1` |
+| Tailscale management | `100.64.0.27` on `utun4` |
 | Existing SquirrelOps | App, sensor directory, helper binary, component receipts and launchd jobs were not found; localhost health did not respond |
-| Linux client | Existing authorized SSH to `root@192.168.1.7`, hostname `laptop` |
-| Client physical route | `wlp0s20f3`, source `192.168.1.7`, to both mini LAN addresses |
+| Linux client | Existing authorized SSH to `root@192.168.20.7`, hostname `laptop` |
+| Client physical route | `wlp0s20f3`, source `192.168.20.7`, to both mini LAN addresses |
 
 One ICMP probe to each mini LAN address succeeded. That establishes basic
 reachability, not proof that each probe entered the expected interface. The
@@ -41,7 +41,7 @@ The mini has Python, Swift, tcpdump and netcat. No software was installed.
 
 The mini is not an empty disposable host:
 
-- Ollama listens on `192.168.1.115:11434`; another inference process listens on
+- Ollama listens on `192.168.20.115:11434`; another inference process listens on
   loopback. Do not stop, reconfigure or benchmark either service for A5.
 - Wildcard TCP listeners exist on ports 22 and 445, in both address families.
   Native SSH and file-sharing services must remain untouched. A successful TCP
@@ -94,8 +94,8 @@ loaded rules. Never globally flush rules or disable PF to obtain a clean test.
 ## Confirmed address selection, not yet assigned
 
 - Test server: the mini only. Client: the laptop only. No firewall changes on
-  the Studio or laptop; no Tailscale, VPN, Wi-Fi or default-route changes.
-- Selected test VIPs: `192.168.1.240` and `192.168.1.241` on the physical LAN.
+  test host A or laptop; no Tailscale, VPN, Wi-Fi or default-route changes.
+- Selected test VIPs: `192.168.20.240` and `192.168.20.241` on the physical LAN.
   Matt replied, "confirmed, there is nothing on those ips", to the request to
   confirm they were unused and outside the DHCP pool. This records operator
   confirmation, not an independent router configuration audit. Three earlier
@@ -109,8 +109,8 @@ loaded rules. Never globally flush rules or disable PF to obtain a clean test.
   merely because the app is absent. Inventory it first; abort on unexpected
   ownership or contents.
 - Trusted test UID: the installer's validated `_squirrelops` account, pinned
-  after allocation. It is currently absent. The known different UID is Matt's
-  501. Do not assume the Studio's service UID is also valid on the mini.
+  after allocation. It is currently absent. The known different UID is the operator account's
+  501. Do not assume test host A's service UID is also valid on the mini.
 - Limit all fault-injection listeners, captures, state cleanup and rule writes
   to the approved test endpoints. Never globally flush PF, disable it, or reload
   the main ruleset to make a test pass.
@@ -201,7 +201,7 @@ allocator check.
 
 The saved `fixtures/mini-a5-config.yaml` also passed the packaged model and
 allocator checks. An initial direct `load_settings` probe stopped with
-`PermissionError` when it tried to inspect the Studio's protected installed
+`PermissionError` when it tried to inspect test host A's protected installed
 data directory; it was not retried with elevated privileges. The packaged
 `load_config` then passed with the supported `SQUIRRELOPS_SENSOR__DATA_DIR`
 override pointing to a fresh disposable directory under `/private/tmp/`.

@@ -10,12 +10,12 @@ test, configuration edit, SQL recovery or filter-rule change was performed.
 
 ## Exact run
 
-- Mini: `100.108.203.27`, boot `1790777754`, virtual IP `192.168.1.240` only.
-- Laptop: `192.168.1.7`, route verified through `wlp0s20f3`.
+- Mini: `100.64.0.27`, boot `1790777754`, virtual IP `192.168.20.240` only.
+- Laptop: `192.168.20.7`, route verified through `wlp0s20f3`.
 - Package SHA-256:
   `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
 - [Approved scope](2026-10-01-mini-installed-protocol-scope.md).
-- Mini staging: `/Users/matt/squirrelops-mini-protocol.WJuCiUml`.
+- Mini staging: `/Users/operator/squirrelops-mini-protocol.WJuCiUml`.
 - Root-produced results: `/private/var/tmp/squirrelops-mini-protocol-results.75e9py0n`.
 - Laptop staging: `/root/squirrelops-mini-upgrade-client.GWA3Ee6a`.
 
@@ -28,8 +28,8 @@ Synthetic credentials were transferred privately and never printed.
 
 Both client files matched their prepared SHA-256 values:
 
-- Diagnostic wrapper: `bc36f73427a1a2f9b15260b922e72636b138d13330ad8329d32212ab0ab91c03`.
-- Shared client: `15b3bb270b77d3801870d2a81b64dee266a8f823ce234f6b2be2ff360b02b7f6`.
+- Diagnostic wrapper: `b0864df795a10c9bf7062ec620889cb276d4a53f28babc631e62bec183b897d2`.
+- Shared client: `f10d1b894eac9c05f13e2677f790d2f398d26e750eada6be2d63fdfcd44aab63`.
 
 Exact laptop command:
 

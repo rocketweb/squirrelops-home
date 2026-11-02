@@ -54,7 +54,7 @@ class SMBDiagnostic(previous.FilterRetest):
         print("One SMB-only diagnostic of the installed build. No installer, restart test, or filter changes.", flush=True)
         print("One anonymous laptop share-listing client, up to 45 seconds; no credentials or file operations.", flush=True)
         print("Both apps stay closed. Preserve seven decoys, .240-only configuration, native services and backups.", flush=True)
-        print("Existing discovery/auto-deployment may run. No Studio or .241 tests.", flush=True)
+        print("Existing discovery/auto-deployment may run. No test host A or .241 tests.", flush=True)
         print("Leave new Little Snitch prompts unanswered. This script never renews or broadens a rule.", flush=True)
         print("After the client, Return stops services, withdraws aliases and releases only this run's PF reference.", flush=True)
         print(f"Type {CONSENT} to start, or Return to stop:", flush=True)
@@ -66,7 +66,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps(dict(mode="plan_only", diagnostic_scope=SCOPE, host="100.108.203.27",
+        print(json.dumps(dict(mode="plan_only", diagnostic_scope=SCOPE, host="100.64.0.27",
                               installed_only=True, install=False, third_party_filter_changes=False,
                               observe_seconds=1200, client_max_seconds=45, confirmation=CONSENT)))
         return

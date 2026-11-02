@@ -21,7 +21,7 @@ class RestartCleanupTests(unittest.TestCase):
     @staticmethod
     def records():
         listeners = {"command": module.upgrade.LISTENERS, "exit": 0, "stderr": "", "stdout":
-                     "u0\nn*:22\nn*:445\nn*:5900\nu501\nn192.168.1.115:11434\nn127.0.0.1:49199\n"}
+                     "u0\nn*:22\nn*:445\nn*:5900\nu501\nn192.168.20.115:11434\nn127.0.0.1:49199\n"}
         rows = [listeners.copy(), listeners.copy()]
         for flags in (["-s", "Anchors"], ["-sr"], ["-sn"]):
             rows.append({"command": ["/sbin/pfctl", *flags], "exit": 0, "stdout": "", "stderr": ""})

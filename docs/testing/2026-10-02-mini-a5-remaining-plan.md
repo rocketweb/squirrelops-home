@@ -36,14 +36,14 @@ directory. The SSH user cannot read the original evidence without sudo.
 Historical command, now completed on the **Mini**. No repeat is needed:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-a5-counter-export.KiGTDEeJ/inspect-mini-a5-counters.sh
+sudo /bin/bash /Users/operator/squirrelops-a5-counter-export.KiGTDEeJ/inspect-mini-a5-counters.sh
 ```
 
 Staged identities, verified locally and again over SSH:
 
 | Input | SHA-256 |
 | --- | --- |
-| `inspect_completed.py` | `aa876cc0fb1076b3f4cecce3a144bd4eee980ffa524b6cfb11fa58447c3ef739` |
+| `inspect_completed.py` | `b52ac6d84567b7a10bdf33664803451aa6dd80d6eeb96dd155fef5a4404cbd92` |
 | `inspect-mini-a5-counters.sh` | `f47fabadccf05a9d6f22985a22259648c1302df2bdc9bad5ec5cd12c021b9c0d` |
 
 Local staging is `/private/tmp/squirrelops-a5-counter-export.muEZ1cxY`.
@@ -57,7 +57,7 @@ passed **47 tests in 0.613 seconds**, including existing real loopback child
 checks. Ruff and `git diff --check` passed. Reproduction from this worktree:
 
 ```sh
-SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
+SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
   /usr/bin/python3 -m unittest discover \
   -s docs/testing/fixtures/pf-acceptance -p 'test_*.py' -v
 ```
@@ -93,8 +93,8 @@ The laptop's normal TCP stack can reset a raw SYN-ACK because no matching
 kernel connection exists. The proposed deterministic fixture suppresses only
 RST packets for these two IPv4 tuples:
 
-- `192.168.1.7:42839 -> 192.168.1.239:22`
-- `192.168.1.7:42840 -> 192.168.1.240:445`
+- `192.168.20.7:42839 -> 192.168.20.239:22`
+- `192.168.20.7:42840 -> 192.168.20.240:445`
 
 This was a **new laptop filter mutation outside the previous no-filter-change
 client scope**. Matt explicitly approved these two temporary tuples and a

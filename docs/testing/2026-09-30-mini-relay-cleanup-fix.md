@@ -86,7 +86,7 @@ is required, and no new installation was performed.
 The new continuation is adapted from the previously successful cleanup-only
 implementation, not from the defective borrowed method. It is bound to:
 
-- Mini `100.108.203.27`, ARM64, build `26A434`, boot `1790777754`.
+- Mini `100.64.0.27`, ARM64, build `26A434`, boot `1790777754`.
 - Existing package SHA-256
   `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
 - Both installed receipts at `1790818368`, verified read-only over SSH.
@@ -110,18 +110,18 @@ re-enables PF or starts services; that requires a separately reviewed startup.
 
 ## Historical staging and command, now completed
 
-Fresh private Mini staging: `/Users/matt/squirrelops-mini-relay-cleanup.Vr2YfX9H`.
+Fresh private Mini staging: `/Users/operator/squirrelops-mini-relay-cleanup.Vr2YfX9H`.
 Local and remote digests match. Shell syntax and remote plan-only execution passed.
 The unchanged package is present only to extract a checksum-pinned private Python
 runtime; the cleanup script never invokes Installer.
 
 | Input | SHA-256 |
 | --- | --- |
-| `mini_relay_cleanup.py` | `0bacc4d9768392e0c268b87402ed928d2c21b2153f7ee02acbbeed70335b6b9e` |
-| `finish-mini-relay-cleanup.sh` | `efc60b26015263ed0b41b50966fa653e6cdab41156cf461b9dfc92219d4a4544` |
+| `mini_relay_cleanup.py` | `7c58302bb0c6ce8b9e2d8936b8cde272dfa5f01d18e0539fa437890402723995` |
+| `finish-mini-relay-cleanup.sh` | `f43fde858f725ef71d6fec4c8e3f454ac11211c41c791cc1c4dbea7d7c92af7b` |
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-relay-cleanup.Vr2YfX9H/finish-mini-relay-cleanup.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-relay-cleanup.Vr2YfX9H/finish-mini-relay-cleanup.sh
 ```
 
 Confirmation: `RELEASE DIAGNOSTIC TEST PF REFERENCE`.

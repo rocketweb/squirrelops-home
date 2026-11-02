@@ -1,6 +1,6 @@
 # SquirrelOps Home 2.1 local decoy functional test report
 
-Test date: September 4, 2026. Functional testing began at 11:48 EDT on Matt's Mac Studio. Individual result timestamps are retained; JSON evidence uses UTC.
+Test date: September 4, 2026. Functional testing began at 11:48 EDT on an Apple Silicon test Mac. Individual result timestamps are retained; JSON evidence uses UTC.
 
 ## Verdict
 
@@ -8,7 +8,7 @@ Test date: September 4, 2026. Functional testing began at 11:48 EDT on Matt's Ma
 
 - The installed Network Share works end to end: HTTP requests reached the running sensor, all 10 appeared in its forensic log, and synthetic credential reuse produced two Critical alerts and two credential trips.
 - Real SSH, SFTP, and SMB worked in a disposable guest booted from the installed app's runtime and guest bundle. Authentication, all three SMB shares, file operations, containment checks, concurrency, stop, and restart passed.
-- Studio Build Mac was absent from the running app. No persistent guest process or former `192.168.1.203` alias was present. The successful disposable guest tests do **not** establish that the installed sensor publishes this host or receives its LAN traffic.
+- Studio Build Mac was absent from the running app. No persistent guest process or former `192.168.20.203` alias was present. The successful disposable guest tests do **not** establish that the installed sensor publishes this host or receives its LAN traffic.
 - Installed-code regression tests: **464 passed, 3 failed**. The failures concern newer alert-evidence fields absent from this older installation. The same three tests passed against the committed candidate source.
 - Two AI streaming fidelity checks failed. The live file-share SSH-key bait also failed a normal PEM parser check.
 
@@ -20,18 +20,18 @@ The engineering-constraints skill was used to keep installed behavior, isolated 
 
 | Item | Observed value |
 | --- | --- |
-| Host | Mac Studio, arm64, macOS 26.6.2, build 25G83 |
+| Host | Apple Silicon test Mac, arm64, macOS 26.6.2, build 25G83 |
 | Running app | `/Applications/SquirrelOps Home.app`, version 2.1.0, PID 33865 |
 | Running sensor | `/Library/SquirrelOps/sensor/python/bin/python3`, `_squirrelops`, PID 31785 |
 | Helper | `/Library/PrivilegedHelperTools/com.squirrelops.helper`, PID 31777 |
-| Candidate checkout | `/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current` |
+| Candidate checkout | `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current` |
 | Candidate branch | `feature/deception-depth-2.1.0-current` |
 | Candidate commit | `6b6ef8b5fe3d694695a9bc74982cbe80d05baeb5` |
-| Local sensor address | `192.168.1.18` |
+| Local sensor address | `192.168.20.18` |
 | Installed app binary SHA-256 | `e5d05180351fb66dc87e9ecdccf315f5a4b6841430e4bcf2ee60c944147995be` |
 | Existing newer installer SHA-256 | `212c493cec3a995603ee0cd19f0712b6df99aa289d3afa837f60f5aaf14259b0` |
 
-The newer installer is [SquirrelOpsHome-2.1.0-alert-evidence-local-test.pkg](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-alert-evidence-local-test.pkg). Its checksum was rechecked, but it was not installed during this session. Both builds use the marketing version 2.1.0, so that version alone cannot identify the tested code.
+The newer installer is [SquirrelOpsHome-2.1.0-alert-evidence-local-test.pkg](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-alert-evidence-local-test.pkg). Its checksum was rechecked, but it was not installed during this session. Both builds use the marketing version 2.1.0, so that version alone cannot identify the tested code.
 
 The installed alert handler has a September 1 source-file timestamp and lacks `_MAX_RECENT_CONNECTIONS`, `service_counts`, and `recent_connections`. Its behavior and regression failures confirm that the newer alert-evidence implementation is not installed. This report is not acceptance of the newer installer.
 
@@ -59,20 +59,20 @@ The Decoys view reported **8 fake hosts, 25 service decoys, and 1 host listener*
 
 | Fake host | Virtual IP | Services | Displayed historical hits |
 | --- | --- | ---: | ---: |
-| business.local | 192.168.1.200 | 2 | 0 |
-| docs.local | 192.168.1.201 | 1 | 0 |
-| media.local | 192.168.1.204 | 7 | 3 |
-| shared.local | 192.168.1.206 | 3 | 7 |
-| office-nas.local | 192.168.1.212 | 7 | 509 |
-| office-printer.local | 192.168.1.216 | 3 | 374 |
-| financials | 192.168.1.243 | 1 | 13 |
-| runner | 192.168.1.244 | 1 | 11 |
+| business.local | 192.168.20.200 | 2 | 0 |
+| docs.local | 192.168.20.201 | 1 | 0 |
+| media.local | 192.168.20.204 | 7 | 3 |
+| shared.local | 192.168.20.206 | 3 | 7 |
+| office-nas.local | 192.168.20.212 | 7 | 509 |
+| office-printer.local | 192.168.20.216 | 3 | 374 |
+| financials | 192.168.20.243 | 1 | 13 |
+| runner | 192.168.20.244 | 1 | 11 |
 
-These historical hits are inventory context, not new successful test connections. Visible service cards were labeled ACTIVE. The separate Network Share host listener was ACTIVE at `192.168.1.18:63219`, decoy ID 3.
+These historical hits are inventory context, not new successful test connections. Visible service cards were labeled ACTIVE. The separate Network Share host listener was ACTIVE at `192.168.20.18:63219`, decoy ID 3.
 
 ### Same-host mimic probes
 
-The 25 private backend listeners were associated with sensor PID 31785 before probing. Every direct connection from this Mac timed out. The host listener at `192.168.1.18:63219` connected and returned HTTP 200.
+The 25 private backend listeners were associated with sensor PID 31785 before probing. Every direct connection from this Mac timed out. The host listener at `192.168.20.18:63219` connected and returned HTTP 200.
 
 Do **not** interpret the 25 timeouts as proof of 25 broken decoys. The helper's PF construction intentionally blocks direct backend access and admits advertised ports through physical-interface redirection. Same-host direct-backend probes do not reproduce that path. The relevant implementation is `app/Sources/SquirrelOpsHelper/RPCMethods.swift`, including the default-deny explanation near line 1487 and the final block rule near line 1565.
 
@@ -80,7 +80,7 @@ Live PF rules could not be inspected with available privileges. Advertised-port 
 
 ## Live Network Share and alert pipeline
 
-Target: `http://192.168.1.18:63219`. All credentials came from this decoy's synthetic password file and were kept out of saved evidence.
+Target: `http://192.168.20.18:63219`. All credentials came from this decoy's synthetic password file and were kept out of saved evidence.
 
 | ID | Action | Result | Observed evidence |
 | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ Counter reconciliation:
 | After four credential-phase requests | 10 | 2 | Two Critical alerts at 11:58:51 |
 | Final detail inspection | 10 | 2 | 10 forensic rows, two CREDENTIAL badges, password file TRIPPED, failures 0 |
 
-The Critical detail showed source `192.168.1.18`, TCP port `63219`, path `/`, detection `HTTP Decoy`, and Network Share decoy ID 3. It also showed the matched synthetic credential, which is redacted from this report.
+The Critical detail showed source `192.168.20.18`, TCP port `63219`, path `/`, detection `HTTP Decoy`, and Network Share decoy ID 3. It also showed the matched synthetic credential, which is redacted from this report.
 
 Critical filtering displayed the two credential alerts. Opening one marked it read; History retained it. High filtering displayed both current-test High alerts along with older history. No history was deleted. Two test alerts remained unread at the end.
 
@@ -205,7 +205,7 @@ Private installed logs/database and live PF inspection required administrator ac
 
 ## Side effects and final state
 
-- Network Share retained 10 test connection rows and two synthetic credential-trip events, all from `192.168.1.18`.
+- Network Share retained 10 test connection rows and two synthetic credential-trip events, all from `192.168.20.18`.
 - Four alerts from this round were visible in history: two High connection alerts and two Critical credential alerts. Two remained unread. Reviewing details marked two test alerts read; no existing history was cleared.
 - Only disposable guest files were written, renamed, and deleted. The guest was stopped, destroying its memory-only filesystem. Small synthetic fixture files and QA scripts remain in `/private/tmp/squirrelops-functional-20260904` for reproduction.
 - Temporary AI listeners and guest relays were closed. Final process inspection showed the original app, sensor, and helper PIDs unchanged and no test guest running.
@@ -213,21 +213,21 @@ Private installed logs/database and live PF inspection required administrator ac
 
 ## Reproduction and saved evidence
 
-Run tests only against owned decoys. The exact regression commands are saved in [regression-commands.md](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/regression-commands.md). Installed modules are deliberately selected using `PYTHONPATH`; the development virtualenv supplies the test runner and client libraries.
+Run tests only against owned decoys. The exact regression commands are saved in [regression-commands.md](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/regression-commands.md). Installed modules are deliberately selected using `PYTHONPATH`; the development virtualenv supplies the test runner and client libraries.
 
-The custom harnesses are retained under `/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/functional-20260904`. They currently target the temporary evidence directory and the verified endpoint from this session. Recheck ownership, PID, and endpoint before reusing them. The live credential phase intentionally creates native-app alerts.
+The custom harnesses are retained under `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/functional-20260904`. They currently target the temporary evidence directory and the verified endpoint from this session. Recheck ownership, PID, and endpoint before reusing them. The live credential phase intentionally creates native-app alerts.
 
 | Evidence | Contents |
 | --- | --- |
-| [Environment](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/environment-results.json) | Installed identity, health, certificate enforcement, aliases, bounded Bonjour observations |
-| [Native app observations](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/ui-observations.json) | Counters, alerts, history, credential badges, final process state |
-| [Owned-listener probes](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/running-sensor-probes.json) | Each of the 26 local endpoint outcomes |
-| [Guest and initial AI run](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/results.json) | G01-G12 plus original AI results; A07 assertion was subsequently corrected |
-| [Authoritative AI retest](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/results-ai-retest.json) | Separate streaming failures and corrected campaign check |
-| [Live share browse](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/live-share-browse.json) | Directory, password file, invalid key, and 404 checks |
-| [Live credential reuse](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/live-share-credentials.json) | Synthetic credential submission results, no credential values |
-| [Focused installed regressions](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/installed-regressions.xml) | 56 passing and three failing test cases |
-| [Expanded installed regressions](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/installed-expanded-regressions.xml) | All 408 additional test cases |
-| [Candidate comparison](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/candidate-alert-regressions.xml) | Three candidate-source checks passing |
+| [Environment](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/environment-results.json) | Installed identity, health, certificate enforcement, aliases, bounded Bonjour observations |
+| [Native app observations](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/ui-observations.json) | Counters, alerts, history, credential badges, final process state |
+| [Owned-listener probes](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/running-sensor-probes.json) | Each of the 26 local endpoint outcomes |
+| [Guest and initial AI run](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/results.json) | G01-G12 plus original AI results; A07 assertion was subsequently corrected |
+| [Authoritative AI retest](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/results-ai-retest.json) | Separate streaming failures and corrected campaign check |
+| [Live share browse](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/live-share-browse.json) | Directory, password file, invalid key, and 404 checks |
+| [Live credential reuse](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/live-share-credentials.json) | Synthetic credential submission results, no credential values |
+| [Focused installed regressions](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/installed-regressions.xml) | 56 passing and three failing test cases |
+| [Expanded installed regressions](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/installed-expanded-regressions.xml) | All 408 additional test cases |
+| [Candidate comparison](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/docs/testing/evidence/2026-09-04/candidate-alert-regressions.xml) | Three candidate-source checks passing |
 
 No production credentials, private control keys, or full planted key bytes are included. Saved JSON contains synthetic persona names and local test addresses.

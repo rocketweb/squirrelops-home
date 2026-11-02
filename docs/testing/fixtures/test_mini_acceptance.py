@@ -336,12 +336,12 @@ class GuardTests(unittest.TestCase):
                 module.validate_empty_policy(line)
 
     def test_ledger_exact_scope(self):
-        self.assertEqual(module.parse_ledger('192.168.1.241|en0\n192.168.1.240|en0\n'), sorted(module.VIPS))
+        self.assertEqual(module.parse_ledger('192.168.20.241|en0\n192.168.20.240|en0\n'), sorted(module.VIPS))
         self.assertEqual(module.parse_ledger(''), [])
 
     def test_ledger_rejects_extra_ownership(self):
-        for text in ('192.168.1.115|en0', '192.168.1.240|en1', '192.168.1.240|en0|bad',
-                     '192.168.1.240|en0\n192.168.1.240|en0', 'bad', 'x' * 65537):
+        for text in ('192.168.20.115|en0', '192.168.20.240|en1', '192.168.20.240|en0|bad',
+                     '192.168.20.240|en0\n192.168.20.240|en0', 'bad', 'x' * 65537):
             with self.subTest(text=text[:45]), self.assertRaises(RuntimeError):
                 module.parse_ledger(text)
 
@@ -352,8 +352,8 @@ class GuardTests(unittest.TestCase):
                 module.parse_pf_token(text)
 
     def test_listener_comparison_includes_uid(self):
-        self.assertEqual(module.listener_endpoints('p1\nu0\nf7\nn*:22\np42\nu501\nf4\nn192.168.1.115:11434\n'),
-                         {('0', '*:22'), ('501', '192.168.1.115:11434')})
+        self.assertEqual(module.listener_endpoints('p1\nu0\nf7\nn*:22\np42\nu501\nf4\nn192.168.20.115:11434\n'),
+                         {('0', '*:22'), ('501', '192.168.20.115:11434')})
 
     def test_uncertain_installer_never_cleans_network(self):
         session = module.Session(Path('/private/var/root/squirrelops-mini-acceptance.fixture'))

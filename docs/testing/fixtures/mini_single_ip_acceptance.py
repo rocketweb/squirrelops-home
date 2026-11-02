@@ -20,14 +20,14 @@ spec.loader.exec_module(launchd)
 base, upgrade = launchd.base, launchd.upgrade
 require = base.require
 
-VIP = "192.168.1.240"
+VIP = "192.168.20.240"
 SCOPE = "mini-single-ip-240"
-OLD_CONFIG_SHA = "6e210567e3baae3950d91153b44090876ae6978b2a67677b1690aaf5c8f02330"
-NEW_CONFIG_SHA = "6b492246632eee7bc3975e84fc7c75699d3dcdfc15f2ec542ec673ab243b4bd8"
+OLD_CONFIG_SHA = "10f6f8c800308a47f5fd728aaf9a6ae6eeed9f6d437427a43bae3039ea663087"
+NEW_CONFIG_SHA = "1318489677a7143395487f4a07703cac31b77577daf276000c36ca39414c2aa5"
 CONFIG = base.SENSOR / "config.yaml"
 CONFIG_OWNER = (309, 309)
 CONSENT = "USE 240 AND TEST RESTART"
-CAPTURE_FILTER = "host 192.168.1.7 and host 192.168.1.240"
+CAPTURE_FILTER = "host 192.168.20.7 and host 192.168.20.240"
 
 # These are private copies loaded through importlib, not installed product
 # modules. Scope the inherited ledger, snapshot, login and teardown guards to
@@ -88,7 +88,7 @@ def replace_config(path, backup, recheck):
         "changes": {"scouts.virtual_ip_range_end": [241, 240], "scouts.max_virtual_ips": [2, 1]},
     }, indent=2).encode())
     private_write(backup / "config-inverse.txt", (
-        "No automatic rollback. The old pool overlaps a live Studio host.\n"
+        "No automatic rollback. The old pool overlaps a live host on test host A.\n"
         "A reviewed inverse requires fresh approval, stopped services/guest, no owned aliases,\n"
         "and a current config exactly matching after_sha256. Verify the before backup hash;\n"
         "restore only config-before.yaml atomically with UID/GID 309 and mode 0600.\n"
@@ -136,7 +136,7 @@ class SingleIPUpgrade(launchd.LaunchdUpgrade):
         require(base.digest(self.task_dir / "single-ip-config.yaml") == NEW_CONFIG_SHA, "Proposed configuration changed")
         print("Approved mini-only configuration change, after a verified backup:", flush=True)
         print("  scouts.virtual_ip_range_end: 241 -> 240\n  scouts.max_virtual_ips: 2 -> 1", flush=True)
-        print("The Studio and .241 are outside this run. ARP conflict checks remain enabled for .240.", flush=True)
+        print("Test host A and .241 are outside this run. ARP conflict checks remain enabled for .240.", flush=True)
         super().preflight()
 
     def check_conflicts(self):
@@ -151,7 +151,7 @@ class SingleIPUpgrade(launchd.LaunchdUpgrade):
         path = self.public / f"arp-check-{self.arp_checks}.json"
         path.write_text(json.dumps({"target": VIP, "interface": "en0", "reply_count": len(answered), "replies": rows}, indent=2))
         path.chmod(0o644)
-        require(not answered, "192.168.1.240 answered ARP; see arp-check evidence. No startup authorized")
+        require(not answered, "192.168.20.240 answered ARP; see arp-check evidence. No startup authorized")
 
     def check_effective_pool(self, path):
         from squirrelops_home_sensor.config import load_settings
@@ -228,7 +228,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "package_sha256": launchd.PACKAGE_SHA,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "package_sha256": launchd.PACKAGE_SHA,
                           "test_scope": SCOPE, "test_vips": [VIP], "configuration_fields_changed": 2,
                           "database_recovery": False, "confirmation": CONSENT,
                           "third_party_filter_rule_changes": False, "fault_injection": False}, indent=2))

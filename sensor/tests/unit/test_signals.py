@@ -56,7 +56,7 @@ class TestNormalizeMac:
 
     def test_unpadded_octets(self) -> None:
         """ARP scanners may return single-digit hex octets like 'a' instead of '0a'."""
-        assert normalize_mac("ae:29:a:e5:cc:c5") == "AE:29:0A:E5:CC:C5"
+        assert normalize_mac("ae:29:c:5d:6e:7f") == "AE:29:0C:5D:6E:7F"
 
     def test_unpadded_leading_zeros(self) -> None:
         """MACs with leading zero octets like '0:8:9b:ce:b6:fd'."""

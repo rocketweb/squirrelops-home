@@ -61,17 +61,17 @@ Tests do not establish that the root preflight, upgrade or live cleanup has run.
 
 ## Staged paths and identities
 
-Mini: `/Users/matt/squirrelops-mini-upgrade.Um4HlMcy`, `matt:staff`, mode 0700.
+Mini: `/Users/operator/squirrelops-mini-upgrade.Um4HlMcy`, `operator:staff`, mode 0700.
 Laptop: `/root/squirrelops-mini-upgrade-client.tnStT9B9`, `root:root`, mode 0700.
 
 | Artifact | SHA-256 |
 | --- | --- |
 | `candidate.pkg` | `541fc783c41fd2f9a6baba1fe8edae93078a0a24089b8e6d4ede77ba051b7fb1` |
-| `mini_acceptance.py` (unchanged dependency) | `47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a` |
+| `mini_acceptance.py` (unchanged dependency) | `46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f` |
 | `mini_upgrade_acceptance.py` | `c61154c3b6b62cc945c62aae58eb0c6bfe259305539ef604a36708b52e098110` |
-| `approved-scope.md` | `783395f91247dc2997db4af96515503a7f20222d0e6781a55a2b222e8d229648` |
-| `start-mini-upgrade-acceptance.sh` | `c99a6126adec99d4d8780d5cfec45eea0498071eae115f9a4a7239e1b8c7670d` |
-| Laptop `mini_upgrade_client.py` | `15b3bb270b77d3801870d2a81b64dee266a8f823ce234f6b2be2ff360b02b7f6` |
+| `approved-scope.md` | `c9dcb06f6b28902fed5ba0ad1b6732f7c18ef8a711d1c92e114d8bd663d4f01b` |
+| `start-mini-upgrade-acceptance.sh` | `9b06d7c70094830c3441e391a34330a7d537e3ad469a96132ba1b00b538995bb` |
+| Laptop `mini_upgrade_client.py` | `f10d1b894eac9c05f13e2677f790d2f398d26e750eada6be2d63fdfcd44aab63` |
 
 Fresh read-only checks still found macOS 27.0 build 26A428, mini en0 `.115`, en1
 `.254`, absent product launchd jobs and only the expected macOS `distnoted`
@@ -81,10 +81,10 @@ configuration, PF, data and conflict checks remain in the attended preflight.
 
 ## Next operator action
 
-Keep SquirrelOps closed. Run this in **Terminal on the Mac mini**, not Studio:
+Keep SquirrelOps closed. Run this in **Terminal on test host B (the mini)**, not test host A:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-upgrade.Um4HlMcy/start-mini-upgrade-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-upgrade.Um4HlMcy/start-mini-upgrade-acceptance.sh
 ```
 
 Report the printed status and sanitized-results path. At `READY FOR TESTS`,

@@ -10,8 +10,8 @@ an installed release package or an isolated PF-only environment.
 ## Exact run
 
 - Mini: ARM64 macOS 27.0.1 build 26A434, Ethernet en0 and Wi-Fi en1.
-- Temporary targets: 192.168.1.239:22 and 192.168.1.240:445, with private
-  backends 61322 and 61445. Laptop source: 192.168.1.7 on wlp0s20f3.
+- Temporary targets: 192.168.20.239:22 and 192.168.20.240:445, with private
+  backends 61322 and 61445. Laptop source: 192.168.20.7 on wlp0s20f3.
 - Run nonce: `c21040d915eb`.
 - Durable evidence:
   `/Library/SquirrelOps/acceptance-backups/mini-a5-20261002.DcmC5nO5`.
@@ -22,7 +22,7 @@ an installed release package or an isolated PF-only environment.
 - Pinned bundle manifest:
   `c2e405364c5fd80e1949dc13cac0da0c37b13fd260fec399f8dc3d4c4d06a12d`.
 - Client SHA-256:
-  `00393e309433797434bf3eaae92dc70bd240d2ffd46f380ed4b3bc40c40d2417`.
+  `b5596c5553219addc7d9e4c7aa5c93722d72e3af9549c09594421ecb4dd42de6`.
 
 The source and bundle identity remain those recorded in the
 [fixture-correction report](2026-10-02-mini-a5-partial-results.md). The standalone
@@ -97,7 +97,7 @@ product helper, guest, app or disposable Swift probe process, and only the
 original .115 and .254 IPv4 addresses on en0/en1. Root-only PF checks here are
 attested by the completed pinned runner, not a separate root SSH query.
 
-Installed services, configuration, database, Little Snitch rules, Studio and
+Installed services, configuration, database, Little Snitch rules, test host A and
 .241 were not changed. The Mini remains stopped pending the next reviewed test.
 
 Evidence hashes:

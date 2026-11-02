@@ -18,7 +18,7 @@ predates these fixes and must not be described as containing them.
 
 ## Exact source
 
-- Checkout: `/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current`.
+- Checkout: `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current`.
 - Branch: `feature/deception-depth-2.1.0-current`.
 - Base: `6b6ef8b5fe3d694695a9bc74982cbe80d05baeb5`, plus existing release work and
   this uncommitted batch. The base commit alone does not identify the source.
@@ -144,7 +144,7 @@ Run from the candidate checkout. The native runner requires an **absolute**
 test-bundle path so its resource lookup works under this CLT test harness.
 
 ```bash
-cd /Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor
+cd /Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor
 env -u SQUIRRELOPS_DECEPTION_RUNTIME -u SQUIRRELOPS_GUEST_BUNDLE \
   .venv/bin/python -m pytest -q --tb=short -ra
 .venv/bin/ruff check .

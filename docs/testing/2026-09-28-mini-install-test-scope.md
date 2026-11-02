@@ -1,4 +1,4 @@
-# Mac mini: bounded Home 2.1 setup and protocol-test proposal
+# Test host B (mini): bounded Home 2.1 setup and protocol-test proposal
 
 Date: 2026-09-28. Status: Matt approved this bounded scope with "yes proceed".
 Setup files were staged and hash-verified on the mini before attended execution.
@@ -21,11 +21,11 @@ installed baseline is established. Nothing here closes the A5 release gate.
 
 ## Exact target and artifact
 
-- Server: `matt@100.108.203.27`, Matt's Mac mini, macOS 27.0 ARM64.
-- Client: existing authorized `root@192.168.1.7`, interface `wlp0s20f3`.
-- Mini ingress: `en0`, currently `192.168.1.115/24`.
-- Secondary ingress observation: `en1`, currently `192.168.1.254/24`.
-- Selected virtual IPs: `192.168.1.240` and `192.168.1.241`, confirmed available
+- Server: `operator@100.64.0.27`, test host B (the mini), macOS 27.0 ARM64.
+- Client: existing authorized `root@192.168.20.7`, interface `wlp0s20f3`.
+- Mini ingress: `en0`, currently `192.168.20.115/24`.
+- Secondary ingress observation: `en1`, currently `192.168.20.254/24`.
+- Selected virtual IPs: `192.168.20.240` and `192.168.20.241`, confirmed available
   by Matt. Repeat conflict checks before allocation.
 - Installer: `build/test-artifacts/SquirrelOpsHome-2.1.0-ai-setup-20260928-local-test.pkg`.
 - SHA-256: `3e8c0fc78befad3365fdbff5583d9f85c6b6fe01816b5863edbebeceaa4b8f5f`.
@@ -44,7 +44,7 @@ installed baseline is established. Nothing here closes the A5 release gate.
 | PF | Disabled in Matt's snapshot | Enable under a test-owned reference after loaded-rule inspection; product owns `com.apple/squirrelops` only |
 | Management API | Absent in preflight | TLS API on port 8443; protected routes require pairing |
 | Classic decoys | None from SquirrelOps | Up to three additional listeners on the concrete mini LAN address, using OS-assigned ports |
-| Discovery | No SquirrelOps scanning | Normal ARP, TCP and Scout discovery on `192.168.1.0/24` |
+| Discovery | No SquirrelOps scanning | Normal ARP, TCP and Scout discovery on `192.168.20.0/24` |
 | Deep decoy | Absent | One disposable guest with real SSH/SMB and synthetic persona data |
 
 The physical host already listens on 22, 445, 5900 and other ports. Do not stop
@@ -111,7 +111,7 @@ so setup does not request inference from the mini's existing AI services.
    synthetic credentials only. Confirm protocol banners, failed and successful
    authentication, SFTP/SMB listings and reads. Write/delete only uniquely named
    synthetic acceptance files in the disposable guest.
-3. Verify source attribution to `192.168.1.7`, stored connection telemetry and
+3. Verify source attribution to `192.168.20.7`, stored connection telemetry and
    expected alert grouping. An open TCP port by itself is not success.
 4. Probe the discovered private backend ports directly. Observe actual ingress
    and packet delivery for secondary-interface checks; do not count targeting
@@ -158,7 +158,7 @@ No commit, push, tag, GitHub publication or website change is part of this scope
 ## Initial execution checkpoint: staged, awaiting attended administrator command
 
 The approved setup is staged in the mini's private mode-0700 directory:
-`/Users/matt/squirrelops-mini-test.yktIwbVu` (owner `matt:staff`). It contains the
+`/Users/operator/squirrelops-mini-test.yktIwbVu` (owner `operator:staff`). It contains the
 installer as `candidate.pkg`, bounded configuration, setup source and this
 scope record. No product path, account, launchd job or PF state has changed.
 
@@ -171,7 +171,7 @@ address confirmation; they are not proof against future DHCP allocation.
 Run in Terminal on the mini:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-test.yktIwbVu/start-mini-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-test.yktIwbVu/start-mini-acceptance.sh
 ```
 
 The script copies inputs into a new root-private directory, verifies pinned
@@ -208,7 +208,7 @@ Local preparation verification, not live acceptance:
 | --- | --- |
 | `start-mini-acceptance.sh` | `0ff2773f4b356de9635909f5361b89420a8225d18cdd7d0501edc55b00f0cac5` |
 | `mini_acceptance.py` | `2852d7f814b66e1c75224d105e41ca11dcf860e5bbac070b10f68172c201f3cd` |
-| `mini-a5-config.yaml` | `6e210567e3baae3950d91153b44090876ae6978b2a67677b1690aaf5c8f02330` |
+| `mini-a5-config.yaml` | `10f6f8c800308a47f5fd728aaf9a6ae6eeed9f6d437427a43bae3039ea663087` |
 | `candidate.pkg` | `3e8c0fc78befad3365fdbff5583d9f85c6b6fe01816b5863edbebeceaa4b8f5f` |
 
 Remaining: the attended command, root preflight, real installation, protocol

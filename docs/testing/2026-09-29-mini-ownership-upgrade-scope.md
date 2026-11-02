@@ -2,11 +2,11 @@
 
 This is an attended local test, not a public release or approval to change Little
 Snitch rules. Keep SquirrelOps closed on the mini throughout the test. The
-Studio app can remain closed while these tests run.
+SquirrelOps app on test host A can remain closed while these tests run.
 
 ## Exact targets and bounded changes
 
-- Mini: `matt@100.108.203.27`, macOS 27.0 build `26A428`, ARM64.
+- Mini: `operator@100.64.0.27`, macOS 27.0 build `26A428`, ARM64.
 - Installed sensor receipt timestamp must remain `1790711659`. Old installed
   app, helper, guest, Python, configuration and startup module must match the
   preceding shutdown-fix package.
@@ -22,7 +22,7 @@ Studio app can remain closed while these tests run.
   preflight. This corrects the runner's prior unsupported mode-`600` assumption;
   it does not change any installed permissions or the installer payload.
 - Restore only `status` from `stopped` to `active` for deep-service rows 1 to 5,
-  with respective ports 445, 22, 11434, 1234 and 8765 on `192.168.1.240`.
+  with respective ports 445, 22, 11434, 1234 and 8765 on `192.168.20.240`.
 - Verify that those exact rows were active in the retained consistent database
   at `/Library/SquirrelOps/acceptance-backups/mini-upgrade-20260929.knon9pvr/pre-upgrade.sqlite`.
   Every other field must match that historical state except `updated_at`, which
@@ -49,7 +49,7 @@ Validate installed payloads, health and guarded publication of all five services
 Stop the sensor normally, require guest exit and alias withdrawal, verify that
 shutdown preserved all five rows, then restart and repeat readiness checks.
 
-Only after `READY FOR TESTS`, the laptop `192.168.1.7` on `wlp0s20f3` may run the
+Only after `READY FOR TESTS`, the laptop `192.168.20.7` on `wlp0s20f3` may run the
 bounded client. It tests SSH banner/login and synthetic file operations over
 SSH/SFTP/SMB, plus the three advertised AI HTTP services. Synthetic guest
 credentials move only through private files. It also checks that direct

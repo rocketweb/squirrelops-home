@@ -93,7 +93,7 @@ class CleanupTests(unittest.TestCase):
     def records():
         return [
             {"command": module.LISTENERS, "exit": 0, "stdout":
-             "u0\nn*:22\nn*:445\nn*:5900\nu501\nn192.168.1.115:11434\nn127.0.0.1:49199\n", "stderr": ""},
+             "u0\nn*:22\nn*:445\nn*:5900\nu501\nn192.168.20.115:11434\nn127.0.0.1:49199\n", "stderr": ""},
             {"command": ["/sbin/pfctl", "-E"], "exit": 0, "stdout": "Token : 12345\n", "stderr": ""},
             {"command": ["/usr/sbin/installer", "-pkg", "/private/var/root/squirrelops-mini-acceptance.fixture/candidate.pkg",
                          "-target", "/"], "exit": 0, "stdout": "", "stderr": ""}]
@@ -137,7 +137,7 @@ class CleanupTests(unittest.TestCase):
         def owned():
             nonlocal owned_calls
             owned_calls += 1
-            return ["192.168.1.240"] if owned_calls == 1 else []
+            return ["192.168.20.240"] if owned_calls == 1 else []
 
         def pf(args):
             return ("PID TOKEN TIME\n501 12345 now\n" if not released else "PID TOKEN TIME\n") \

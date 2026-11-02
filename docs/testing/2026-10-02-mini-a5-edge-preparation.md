@@ -11,13 +11,13 @@ the [counter findings](2026-10-02-mini-a5-counter-review.md).
 
 The existing disposable Mini scope remains .239/.240, public 22/445, private
 61322/61445, service UID 309 and test UID 501. No installed package, service,
-database, Little Snitch, Studio or .241 changes. Existing jobs remain disabled;
+database, Little Snitch, test host A or .241 changes. Existing jobs remain disabled;
 fresh root preflight and conflict checks remain mandatory.
 
 The added laptop authority covers only RST packets from:
 
-- `192.168.1.7:42839` to `192.168.1.239:22`.
-- `192.168.1.7:42840` to `192.168.1.240:445`.
+- `192.168.20.7:42839` to `192.168.20.239:22`.
+- `192.168.20.7:42840` to `192.168.20.240:445`.
 
 The [fixture contract](fixtures/pf-acceptance/EDGES.md) specifies the exact
 rollback and five client phases. The implementation uses two nftables drop
@@ -72,7 +72,7 @@ must still be collected during the attended experiment.
 ## Artifacts
 
 - Local: `/private/tmp/squirrelops-a5-build.V3gy8MyX/stage`.
-- Mini: `/Users/matt/squirrelops-mini-a5-edges.OH0NAMOE`.
+- Mini: `/Users/operator/squirrelops-mini-a5-edges.OH0NAMOE`.
 - Laptop: `/root/squirrelops-a5-edges.uN2BSX5p`.
 
 | Artifact | SHA-256 |
@@ -80,9 +80,9 @@ must still be collected during the attended experiment.
 | Mini manifest | `e295ed76ff11655e5d7cd159a5598c5d073ff97c3a2efb7280bf2e033423b214` |
 | Mini launcher | `946493ae3bf8b25962c851d06a3a13f198a09a66b4665b2acbfe1c75b2e7b37f` |
 | Laptop launcher | `a48df7d87c1ef816d7e6117519dc14a9842b9e81b9b1fa838ca39080fedee878` |
-| Laptop edge client | `a61f8fe796119724563236f7f957a98cf80cab4a393e21409b39f893c7a4e38d` |
-| Laptop watchdog | `1afff95d9c6233fc2601a85df14d491442da28de7b89006bc2b5fbac8f719d0e` |
-| Reused basic client | `00393e309433797434bf3eaae92dc70bd240d2ffd46f380ed4b3bc40c40d2417` |
+| Laptop edge client | `0cd32e89d535060e1b4a3b81c6ca30ec32aa7bac5ba7ce743cdc3e16c0988698` |
+| Laptop watchdog | `36d3176bae6eb6f98a9b1be35c9bd3cf864543470cdb82df4c2f41c0f41f3b8c` |
+| Reused basic client | `b5596c5553219addc7d9e4c7aa5c93722d72e3af9549c09594421ecb4dd42de6` |
 
 The earlier build at `squirrelops-a5-build.KCoqC4Ro` is superseded. Use only
 the final V3gy8MyX bundle and the two verified remote destinations above.
@@ -92,7 +92,7 @@ the final V3gy8MyX bundle and the two verified remote destinations above.
 On the **Mini**, with SquirrelOps still closed:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-a5-edges.OH0NAMOE/start-mini-a5-edges.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-a5-edges.OH0NAMOE/start-mini-a5-edges.sh
 ```
 
 Leave Terminal open. Tell the coordinator when `READY: edge_healthy` appears,

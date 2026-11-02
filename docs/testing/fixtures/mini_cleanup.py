@@ -21,7 +21,7 @@ require = base.require
 
 BASELINE = Path("/Library/SquirrelOps/acceptance-backups/mini-20260928.bukymecp")
 PUBLIC = Path("/private/var/tmp/squirrelops-mini-results.fxk5kskd")
-ORIGINAL_SHA = "47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a"
+ORIGINAL_SHA = "46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f"
 AFTER_SHA = "49f946c512f0ed7836dffbb72db893f7186ef7e4d9a65b94a7047c107e4337cf"
 STATUS_SHA = "0105c16eb8883f98b046c558c42b9e24aeb3b8906f3cd71a81f56f2e2fe3ac2f"
 GUEST = str(base.APP / "Contents/Library/Helpers/com.squirrelops.deception-guest")
@@ -61,7 +61,7 @@ def recover_baseline(records: list[dict], token: str) -> set[tuple[str, str]]:
     prior = [r for r in records[:enable[0]] if r["command"] == LISTENERS and r["exit"] == 0]
     require(len(prior) == 1, "Original listener baseline is ambiguous")
     listeners = base.listener_endpoints(prior[0]["stdout"])
-    for endpoint in ("*:22", "*:445", "*:5900", "192.168.1.115:11434", "127.0.0.1:49199"):
+    for endpoint in ("*:22", "*:445", "*:5900", "192.168.20.115:11434", "127.0.0.1:49199"):
         require(any(address == endpoint for _, address in listeners), "Incomplete original listener baseline")
     return listeners
 
@@ -137,7 +137,7 @@ class Cleanup(base.Session):
     def verify_host_baseline(self) -> None:
         require(self.baseline_listeners <= base.listener_endpoints(self.command(LISTENERS).stdout),
                 "Original listener endpoint/UID parity changed")
-        for interface, address in (("en0", "192.168.1.115"), ("en1", "192.168.1.254")):
+        for interface, address in (("en0", "192.168.20.115"), ("en1", "192.168.20.254")):
             require(self.command(["/usr/sbin/ipconfig", "getifaddr", interface]).stdout.strip() == address,
                     "Mini interface address changed")
 
@@ -185,7 +185,7 @@ class Cleanup(base.Session):
                 "Close the app before cleanup")
         self.verify_host_baseline()
         self.verify_processes()
-        require(self.owned() == ["192.168.1.240"], "Alias ownership no longer matches the failed run")
+        require(self.owned() == ["192.168.20.240"], "Alias ownership no longer matches the failed run")
         prior = json.loads((PUBLIC / "after.json").read_text())
         for key, flag in (("pf_rules", "-sr"), ("pf_nat", "-sn")):
             require(self.pf(["-a", "com.apple/squirrelops", flag]) == prior[key], "Test PF rules changed")
@@ -215,10 +215,10 @@ class Cleanup(base.Session):
         require(all(self.process_identity(pid) is None for pid in TERMINABLE), "Guest runtime remains")
         listeners = base.listener_endpoints(self.command(LISTENERS).stdout)
         require(not any(uid == "309" for uid, _ in listeners), "Service-owned TCP listener remains")
-        require(self.owned() == ["192.168.1.240"], "Ownership changed before withdrawal")
+        require(self.owned() == ["192.168.20.240"], "Ownership changed before withdrawal")
         self.rpc("setupPortForwards", {"rules": [], "interface": "en0", "protected_endpoints": [
-            {"ip": "192.168.1.240", "direct_ports": []}]})
-        self.rpc("removeIPAlias", {"ip": "192.168.1.240", "interface": "en0"})
+            {"ip": "192.168.20.240", "direct_ports": []}]})
+        self.rpc("removeIPAlias", {"ip": "192.168.20.240", "interface": "en0"})
         self.assert_no_test_network()
         require(not self.owned(), "Ownership remains; keep protection")
         self.rpc("clearPortForwards", {})
@@ -264,7 +264,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.run is None:
         print(json.dumps({"mode": "plan_only", "baseline": str(BASELINE), "results": str(PUBLIC),
-                          "install": False, "signal_pids": list(TERMINABLE), "vip": "192.168.1.240",
+                          "install": False, "signal_pids": list(TERMINABLE), "vip": "192.168.20.240",
                           "delete_data": False, "global_pf_reset": False}, indent=2))
         return
     Cleanup(args.run).run_cleanup()

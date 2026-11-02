@@ -1,7 +1,7 @@
 # One controlled retest after a narrow guest filter allowance
 
 Matt approved a 30-minute Little Snitch allowance for the exact installed
-`com.squirrelops.deception-guest` executable, incoming TCP from `192.168.1.7`
+`com.squirrelops.deception-guest` executable, incoming TCP from `192.168.20.7`
 only, followed by one controlled retest. He reported "done continue". The rule
 is operator-reported, not independently inspected. No all-applications,
 all-sources, outgoing or permanent allowance is authorized. The script does
@@ -10,13 +10,13 @@ expired before starting; do not broaden it to overcome another prompt.
 
 ## Unchanged target
 
-- Mini `100.108.203.27`, boot `1790777754`, ARM64 build `26A434`.
+- Mini `100.64.0.27`, boot `1790777754`, ARM64 build `26A434`.
 - Installed package SHA-256 `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
 - App/sensor receipt time `1790818368`; exact installed payload hashes checked.
-- VIP `192.168.1.240` only; laptop `.7` through `wlp0s20f3`.
+- VIP `192.168.20.240` only; laptop `.7` through `wlp0s20f3`.
 - Preserve the existing seven decoy identities and saved active intent, current
   `.240`-only configuration, native services and all prior evidence.
-- No Studio, `.241`, package installation, repeat restart test, SQL recovery,
+- No test host A, `.241`, package installation, repeat restart test, SQL recovery,
   configuration edit or global PF policy change. Both apps stay closed.
 
 ## Prerequisites and exact changes

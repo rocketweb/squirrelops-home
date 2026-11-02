@@ -28,8 +28,8 @@ verify_digest() {
     fi
 }
 verify_digest candidate.pkg 3e8c0fc78befad3365fdbff5583d9f85c6b6fe01816b5863edbebeceaa4b8f5f
-verify_digest mini_acceptance.py 47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a
-verify_digest mini_cleanup.py ee842b733f72c0cba2343d1abc29a614b1f9790d9fa5ac33a375729397c328ad
+verify_digest mini_acceptance.py 46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f
+verify_digest mini_cleanup.py b956a22a8b3dc47eaa916a0f42202d98a59cb8a162db7ac1eac32d79e64c6c5c
 
 echo "Cleanup inputs verified. Preparing the pinned private Python runtime; no package installation."
 /usr/sbin/pkgutil --expand-full "$task_dir/candidate.pkg" "$task_dir/expanded"

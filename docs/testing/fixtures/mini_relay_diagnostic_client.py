@@ -6,13 +6,13 @@ spec = importlib.util.spec_from_file_location("client", Path(__file__).with_name
 client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)
 client.PACKAGE_SHA = "3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea"
-client.VIPS = {"192.168.1.240"}
+client.VIPS = {"192.168.20.240"}
 validate_original = client.validate_inputs
 
 
 def validate_inputs(endpoints, login, status, now):
     client.require(status.get("test_scope") == "mini-relay-diagnostics-240"
-                   and status.get("test_vips") == ["192.168.1.240"]
+                   and status.get("test_vips") == ["192.168.20.240"]
                    and status.get("boot_seconds") == 1790777754
                    and status.get("configuration_unchanged") is True
                    and status.get("config_change_verified") is True,

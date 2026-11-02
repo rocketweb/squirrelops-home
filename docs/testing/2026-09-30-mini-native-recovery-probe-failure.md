@@ -68,7 +68,7 @@ interrupts other mini workloads and SSH, and the old shutdown budget could still
 truncate normal cleanup. It therefore requires fresh preflight and durable
 backups, followed by a post-boot audit of processes, aliases, product ownership
 records and PF state before any installation or restart. No automatic rollback
-may restart the old pool while the Studio owns `.241`. Studio changes, filter
+may restart the old pool while test host A owns `.241`. Test host A changes, filter
 resets and Little Snitch rule changes remain out of scope.
 
 The proposed reboot is host recovery, not proof that the installer can safely

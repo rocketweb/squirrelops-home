@@ -12,16 +12,16 @@ completes cleanup, not overall protocol acceptance or release readiness.
 
 ## Exact run
 
-- Mini: `100.108.203.27`, macOS build pinned to `26A434`, boot `1790777754`.
-- Attended staging: `/Users/matt/squirrelops-mini-post-reboot-v2.UU8waUaT`.
+- Mini: `100.64.0.27`, macOS build pinned to `26A434`, boot `1790777754`.
+- Attended staging: `/Users/operator/squirrelops-mini-post-reboot-v2.UU8waUaT`.
 - Private execution: `/private/var/root/squirrelops-mini-post-reboot.lQlvs3JI`.
 - Root-produced sanitized results:
   `/private/var/tmp/squirrelops-mini-post-reboot-results.3p_hssk9`.
-- Laptop: `192.168.1.7`, client directory
+- Laptop: `192.168.20.7`, client directory
   `/root/squirrelops-mini-upgrade-client.VNbggFA7`.
 - Candidate: `SquirrelOpsHome-2.1.0-launchd-budget-20260930-local-test.pkg`,
   SHA-256 `3a3cda47a7eaec1a015edd82ad42edc91be10b64d181a805d29f114f2357893c`.
-- Scope: `mini-post-reboot-240`, only `192.168.1.240` was probed.
+- Scope: `mini-post-reboot-240`, only `192.168.20.240` was probed.
 
 Before traffic, the root-owned readiness record, parent/input metadata, exact
 package/scope/boot, configuration confirmation, remaining time and endpoints
@@ -80,7 +80,7 @@ Retained snapshots:
 The existing six rows kept their IDs, types, bind addresses, ports and active
 intent through startup/restart and the collected post-probe snapshot. During
 observation an additional `home_assistant` row appeared: ID 7 on native address
-`192.168.1.115:51232`, active, with zero connections. No agent command created
+`192.168.20.115:51232`, active, with zero connections. No agent command created
 this row. Subsequent [private-log review](2026-09-30-mini-readonly-diagnostic-result.md)
 confirmed classic auto-deployment at 12:16:43 local time, before the probes.
 The classic `.115:60556` listener's original row remains present.
@@ -112,7 +112,7 @@ Fresh read-only SSH checks after this status found:
 
 A local read-only reproduction loaded the actual runner's `validate_intent()`
 and the recorded pre-upgrade/final JSON. All six original five-field rows
-matched exactly. The only addition was `[7, "home_assistant", "192.168.1.115",
+matched exactly. The only addition was `[7, "home_assistant", "192.168.20.115",
 51232, "active"]`. The original six rows pass the validator; the recorded
 seven-row snapshot raises the exact observed error. No live database was
 opened or changed for this reproduction. The origin of row 7 was unverified
@@ -146,7 +146,7 @@ was PID 15923, its Virtualization process PID 15924, and the sensor PID 15614
 in the inspected inventory.
 
 An unprivileged Little Snitch query for the one-minute probe window exited 14
-without usable traffic evidence. Sensor logs were not readable as `matt`.
+without usable traffic evidence. Sensor logs were not readable as `operator`.
 Unprivileged `netstat` produced no matching `.240` rows, despite fresh readiness
 and a visible `.240` interface alias; that empty output cannot establish absent
 listeners or completed cleanup. Privileged packet/log evidence remains in the

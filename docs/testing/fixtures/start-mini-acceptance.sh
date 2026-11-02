@@ -1,5 +1,5 @@
 #!/bin/bash
-# One attended, approved Mac mini session. No password is read by this script.
+# One attended, approved test host B (mini) session. No password is read by this script.
 set -euo pipefail
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 umask 077
@@ -48,8 +48,8 @@ verify_digest() {
     fi
 }
 verify_digest candidate.pkg 3e8c0fc78befad3365fdbff5583d9f85c6b6fe01816b5863edbebeceaa4b8f5f
-verify_digest mini-a5-config.yaml 6e210567e3baae3950d91153b44090876ae6978b2a67677b1690aaf5c8f02330
-verify_digest mini_acceptance.py 47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a
+verify_digest mini-a5-config.yaml 10f6f8c800308a47f5fd728aaf9a6ae6eeed9f6d437427a43bae3039ea663087
+verify_digest mini_acceptance.py 46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f
 
 echo "Setup inputs verified. Preparing the pinned package's private Python runtime."
 /usr/sbin/pkgutil --expand-full "$task_dir/candidate.pkg" "$task_dir/expanded"

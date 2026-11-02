@@ -37,14 +37,14 @@ class PostRebootTests(unittest.TestCase):
         plan = json.loads(result.stdout)
         self.assertEqual(plan["mode"], "plan_only")
         self.assertEqual(plan["boot_seconds"], 1790777754)
-        self.assertEqual(plan["test_vips"], ["192.168.1.240"])
+        self.assertEqual(plan["test_vips"], ["192.168.20.240"])
         self.assertFalse(plan["database_recovery"])
         self.assertTrue(plan["restore_disabled_jobs"])
 
     def test_expected_intent_includes_classic_host_listener(self):
         module.validate_intent(module.EXPECTED_INTENT)
         for rows in (module.EXPECTED_INTENT[:-1], [],
-                     [*module.EXPECTED_INTENT[:-1], [6, "dev_server", "192.168.1.115", 60556, "stopped"]]):
+                     [*module.EXPECTED_INTENT[:-1], [6, "dev_server", "192.168.20.115", 60556, "stopped"]]):
             with self.subTest(rows=rows), self.assertRaises(RuntimeError):
                 module.validate_intent(rows)
 
@@ -118,7 +118,7 @@ class PostRebootTests(unittest.TestCase):
     def test_stale_ledger_must_be_exact_and_absent_after_install(self):
         with patch.object(self.session, "owned", return_value=[module.single.VIP]):
             self.session.check_stale_ledger()
-        for owned in ([], ["192.168.1.241"], [module.single.VIP, "192.168.1.241"]):
+        for owned in ([], ["192.168.20.241"], [module.single.VIP, "192.168.20.241"]):
             with patch.object(self.session, "owned", return_value=owned), self.assertRaises(RuntimeError):
                 self.session.check_stale_ledger()
 
@@ -250,7 +250,7 @@ class PostRebootTests(unittest.TestCase):
         ]}
         with patch.object(module.upgrade, "verify_guarded_snapshot", return_value=mappings):
             self.assertTrue(module.publication_ready(report))
-        for incomplete in (mappings[:-1], [*mappings, {"ip": "192.168.1.241", "port": 22, "backend": 50200}]):
+        for incomplete in (mappings[:-1], [*mappings, {"ip": "192.168.20.241", "port": 22, "backend": 50200}]):
             with patch.object(module.upgrade, "verify_guarded_snapshot", return_value=incomplete):
                 self.assertFalse(module.publication_ready(report))
 
@@ -261,7 +261,7 @@ class PostRebootTests(unittest.TestCase):
         good = {"test_scope": module.SCOPE, "test_vips": [module.single.VIP],
                 "boot_seconds": module.BOOT, "config_change_verified": True}
         for field, value in (("test_scope", "mini-single-ip-240"), ("boot_seconds", 1),
-                             ("test_vips", ["192.168.1.241"]), ("config_change_verified", False)):
+                             ("test_vips", ["192.168.20.241"]), ("config_change_verified", False)):
             with patch.object(client, "validate_original") as original, self.assertRaises(RuntimeError):
                 client.validate_inputs({}, {}, {**good, field: value}, None)
             original.assert_not_called()

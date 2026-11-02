@@ -13,7 +13,7 @@ from squirrelops_home_sensor.network.virtual_ip import IPAllocator, VirtualIPMan
 from squirrelops_home_sensor.privileged.xpc import MacOSPrivilegedOps
 from squirrelops_home_sensor.scanner import loop as scanner
 
-LOCAL_MAC = "1c:1d:d3:e0:7d:03"
+LOCAL_MAC = "1c:1d:d3:5a:6b:03"
 REDACTED_MAC = "02:00:00:00:00:00"
 
 
@@ -108,7 +108,7 @@ async def test_allocation_reserves_every_unretired_host_address(db, kind):
 
 
 def test_classic_listener_uses_selected_lan_not_vpn(monkeypatch):
-    monkeypatch.setattr(classic, "_route_selected_ip", lambda: "100.96.4.79")
+    monkeypatch.setattr(classic, "_route_selected_ip", lambda: "100.65.4.79")
     monkeypatch.setattr(classic, "_interface_ipv4_addresses", lambda _: ["192.168.1.18"])
     assert classic._resolve_bind_address(
         interface="en0", excluded_ips=set(),
@@ -154,7 +154,7 @@ async def test_retired_host_address_can_be_reused_without_deleting_history(db):
 
 
 def test_vpn_does_not_become_classic_fallback_if_lan_disappears(monkeypatch):
-    monkeypatch.setattr(classic, "_route_selected_ip", lambda: "100.96.4.79")
+    monkeypatch.setattr(classic, "_route_selected_ip", lambda: "100.65.4.79")
     monkeypatch.setattr(classic, "_interface_ipv4_addresses", lambda _: [])
     assert classic._resolve_bind_address(
         interface="en0", excluded_ips=set(),

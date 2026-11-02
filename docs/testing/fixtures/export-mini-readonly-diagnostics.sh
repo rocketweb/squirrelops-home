@@ -35,7 +35,7 @@ fi
 task_dir="$(/usr/bin/mktemp -d /private/var/root/squirrelops-readonly-export.XXXXXXXX)"
 /usr/bin/install -o root -g wheel -m 600 "$source_file" "$task_dir/export.py"
 export_sha="$(/usr/bin/shasum -a 256 "$task_dir/export.py" | /usr/bin/awk '{print $1}')"
-if [ "$export_sha" != ff85896f538b1ff5410d06a06b2129d9035dfe6edb9a51cfdb88b4026bab0380 ]; then
+if [ "$export_sha" != ffcabccb69fd9700ebf62ba91ebb1cf685abae91e9838ac6a2761ff2a5e13cfc ]; then
     echo "Diagnostic checksum changed. No export attempted." >&2
     exit 1
 fi

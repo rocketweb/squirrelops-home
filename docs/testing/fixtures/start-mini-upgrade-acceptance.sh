@@ -26,9 +26,9 @@ verify_digest() {
     fi
 }
 verify_digest candidate.pkg 541fc783c41fd2f9a6baba1fe8edae93078a0a24089b8e6d4ede77ba051b7fb1
-verify_digest mini_acceptance.py 47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a
+verify_digest mini_acceptance.py 46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f
 verify_digest mini_upgrade_acceptance.py c61154c3b6b62cc945c62aae58eb0c6bfe259305539ef604a36708b52e098110
-verify_digest approved-scope.md 783395f91247dc2997db4af96515503a7f20222d0e6781a55a2b222e8d229648
+verify_digest approved-scope.md c9dcb06f6b28902fed5ba0ad1b6732f7c18ef8a711d1c92e114d8bd663d4f01b
 
 echo "Upgrade inputs verified. Preparing the pinned private Python runtime."
 /usr/sbin/pkgutil --expand-full "$task_dir/candidate.pkg" "$task_dir/expanded"

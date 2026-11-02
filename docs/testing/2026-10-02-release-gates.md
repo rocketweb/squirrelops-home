@@ -61,9 +61,9 @@ No deception guest PID was returned and loopback has only 127.0.0.1. Its app
 executable is root-owned mode 0755. The database is inaccessible to the SSH
 user, so this pass does not claim a fresh database check.
 
-Ethernet is `en0` at 192.168.1.115 and Wi-Fi is `en1` at 192.168.1.254; both
+Ethernet is `en0` at 192.168.20.115 and Wi-Fi is `en1` at 192.168.20.254; both
 are active. The existing service UID/GID is 309. The laptop routes through
-`wlp0s20f3` as 192.168.1.7 and has the existing protocol/capture tools. No
+`wlp0s20f3` as 192.168.20.7 and has the existing protocol/capture tools. No
 probe, installed service, rule, alias, route, configuration or database was
 changed. Root PF inventory and address availability still need a fresh check
 immediately before a newly approved test window.
@@ -109,7 +109,7 @@ not run. Matt paused that path. The recovery archive is retained and the
 wrapper reported both product jobs stopped/disabled.
 
 Read-only SSH checks confirmed an existing, healthy 2.0.3 installation on
-Matt's MacBook at 192.168.1.97, macOS 26.6.1 build 25G76, ARM64. Matt separately
+a test MacBook at 192.168.20.97, macOS 26.6.1 build 25G76, ARM64. Matt separately
 approved backup and an in-place upgrade there, explicitly without uninstalling
 or wiping it. The [MacBook preparation](2026-10-02-macbook-upgrade-preparation.md)
 records the newly rebuilt local-test package, embedded script parity, fresh

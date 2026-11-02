@@ -6,15 +6,15 @@ release publication or changes to Little Snitch.
 
 ## Exact target and artifact
 
-- Mini: `matt@100.108.203.27`, ARM64, macOS build `26A434`, boot seconds
-  `1790777754`. en0 `192.168.1.115`, en1 `192.168.1.254`.
+- Mini: `operator@100.64.0.27`, ARM64, macOS build `26A434`, boot seconds
+  `1790777754`. en0 `192.168.20.115`, en1 `192.168.20.254`.
 - Candidate: `SquirrelOpsHome-2.1.0-relay-diagnostics-20260930-local-test.pkg`.
 - SHA-256: `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
 - Size: 136,565,301 bytes. Unsigned installer, ad-hoc payloads, not notarized.
 - Current installation: launchd-budget candidate, sensor receipt install time
   `1790784842`. Executables are checked against the pinned installed hashes.
-- Client: laptop `192.168.1.7`, route through `wlp0s20f3`.
-- Decoy target: `192.168.1.240` only. No `.241`, Studio, or native Mini service
+- Client: laptop `192.168.20.7`, route through `wlp0s20f3`.
+- Decoy target: `192.168.20.240` only. No `.241`, test host A, or native Mini service
   probes. The existing configuration already selects only `.240` and is not edited.
 
 ## Baseline and backup
@@ -25,13 +25,13 @@ configuration, and the seven saved decoy identity/status rows below.
 
 | ID | Type | Address | Port | Saved intent |
 | --- | --- | --- | --- | --- |
-| 1 | deep | 192.168.1.240 | 445 | active |
-| 2 | deep | 192.168.1.240 | 22 | active |
-| 3 | deep | 192.168.1.240 | 11434 | active |
-| 4 | deep | 192.168.1.240 | 1234 | active |
-| 5 | deep | 192.168.1.240 | 8765 | active |
-| 6 | dev_server | 192.168.1.115 | 60556 | active |
-| 7 | home_assistant | 192.168.1.115 | 51232 | active |
+| 1 | deep | 192.168.20.240 | 445 | active |
+| 2 | deep | 192.168.20.240 | 22 | active |
+| 3 | deep | 192.168.20.240 | 11434 | active |
+| 4 | deep | 192.168.20.240 | 1234 | active |
+| 5 | deep | 192.168.20.240 | 8765 | active |
+| 6 | dev_server | 192.168.20.115 | 60556 | active |
+| 7 | home_assistant | 192.168.20.115 | 51232 | active |
 
 Read configuration and database metadata without changing permissions. Read
 SQLite as UID/GID 309 with no supplementary groups and a read-only connection.

@@ -30,12 +30,12 @@ class ResetGuard(unittest.TestCase):
         self.assertEqual(text.count("add rule "), 2)
         self.assertIn("42839 timeout 80s", text)
         self.assertIn("42840 timeout 80s", text)
-        for value in ("192.168.1.239 tcp sport 42839 tcp dport 22",
-                      "192.168.1.240 tcp sport 42840 tcp dport 445"):
+        for value in ("192.168.20.239 tcp sport 42839 tcp dport 22",
+                      "192.168.20.240 tcp sport 42840 tcp dport 445"):
             self.assertIn(value, text)
         self.assertEqual(text.count("tcp flags & rst == rst tcp sport @live_ports counter drop"), 2)
         self.assertNotIn("flush", text)
-        self.assertNotIn("192.168.1.241", text)
+        self.assertNotIn("192.168.20.241", text)
         for value in ("", "..", "x" * 12, "a" * 12 + ";flush ruleset"):
             with self.assertRaises(ValueError):
                 self.guard.rules(value)
@@ -146,7 +146,7 @@ class EdgeContracts(unittest.TestCase):
             self.assertEqual(self.client.base.checksum(data[:20]), 0)
             pseudo = data[12:20] + struct.pack("!BBH", 0, 6, 20)
             self.assertEqual(self.client.base.checksum(pseudo + data[20:]), 0)
-            self.assertEqual(socket.inet_ntoa(data[12:16]), "192.168.1.7")
+            self.assertEqual(socket.inet_ntoa(data[12:16]), "192.168.20.7")
             self.assertEqual(socket.inet_ntoa(data[16:20]), ip)
             self.assertEqual(struct.unpack("!HH", data[20:24]), (source_port, port))
             self.assertEqual(data[33], 2)
@@ -159,24 +159,24 @@ class EdgeContracts(unittest.TestCase):
         packet[20:22], packet[22:24] = packet[22:24], packet[20:22]
         packet[33] = 18
         result = self.client.response_metadata(bytes(packet) + b"DO NOT EXPORT")
-        self.assertEqual(result["ip"], "192.168.1.239")
+        self.assertEqual(result["ip"], "192.168.20.239")
         self.assertEqual(result["flags"], 18)
         self.assertNotIn("DO NOT", str(result))
-        packet[12:16] = socket.inet_aton("192.168.1.241")
+        packet[12:16] = socket.inet_aton("192.168.20.241")
         self.assertIsNone(self.client.response_metadata(packet))
 
     def test_half_open_state_requires_exact_reserved_tuple_and_incomplete_handshake(self):
-        row = {"endpoints": [{"ip": "192.168.1.239", "port": 61322},
-                             {"ip": "192.168.1.7", "port": 42839}], "state": "SYN_SENT:SYN_RCVD"}
+        row = {"endpoints": [{"ip": "192.168.20.239", "port": 61322},
+                             {"ip": "192.168.20.7", "port": 42839}], "state": "SYN_SENT:SYN_RCVD"}
         self.assertTrue(self.runner.half_open([row], 0))
         self.assertFalse(self.runner.half_open([row], 1))
         self.assertFalse(self.runner.half_open([{**row, "state": "ESTABLISHED:ESTABLISHED"}], 0))
         self.assertFalse(self.runner.half_open([{**row, "state": "TIME_WAIT:TIME_WAIT"}], 0))
 
     def test_ambiguity_inventory_retains_both_processes(self):
-        text = "p100\nu309\nn192.168.1.239:61322\np200\nu309\nn*:61322\np1\nu0\nn*:22\n"
+        text = "p100\nu309\nn192.168.20.239:61322\np200\nu309\nn*:61322\np1\nu0\nn*:22\n"
         self.assertEqual(self.runner.listener_records(text), [
-            {"pid": 100, "uid": 309, "endpoint": "192.168.1.239:61322"},
+            {"pid": 100, "uid": 309, "endpoint": "192.168.20.239:61322"},
             {"pid": 200, "uid": 309, "endpoint": "*:61322"}])
 
     def test_client_and_runner_phases_match(self):
@@ -233,7 +233,7 @@ class EdgeContracts(unittest.TestCase):
     def test_failed_healthy_control_preserves_the_observation(self):
         with tempfile.TemporaryDirectory() as directory:
             client = self.client.EdgeClient(Path(directory))
-            result = {"ip": "192.168.1.239", "port": 22, "error": "TimeoutError"}
+            result = {"ip": "192.168.20.239", "port": 22, "error": "TimeoutError"}
             with patch.object(self.client.base, "fresh", return_value=(result, None)):
                 with self.assertRaisesRegex(RuntimeError, "Healthy control failed"):
                     client.phase("edge_healthy")

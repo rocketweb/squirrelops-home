@@ -54,7 +54,7 @@ class InstalledProtocolWindow(relay.RelayDiagnosticUpgrade):
     def confirm_scope(self):
         print("Start the installed diagnostic build once; permit one bounded laptop run. No reinstall or restart test.", flush=True)
         print("Verified backups retained. Existing discovery/auto-deployment can run; seven saved decoys are preserved.", flush=True)
-        print("Only .240 is tested. No Studio, .241, Little Snitch or configuration changes.", flush=True)
+        print("Only .240 is tested. No test host A, .241, Little Snitch or configuration changes.", flush=True)
         print("After tests, stop services, withdraw owned aliases, restore both disabled jobs and release only this PF reference.", flush=True)
         print(f"Type {CONSENT} to approve, or Return to stop:", flush=True)
         require(input().strip() == CONSENT, "Protocol window not approved")
@@ -92,7 +92,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "boot_seconds": post.BOOT,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "boot_seconds": post.BOOT,
                           "package_sha256": relay.PACKAGE_SHA, "test_scope": relay.SCOPE,
                           "test_vips": [single.VIP], "installed_only": True, "install": False,
                           "restart_test": False, "configuration_edits": 0, "database_recovery": False,

@@ -15,7 +15,7 @@ spec.loader.exec_module(m)
 class ProtocolEvidenceTests(unittest.TestCase):
     def test_pf_translation_and_state_only(self):
         record = dict(command=["/sbin/pfctl", "-s", "states"], exit=0, stdout=(
-            "all tcp 192.168.1.240:59738 (192.168.1.240:22) <- 192.168.1.7:40100 ESTABLISHED:ESTABLISHED\n"
+            "all tcp 192.168.20.240:59738 (192.168.20.240:22) <- 192.168.20.7:40100 ESTABLISHED:ESTABLISHED\n"
             "  age 00:00:02, expires in 00:00:20, secret-token\n"))
         result = m.pf_states(record)
         self.assertEqual(len(result["states"]), 1)
@@ -31,20 +31,20 @@ class ProtocolEvidenceTests(unittest.TestCase):
 
     def test_pf_unknown_other_addresses_and_ports_are_withheld(self):
         for line in (
-            "all tcp 192.168.1.240:59738 <- 192.168.1.8:40100 ESTABLISHED:ESTABLISHED",
-            "all tcp 192.168.1.240:5900 <- 192.168.1.7:40100 ESTABLISHED:ESTABLISHED",
-            "all tcp 192.168.1.240:22 <- 192.168.1.7:70000 ESTABLISHED:ESTABLISHED",
-            "all tcp 192.168.1.240:22 <- 192.168.1.7:40100 SECRET:SECRET",
-            "all tcp 192.168.1.240:22 (10.0.0.1:22) <- 192.168.1.7:40100 ESTABLISHED:ESTABLISHED",
+            "all tcp 192.168.20.240:59738 <- 192.168.20.8:40100 ESTABLISHED:ESTABLISHED",
+            "all tcp 192.168.20.240:5900 <- 192.168.20.7:40100 ESTABLISHED:ESTABLISHED",
+            "all tcp 192.168.20.240:22 <- 192.168.20.7:70000 ESTABLISHED:ESTABLISHED",
+            "all tcp 192.168.20.240:22 <- 192.168.20.7:40100 SECRET:SECRET",
+            "all tcp 192.168.20.240:22 (10.0.0.1:22) <- 192.168.20.7:40100 ESTABLISHED:ESTABLISHED",
         ):
             parsed = m.pf_states(dict(command=m.PF_STATES, exit=0, stdout=line))
             self.assertEqual(parsed["states"], [])
             self.assertEqual(parsed["withheld_lines"], 1)
 
     def test_packets_window_and_private_content(self):
-        text = ("2026-10-01 05:29:07.001 IP 192.168.1.7.40100 > 192.168.1.240.445: tcp 238\n"
-                "2026-10-01 05:29:08.001 IP 192.168.1.240.445 > 192.168.1.7.40100: tcp 0\n"
-                "2026-10-01 05:30:00.001 IP 192.168.1.7.40100 > 192.168.1.240.445: tcp 1\n"
+        text = ("2026-10-01 05:29:07.001 IP 192.168.20.7.40100 > 192.168.20.240.445: tcp 238\n"
+                "2026-10-01 05:29:08.001 IP 192.168.20.240.445 > 192.168.20.7.40100: tcp 0\n"
+                "2026-10-01 05:30:00.001 IP 192.168.20.7.40100 > 192.168.20.240.445: tcp 1\n"
                 "secret-token\n")
         result = m.packet_summary(text)
         self.assertEqual(len(result["groups"]), 2)
@@ -86,7 +86,7 @@ class ProtocolEvidenceTests(unittest.TestCase):
         backup = m.BASE / "mini-protocol-20261001.ExactRun"
         def read(path, **kwargs):
             if path.name.startswith("packet-"):
-                return b"2026-10-01 05:29:07.001 IP 192.168.1.7.40100 > 192.168.1.240.22: tcp 0\n"
+                return b"2026-10-01 05:29:07.001 IP 192.168.20.7.40100 > 192.168.20.240.22: tcp 0\n"
             return json.dumps(dict(command=["/sbin/pfctl", "-E"], exit=0, stdout="Token : secret-token")).encode()
         with patch.object(m.common, "read_safe", side_effect=read), patch.object(Path, "glob", return_value=[backup / "command-001.json"]), patch.object(m, "command") as run:
             report = m.collect(backup)

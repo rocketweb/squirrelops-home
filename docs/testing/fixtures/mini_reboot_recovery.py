@@ -23,7 +23,7 @@ launchd = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launchd)
 base, upgrade = launchd.base, launchd.upgrade
 require = base.require
-base.VIPS = {"192.168.1.240"}
+base.VIPS = {"192.168.20.240"}
 ROOT = Path("/Library/SquirrelOps/acceptance-backups")
 BUILD = "26A434"
 BOOT = 1790766531
@@ -303,8 +303,8 @@ class Recovery(upgrade.Upgrade):
         require(self.command(["/usr/bin/sw_vers", "-buildVersion"]).stdout.strip() == BUILD, "OS build changed")
         self.assert_boot()
         interfaces = self.command(["/sbin/ifconfig", "-a"]).stdout
-        require("100.108.203.27" in interfaces and not re.search(r"\binet 192\.168\.1\.241\s", interfaces), "Host/scope drift")
-        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en0"]).stdout.strip() == "192.168.1.115", "Wrong LAN host")
+        require("100.64.0.27" in interfaces and not re.search(r"\binet 192\.168\.20\.241\s", interfaces), "Host/scope drift")
+        require(self.command(["/usr/sbin/ipconfig", "getifaddr", "en0"]).stdout.strip() == "192.168.20.115", "Wrong LAN host")
         require(base.pwd.getpwnam("_squirrelops").pw_uid == 309 and base.grp.getgrnam("_squirrelops").gr_gid == 309,
                 "Service identity changed")
         for path, expected in {**self.old_executables, RUNTIME: upgrade.PYTHON_SHA}.items():
@@ -340,7 +340,7 @@ class Recovery(upgrade.Upgrade):
         require(all(row["parent"] == self.sensor_pid for row in relevant.values() if row["executable"] == upgrade.GUEST),
                 "Guest parent changed")
         self.started = self.command(["/bin/ps", "-p", str(self.sensor_pid), "-o", "lstart="]).stdout.strip()
-        require(self.owned() == ["192.168.1.240"], "Owned alias scope changed")
+        require(self.owned() == ["192.168.20.240"], "Owned alias scope changed")
         self.policy = self.inventory_policy()
         product = self.policy.get(upgrade.PRODUCT_ANCHOR)
         require(product is not None and not product["children"], "Missing product containment policy")
@@ -357,7 +357,7 @@ class Recovery(upgrade.Upgrade):
             b"Prior effective state: sensor and helper enabled and loaded.\n"
             b"After verified stopped state, separately reviewed upgrade may use launchctl enable\n"
             b"for system/com.squirrelops.sensor and system/com.squirrelops.helper.\n"
-            b"Do not bootstrap the old broad-pool configuration while .241 belongs to the Studio.\n"
+            b"Do not bootstrap the old broad-pool configuration while .241 belongs to test host A.\n"
             b"The one-shot debug replacement is cleared by unloading its exact job.\n"
             b"Never release old PF reference tokens or reset PF. Database backups are evidence, not an automatic downgrade.\n"
         ))
@@ -381,7 +381,7 @@ class Recovery(upgrade.Upgrade):
                 and job_pid(self.job(HELPER_JOB) or "", HELPER_JOB) == self.helper_pid, "Service changed after preview")
         require(self.inventory_policy() == self.policy and self.pf_enabled()
                 and self.pf(["-s", "References"]) == self.references, "PF state changed after preview")
-        require(self.owned() == ["192.168.1.240"], "Alias scope changed after preview")
+        require(self.owned() == ["192.168.20.240"], "Alias scope changed after preview")
         self.mutation_started = True
         private_write(self.backup / "mutation-started.json", json.dumps({"boot_seconds": BOOT, "sensor_pid": self.sensor_pid}).encode())
         for label in upgrade.JOBS:
@@ -471,7 +471,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "os_build": BUILD,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "os_build": BUILD,
                           "boot_seconds": BOOT, "confirmation": CONSENT,
                           "disable_jobs": list(upgrade.JOBS), "durable_evidence": str(ROOT),
                           "install": False, "pf_enable_disable_or_reference_changes": False,

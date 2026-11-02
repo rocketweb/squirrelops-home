@@ -26,10 +26,10 @@ async def main():
         )""")
         for number, port in enumerate((445, 22, 11434, 1234, 8765), 1):
             await db.execute("INSERT INTO decoys (id,name,decoy_type,bind_address,port,status,config) VALUES (?,?, 'deep',?,?,'active','{}')",
-                             (number, "Synthetic Studio", "192.168.1.240", port))
+                             (number, "Synthetic Studio", "192.168.20.240", port))
         await db.commit()
         manager = implementation.DecoyOrchestrator(
-            event_bus=AsyncMock(), db=db, max_decoys=3, bind_address="192.168.1.115")
+            event_bus=AsyncMock(), db=db, max_decoys=3, bind_address="192.168.20.115")
         manager._load_credentials = AsyncMock(return_value=[])
         # The mini already owns 445, 22 and 11434. Simulate bind failure without
         # touching any port or process. The real factory still creates objects.

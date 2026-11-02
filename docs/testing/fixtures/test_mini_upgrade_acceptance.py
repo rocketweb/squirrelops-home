@@ -104,7 +104,7 @@ class UpgradeGuards(unittest.TestCase):
     def test_lingering_guest_prevents_alias_withdrawal_and_reference_release(self):
         self.session.install_started = True
         self.session.token = "1234"
-        with patch.object(self.session, "publish"), patch.object(self.session, "owned", return_value=["192.168.1.240"]), \
+        with patch.object(self.session, "publish"), patch.object(self.session, "owned", return_value=["192.168.20.240"]), \
                 patch.object(self.session, "stop_job"), patch.object(self.session, "processes", return_value=[123]), \
                 patch.object(module.time, "monotonic", side_effect=[0, 70]), patch.object(self.session, "rpc") as rpc, \
                 patch.object(self.session, "release_reference") as release:
@@ -121,7 +121,7 @@ class UpgradeGuards(unittest.TestCase):
         events = []
         def command(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, "", "")
-        with patch.object(self.session, "publish"), patch.object(self.session, "owned", side_effect=[[], ["192.168.1.240"], []]), \
+        with patch.object(self.session, "publish"), patch.object(self.session, "owned", side_effect=[[], ["192.168.20.240"], []]), \
                 patch.object(self.session, "stop_job", side_effect=lambda label: events.append("stop:" + label)), \
                 patch.object(self.session, "processes", return_value=[]), patch.object(self.session, "command", side_effect=command), \
                 patch.object(self.session, "service_loaded", side_effect=[True, False, False]), \

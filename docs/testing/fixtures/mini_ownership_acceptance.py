@@ -38,7 +38,7 @@ def validate_recovery(current, original):
             and {row["id"]: row["port"] for row in original} == EXPECTED, "Deep row identity drift")
     require(all(row["status"] == "active" for row in original), "Historical host was not fully active")
     require(all(row["status"] == "stopped" for row in current), "Current host is not fully stopped")
-    require(all(row["bind_address"] == "192.168.1.240" and row["decoy_type"] == "deep"
+    require(all(row["bind_address"] == "192.168.20.240" and row["decoy_type"] == "deep"
                 and row["retired_at"] is None for row in original + current), "Host address or retirement drift")
     require(len({row["host_id"] for row in original}) == 1 and original[0]["host_id"] is not None
             and [row["id"] for row in original if row["is_primary"]] == [1], "Invalid grouped host")
@@ -207,7 +207,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "package_sha256": PACKAGE_SHA,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "package_sha256": PACKAGE_SHA,
                           "restore_status_ids": sorted(EXPECTED), "attended_confirmation": CONSENT,
                           "vips": sorted(base.VIPS), "normal_restart": True, "observe_seconds": 1200,
                           "third_party_filter_rule_changes": False, "fault_injection": False}, indent=2))

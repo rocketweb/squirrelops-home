@@ -134,7 +134,7 @@ class TestMDNSPatternMatch:
         assert "phone" in result.device_type.lower() or "iphone" in result.device_type.lower()
 
     def test_apple_macbook_pattern(self, db: SignatureDB) -> None:
-        result = db.match_mdns("matts-macbook-pro")
+        result = db.match_mdns("home-macbook-pro")
         assert result is not None
         assert result.manufacturer == "Apple"
 

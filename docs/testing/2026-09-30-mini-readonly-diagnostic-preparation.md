@@ -30,7 +30,7 @@ Packet byte totals include retransmissions and cannot prove successful delivery.
 Completed command, retained for provenance. No rerun is needed.
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-readonly-export.oqYjS8yk/export-mini-readonly-diagnostics.sh
+sudo /bin/bash /Users/operator/squirrelops-readonly-export.oqYjS8yk/export-mini-readonly-diagnostics.sh
 ```
 
 The wrapper verifies the installed interpreter and copies only the hash-pinned
@@ -50,7 +50,7 @@ and absent product jobs, then reads only:
   retaining records for laptop `.7` only, numeric counters and allowlisted
   process labels. A failed or empty history query does not identify a cause.
 
-Only a new sanitized report is made readable by `matt`, in a fresh mode-0700
+Only a new sanitized report is made readable by `operator`, in a fresh mode-0700
 directory under `/private/var/tmp/squirrelops-readonly-results.*`. Source
 permissions and files remain unchanged. No raw logs, planted logins or database
 contents are copied. Keep the app closed and do not change Little Snitch rules.
@@ -78,8 +78,8 @@ Staged file hashes, independently checked over SSH:
 
 | File | SHA-256 |
 | --- | --- |
-| `mini_readonly_diagnostic_export.py` | `ff85896f538b1ff5410d06a06b2129d9035dfe6edb9a51cfdb88b4026bab0380` |
-| `export-mini-readonly-diagnostics.sh` | `d223a860295a5b539efbc9b1777ca731153a661435cb43a11368fc101c0a25d5` |
+| `mini_readonly_diagnostic_export.py` | `ffcabccb69fd9700ebf62ba91ebb1cf685abae91e9838ac6a2761ff2a5e13cfc` |
+| `export-mini-readonly-diagnostics.sh` | `fc9c2ac4229cec6703d743df9dbdb816d9706a55449b3964ad019b8caaf5017b` |
 
 The engineering verification skill informed redaction/guard tests and the
 separation between a prepared exporter and an executed, diagnosed live result.

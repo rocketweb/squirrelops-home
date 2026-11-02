@@ -16,7 +16,7 @@ RUNS = (
 SUCCESSFUL_RUN = ("mini-a5-20261002.DcmC5nO5", "c21040d915eb", "squirrelops-mini-a5-results.tj3gpkxe")
 PHASES = ("healthy", "retained_states", "quarantined", "healthy_again",
           "wrong_uid_retained_state", "missing", "wildcard_wrong_uid", "recovered")
-IPS = {"192.168.1.7", "192.168.1.239", "192.168.1.240"}
+IPS = {"192.168.20.7", "192.168.20.239", "192.168.20.240"}
 STATE_NAMES = {"CLOSED", "LISTEN", "SYN_SENT", "SYN_RCVD", "ESTABLISHED", "CLOSE_WAIT",
                "FIN_WAIT_1", "FIN_WAIT_2", "CLOSING", "LAST_ACK", "TIME_WAIT"}
 
@@ -59,11 +59,11 @@ def state_summary(text):
         if not line.strip():
             continue
         addresses = set(re.findall(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])", line))
-        endpoints = re.findall(r"(?<![\d.])(192\.168\.1\.(?:7|239|240)):(\d{1,5})(?!\d)", line)
+        endpoints = re.findall(r"(?<![\d.])(192\.168\.20\.(?:7|239|240)):(\d{1,5})(?!\d)", line)
         pairs = [(a, b) for a, b in re.findall(r"\b([A-Z_0-9]+):([A-Z_0-9]+)\b", line)
                  if a in STATE_NAMES and b in STATE_NAMES]
-        if (not re.search(r"\btcp\b", line) or not addresses <= IPS or "192.168.1.7" not in addresses
-                or not addresses.intersection({"192.168.1.239", "192.168.1.240"})
+        if (not re.search(r"\btcp\b", line) or not addresses <= IPS or "192.168.20.7" not in addresses
+                or not addresses.intersection({"192.168.20.239", "192.168.20.240"})
                 or not 2 <= len(endpoints) <= 4 or len(pairs) != 1
                 or not all(1 <= int(port) <= 65535 for _, port in endpoints)):
             withheld += 1
@@ -90,7 +90,7 @@ def counter_summary(text):
             rule = match[2]
             current = {"index": int(match[1]), "rule_sha256": hashlib.sha256(rule.encode()).hexdigest(),
                        "kind": "unrecognized", "counters": None}
-            for ip, port, public in (("192.168.1.239", 61322, 22), ("192.168.1.240", 61445, 445)):
+            for ip, port, public in (("192.168.20.239", 61322, 22), ("192.168.20.240", 61445, 445)):
                 target = re.escape(ip) + r"(?:/32)?"
                 block = re.fullmatch(r"block drop in quick inet from any to " + target, rule)
                 echo = re.fullmatch(r"pass in quick on en0 inet proto icmp from any to " + target
@@ -163,9 +163,9 @@ def child_summary(text):
             result["echoes"][str(event["uid"])] += 1
         elif (isinstance(event, dict) and event.get("event") == "accepted"
               and set(event) == {"event", "uid", "source", "source_port"}
-              and event["uid"] in (309, 501) and event["source"] in ("127.0.0.1", "192.168.1.7")
+              and event["uid"] in (309, 501) and event["source"] in ("127.0.0.1", "192.168.20.7")
               and type(event["source_port"]) is int and 1 <= event["source_port"] <= 65535):
-            key = "lan_accepts" if event["source"] == "192.168.1.7" else "loopback_accepts"
+            key = "lan_accepts" if event["source"] == "192.168.20.7" else "loopback_accepts"
             result[key][str(event["uid"])] += 1
         else:
             result["withheld_lines"] += 1

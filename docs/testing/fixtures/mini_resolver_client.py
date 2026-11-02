@@ -18,9 +18,9 @@ import time
 import uuid
 
 PACKAGE_SHA = "47774088cd9eadc5aaddf38949e00a8b8f6eeb56c2192a5a72830d06d84a8aec"
-VIPS = {"192.168.1.240"}
+VIPS = {"192.168.20.240"}
 SCOPE = "mini-guest-resolver-240"
-SOURCE = "192.168.1.7"
+SOURCE = "192.168.20.7"
 
 
 def require(condition, message):
@@ -29,7 +29,7 @@ def require(condition, message):
 
 
 def validate_inputs(endpoints, login, status, now):
-    require(status.get("test_scope") == SCOPE and status.get("test_vips") == ["192.168.1.240"]
+    require(status.get("test_scope") == SCOPE and status.get("test_vips") == ["192.168.20.240"]
             and status.get("boot_seconds") == 1790777754
             and status.get("configuration_unchanged") is True and status.get("config_change_verified") is True,
             "Wrong resolver server scope, boot or configuration")

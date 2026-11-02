@@ -11,8 +11,8 @@ and [clock-corrected preparation](2026-09-29-mini-tcp-diagnostic-preparation.md)
 apply. Matt started the v2 attended command on the mini. No product service,
 installer, virtual IP, PF policy change, packet capture or guest was invoked.
 
-- Mini address: `192.168.1.115`, management `100.108.203.27`.
-- Laptop source: `192.168.1.7`, route `wlp0s20f3`.
+- Mini address: `192.168.20.115`, management `100.64.0.27`.
+- Laptop source: `192.168.20.7`, route `wlp0s20f3`.
 - Root-private evidence: `/private/var/root/squirrelops-tcp-diag.Xxrf63pW`.
 - Root-owned sanitized status: `/private/var/tmp/squirrelops-tcp-results.qx2zbq0s/status.json`.
 - Script SHA-256: `b91bc0623c0cdb81b042fbb8f636d9a578c0ad2e9e2dc4d6635ae473149fd91d`.
@@ -33,7 +33,7 @@ scan or file operation was sent.
 | Listener | Process | TCP connects | Correct banner within five seconds |
 | --- | --- | --- | --- |
 | `.115:58651`, `_squirrelops` UID/GID 309/309 | PID 33168 | 3/3 | 3/3, 28 bytes each |
-| `.115:58652`, `matt` UID/GID 501/20 | PID 33169 | 3/3 | 0/3, three banner timeouts |
+| `.115:58652`, `operator` UID/GID 501/20 | PID 33169 | 3/3 | 0/3, three banner timeouts |
 
 The root observer initially recorded three banner events only for UID 309.
 For UID 501 it showed `qlen/incqlen/maxqlen` of `3/3/8` and three `CLOSE_WAIT`
@@ -101,7 +101,7 @@ At **19:08:43 UTC**, the fresh client made exactly six attempts:
 | Listener | Process | TCP connects | Correct 28-byte banner |
 | --- | --- | --- | --- |
 | `.115:58723`, `_squirrelops` UID/GID 309/309 | PID 33563 | 3/3 | 3/3 |
-| `.115:58724`, `matt` UID/GID 501/20 | PID 33564 | 3/3 | 3/3 |
+| `.115:58724`, `operator` UID/GID 501/20 | PID 33564 | 3/3 | 3/3 |
 
 All six client reads completed successfully. The root observer recorded three
 banner-send events for each process, and both pending queues returned to `0/0/8`.
