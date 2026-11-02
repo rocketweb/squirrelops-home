@@ -47,13 +47,13 @@ Both installed component receipts say 2.1.0, installed at
 - macOS 27.0, build `26A428`, ARM64. Console UID 501; sensor UID/GID 309.
 - Sensor and helper launchd jobs are running.
 - The rebuilt helper's live read-only resolver selects Ethernet `en0`, address
-  `192.168.1.18`, gateway `192.168.1.1`, subnet `192.168.1.0/24`.
-- Wi-Fi `en1` also has an address, `192.168.1.79`. The system default route is
+  `192.0.2.18`, gateway `192.0.2.1`, subnet `192.0.2.0/24`.
+- Wi-Fi `en1` also has an address, `192.0.2.79`. The system default route is
   through VPN interface `utun7`; tests must explicitly verify physical ingress.
 - The database reports 30 active and 1,249 stopped decoy rows. These are a
   point-in-time inventory, not a new finding that stopped rows are defective.
 - The root-owned ledger, live loopback aliases, and unreleased virtual-IP rows
-  agree on ten addresses on `en0`: `192.168.1.200`, `.201`, `.206`, `.208`,
+  agree on ten addresses on `en0`: `192.0.2.200`, `.201`, `.206`, `.208`,
   `.209`, `.211`, `.214`, `.215`, `.216`, and `.217`.
 - The `com.apple/squirrelops` anchor has 30 redirects and 30 TCP UID-guarded
   passes for UID 309. Twelve VIPs have default-deny rules; the additional `.207`
@@ -141,7 +141,7 @@ recovery cannot be established, keep affected test endpoints quarantined and sto
 ### 2. Second-machine protocol acceptance
 
 Confirm a client machine and access first. The earlier Linux client was
-`192.168.1.7`; its current availability and SSH authorization are not assumed.
+`192.0.2.7`; its current availability and SSH authorization are not assumed.
 No remote command was run during this preflight.
 
 Use only the newly verified Studio Build Mac VIP, not a remembered example IP.

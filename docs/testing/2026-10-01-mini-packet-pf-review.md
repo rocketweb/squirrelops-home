@@ -7,7 +7,7 @@ services, change rules or send new decoy probes.
 
 - [Original sanitized export](evidence/2026-10-01-mini-installed-protocol/retained-packet-pf-diagnostic.json).
 - Source: `/private/var/tmp/squirrelops-protocol-evidence.8qk_3u9q/diagnostic.json`.
-- File: Matt-owned, mode 0600, single link, 278,436 bytes, inside a private 0700 directory.
+- File: Operator-owned, mode 0600, single link, 278,436 bytes, inside a private 0700 directory.
 - Exact root-private run: `mini-protocol-20261001.1px9by6q`.
 - [Client results and verified cleanup](2026-10-01-mini-installed-protocol-result.md).
 - [Export scope and verification](2026-10-01-mini-protocol-evidence-export.md).
@@ -21,7 +21,7 @@ matches the failed SMB probe on every displayed identity field:
 
 - Executable: `/Applications/SquirrelOps Home.app/Contents/Library/Helpers/com.squirrelops.deception-guest`.
 - PID **64290**, `_squirrelops` UID **309**, ad-hoc code signature.
-- Incoming source **192.168.1.7**, local TCP port **59739**.
+- Incoming source **192.0.2.7**, local TCP port **59739**.
 - The retained endpoint map identifies **59739** as the backend for `.240:445`.
 
 This is direct evidence that Little Snitch requested approval for the exact
@@ -41,7 +41,7 @@ not why it exited. It is consistent with the already-verified test cleanup and
 is not evidence that Little Snitch killed the guest.
 
 No rule was changed. The dialog currently shows `Forever` and `Only from
-192.168.1.7`; neither is a saved-rule result until a decision is made. Proposed
+192.0.2.7`; neither is a saved-rule result until a decision is made. Proposed
 next scope requires approval: one time-limited rule for this exact guest
 executable, incoming TCP from laptop `.7` only, followed by one new bounded
 protocol test with the same installed build and verified cleanup. Backend

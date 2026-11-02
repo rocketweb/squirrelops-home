@@ -32,14 +32,14 @@ notarized release. The prior full product validation is recorded in
   services or filters were changed by these tests.
 - Fresh mini inspection: sensor and helper absent from launchd, only OS
   `distnoted` under service UID 309, installed receipt timestamp `1790711659`.
-  Protected database contents cannot be inspected as `matt`; the attended
+  Protected database contents cannot be inspected as `operator`; the attended
   root preflight must still verify them before offering the five-row preview.
-- Laptop route: `192.168.1.240` uses `wlp0s20f3`, source `192.168.1.7`.
+- Laptop route: `192.0.2.240` uses `wlp0s20f3`, source `192.0.2.7`.
   Python, pexpect, SSH/SFTP and smbclient are available.
 
 ## Staged inputs
 
-Mini: `/Users/matt/squirrelops-mini-ownership.HWmnJKQ8`, mode 0700.
+Mini: `/Users/operator/squirrelops-mini-ownership.HWmnJKQ8`, mode 0700.
 
 Laptop: `/root/squirrelops-mini-upgrade-client.Ud9OIx96`, mode 0700.
 
@@ -62,7 +62,7 @@ the local inputs:
 With SquirrelOps closed on the mini, run there:
 
 ```bash
-sudo /bin/bash /Users/matt/squirrelops-mini-ownership.HWmnJKQ8/start-mini-ownership-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-ownership.HWmnJKQ8/start-mini-ownership-acceptance.sh
 ```
 
 Review the printed five-row preview. Type `RESTORE FIVE AND UPGRADE` only to

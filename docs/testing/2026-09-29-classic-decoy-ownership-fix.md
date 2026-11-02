@@ -112,7 +112,7 @@ no trust check was disabled, and the disposable guest used loopback only.
 
 ## Exact artifact
 
-Checkout: `/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current`
+Checkout: `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current`
 
 Branch: `feature/ai-setup-2.1`
 

@@ -4,6 +4,12 @@ These are the source and regression tests for the attended Mini/laptop sessions
 recorded in the dated reports in the parent directory. They are not general
 installation, repair, cleanup or penetration-testing commands.
 
+The dated reports label machines generically (test host A, test host B or "the
+mini", the laptop client) and show addresses from documentation ranges, keeping
+each original last octet so shorthand such as `.240` still lines up. Scripts and
+scope documents pinned by digest were left byte-identical, so their literals can
+differ from the reports that describe them.
+
 Live runners pin a particular package, host, boot, configuration, prior receipt
 and approved scope. Many of those sessions have been consumed. Do not run a
 historical bootstrap or reuse a PF reference just because its file is present.

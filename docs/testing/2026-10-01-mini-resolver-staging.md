@@ -20,7 +20,7 @@ time `1790818368`. The old guest manifest and guest executable hashes match.
 No privileged PF, database or rule inspection was attempted in this staging
 step; the root-attended preflight performs those checks before installation.
 
-The laptop route remains `wlp0s20f3`, source `192.168.1.7`. Installed Samba is
+The laptop route remains `wlp0s20f3`, source `192.0.2.7`. Installed Samba is
 `4.19.5-Ubuntu`; its help confirms the empty-config, explicit IP/port,
 anonymous-user and Kerberos-off flags. `pexpect` is available.
 
@@ -38,7 +38,7 @@ staging is root-owned 0700, with client mode 0600 and no results file.
 
 No installer, services, guest, aliases, PF reference or client probes were
 started. No login was transferred. No configuration, database, Little Snitch,
-Studio, Git or release state was changed.
+test host A, Git or release state was changed.
 
 ## Exact attended Mini command
 
@@ -46,10 +46,10 @@ Keep both apps closed. Confirm the existing guest-only incoming TCP allowance
 from laptop `.7` is still active without editing it. Leave any new or
 mismatching filter prompt unanswered and report it.
 
-Run on the Mini, not the Studio:
+Run on the Mini, not test host A:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-resolver.FMVfY1Ri/start-mini-resolver-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-resolver.FMVfY1Ri/start-mini-resolver-acceptance.sh
 ```
 
 After verified backups, confirm `INSTALL RESOLVER FIX AND TEST 240`. At
@@ -59,7 +59,7 @@ then triggers guarded cleanup; an unattended window expires after 20 minutes.
 
 ## Next-agent handoff
 
-- Mini staging: `/Users/matt/squirrelops-mini-resolver.FMVfY1Ri`.
+- Mini staging: `/Users/operator/squirrelops-mini-resolver.FMVfY1Ri`.
 - Local staging: `/private/tmp/squirrelops-resolver-staging.UsnG6jAX`.
 - Laptop staging: `/root/squirrelops-mini-resolver-client.yquQ1Mfr`.
 - Mini sanitized results prefix: `/private/var/tmp/squirrelops-mini-resolver-results.`.

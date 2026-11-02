@@ -53,7 +53,7 @@ also passed with their one optional artifact skip. Shell syntax and
 
 ## Fresh Mini staging
 
-`/Users/matt/squirrelops-mini-protocol.WJuCiUml` is the new staging directory.
+`/Users/operator/squirrelops-mini-protocol.WJuCiUml` is the new staging directory.
 Remote hashes match local inputs, shell syntax passes, and remote plan-only
 execution confirms no installation, repeat restart, SQL repair or config edits.
 The package file is only a source for a pinned private Python interpreter.
@@ -66,7 +66,7 @@ The package file is only a source for a pinned private Python interpreter.
 | [Prepared scope](2026-10-01-mini-installed-protocol-scope.md) | `1bd6c86d12b7fc6adbe3b43f4b0d3d643e3ec968ce475d3f84075de1f4b73e8f` |
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-protocol.WJuCiUml/start-mini-installed-protocol.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-protocol.WJuCiUml/start-mini-installed-protocol.sh
 ```
 
 Confirmation: `START INSTALLED BUILD AND TEST 240`.
@@ -79,7 +79,7 @@ probes. The unchanged, still-unused laptop client is staged at
 endpoints and the private synthetic login only after verifying this new window.
 Do not display the login or use it outside the generated decoy.
 
-Both apps stay closed. The Studio sensor remains held disabled and its `.240`
+Both apps stay closed. The test host A sensor remains held disabled and its `.240`
 alias was independently absent at preparation. Startup approval in Terminal is
 still required. No package installation, sensor startup, PF mutation, LAN probe,
 commit, push, publication or change to Little Snitch occurred during preparation.

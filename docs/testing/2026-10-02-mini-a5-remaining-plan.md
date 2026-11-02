@@ -36,7 +36,7 @@ directory. The SSH user cannot read the original evidence without sudo.
 Historical command, now completed on the **Mini**. No repeat is needed:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-a5-counter-export.KiGTDEeJ/inspect-mini-a5-counters.sh
+sudo /bin/bash /Users/operator/squirrelops-a5-counter-export.KiGTDEeJ/inspect-mini-a5-counters.sh
 ```
 
 Staged identities, verified locally and again over SSH:
@@ -57,7 +57,7 @@ passed **47 tests in 0.613 seconds**, including existing real loopback child
 checks. Ruff and `git diff --check` passed. Reproduction from this worktree:
 
 ```sh
-SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
+SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
   /usr/bin/python3 -m unittest discover \
   -s docs/testing/fixtures/pf-acceptance -p 'test_*.py' -v
 ```
@@ -93,8 +93,8 @@ The laptop's normal TCP stack can reset a raw SYN-ACK because no matching
 kernel connection exists. The proposed deterministic fixture suppresses only
 RST packets for these two IPv4 tuples:
 
-- `192.168.1.7:42839 -> 192.168.1.239:22`
-- `192.168.1.7:42840 -> 192.168.1.240:445`
+- `192.0.2.7:42839 -> 192.0.2.239:22`
+- `192.0.2.7:42840 -> 192.0.2.240:445`
 
 This was a **new laptop filter mutation outside the previous no-filter-change
 client scope**. Matt explicitly approved these two temporary tuples and a

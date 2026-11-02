@@ -8,7 +8,7 @@ No product fix or additional installation is claimed in this record.
 
 - Approved scope: [upgrade and ordinary protocol acceptance](2026-09-29-mini-upgrade-protocol-scope.md).
 - Package SHA-256: `541fc783c41fd2f9a6baba1fe8edae93078a0a24089b8e6d4ede77ba051b7fb1`.
-- Mini staging: `/Users/matt/squirrelops-mini-upgrade.Um4HlMcy`.
+- Mini staging: `/Users/operator/squirrelops-mini-upgrade.Um4HlMcy`.
 - Private execution: `/private/var/root/squirrelops-mini-upgrade.aQ8SysJU`.
 - Private backup: `/Library/SquirrelOps/acceptance-backups/mini-upgrade-20260929.knon9pvr`.
 - Sanitized results: `/private/var/tmp/squirrelops-mini-upgrade-results.63yk75te`.

@@ -30,7 +30,7 @@ Packet byte totals include retransmissions and cannot prove successful delivery.
 Completed command, retained for provenance. No rerun is needed.
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-readonly-export.oqYjS8yk/export-mini-readonly-diagnostics.sh
+sudo /bin/bash /Users/operator/squirrelops-readonly-export.oqYjS8yk/export-mini-readonly-diagnostics.sh
 ```
 
 The wrapper verifies the installed interpreter and copies only the hash-pinned
@@ -50,7 +50,7 @@ and absent product jobs, then reads only:
   retaining records for laptop `.7` only, numeric counters and allowlisted
   process labels. A failed or empty history query does not identify a cause.
 
-Only a new sanitized report is made readable by `matt`, in a fresh mode-0700
+Only a new sanitized report is made readable by `operator`, in a fresh mode-0700
 directory under `/private/var/tmp/squirrelops-readonly-results.*`. Source
 permissions and files remain unchanged. No raw logs, planted logins or database
 contents are copied. Keep the app closed and do not change Little Snitch rules.

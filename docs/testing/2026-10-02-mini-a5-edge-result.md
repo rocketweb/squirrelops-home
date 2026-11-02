@@ -126,7 +126,7 @@ After the live run, the full fixture suite was rerun: **65 tests passed in
 they are not live cleanup failures. Command:
 
 ```sh
-SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
+SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
   /usr/bin/python3 -m unittest discover \
   -s docs/testing/fixtures/pf-acceptance -p 'test_*.py' -q
 ```

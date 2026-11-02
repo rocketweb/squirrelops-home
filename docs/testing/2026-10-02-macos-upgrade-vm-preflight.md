@@ -18,7 +18,7 @@ create a VM, run an installer, start product services or change network policy.
 
 | Check | Read-only result |
 | --- | --- |
-| Host | `matt@100.108.203.27`, macOS 27.0.1 build 26A434, ARM64 |
+| Host | `operator@203.0.113.27`, macOS 27.0.1 build 26A434, ARM64 |
 | Hardware | Mac16,11, Apple M4 Pro, 12 CPUs, 24 GiB RAM |
 | Hypervisor | `kern.hv_support=1` |
 | Storage | Internal Data volume: 460 GiB total, about 30 GiB available |
@@ -36,8 +36,8 @@ the disposable workspace; that is an operational budget, not an Apple minimum
 or a guarantee that every image will fit. Recheck actual image and clone sizes
 before allocating anything.
 
-The user was asked to select an external APFS disk on the Mini or the Mac
-Studio as the VM destination. No destination had been selected at this point.
+The user was asked to select an external APFS disk on the Mini or
+test host A as the VM destination. No destination had been selected at this point.
 Do not reclaim user files, resize partitions, reuse Recovery, stop Home
 Assistant or move the test to another host without that choice.
 

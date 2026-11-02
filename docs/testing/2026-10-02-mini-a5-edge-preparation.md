@@ -11,13 +11,13 @@ the [counter findings](2026-10-02-mini-a5-counter-review.md).
 
 The existing disposable Mini scope remains .239/.240, public 22/445, private
 61322/61445, service UID 309 and test UID 501. No installed package, service,
-database, Little Snitch, Studio or .241 changes. Existing jobs remain disabled;
+database, Little Snitch, test host A or .241 changes. Existing jobs remain disabled;
 fresh root preflight and conflict checks remain mandatory.
 
 The added laptop authority covers only RST packets from:
 
-- `192.168.1.7:42839` to `192.168.1.239:22`.
-- `192.168.1.7:42840` to `192.168.1.240:445`.
+- `192.0.2.7:42839` to `192.0.2.239:22`.
+- `192.0.2.7:42840` to `192.0.2.240:445`.
 
 The [fixture contract](fixtures/pf-acceptance/EDGES.md) specifies the exact
 rollback and five client phases. The implementation uses two nftables drop
@@ -72,7 +72,7 @@ must still be collected during the attended experiment.
 ## Artifacts
 
 - Local: `/private/tmp/squirrelops-a5-build.V3gy8MyX/stage`.
-- Mini: `/Users/matt/squirrelops-mini-a5-edges.OH0NAMOE`.
+- Mini: `/Users/operator/squirrelops-mini-a5-edges.OH0NAMOE`.
 - Laptop: `/root/squirrelops-a5-edges.uN2BSX5p`.
 
 | Artifact | SHA-256 |
@@ -92,7 +92,7 @@ the final V3gy8MyX bundle and the two verified remote destinations above.
 On the **Mini**, with SquirrelOps still closed:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-a5-edges.OH0NAMOE/start-mini-a5-edges.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-a5-edges.OH0NAMOE/start-mini-a5-edges.sh
 ```
 
 Leave Terminal open. Tell the coordinator when `READY: edge_healthy` appears,

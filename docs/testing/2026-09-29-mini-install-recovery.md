@@ -115,7 +115,7 @@ the inverse.
 
 ## Staged recovery inputs
 
-Server directory: `/Users/matt/squirrelops-mini-test.yktIwbVu`.
+Server directory: `/Users/operator/squirrelops-mini-test.yktIwbVu`.
 The second-attempt scripts are retained there as
 `start-mini-acceptance.pf-retry.sh` and `mini_acceptance.pf-retry.py`; their
 checksums were verified before replacement. Initial-attempt copies also remain.
@@ -131,7 +131,7 @@ After remote hash and shell-syntax verification, the attended recovery command
 is:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-test.yktIwbVu/start-mini-acceptance.sh --resume-failed-install
+sudo /bin/bash /Users/operator/squirrelops-mini-test.yktIwbVu/start-mini-acceptance.sh --resume-failed-install
 ```
 
 On `READY FOR TESTS`, leave Terminal open. If recovery stops, retain the new
@@ -146,7 +146,7 @@ extracted, isolated Python interpreter. Privileged recovery had not yet been
 executed at that checkpoint; the linked live report records the subsequent run.
 
 At that staging checkpoint, the attempted fresh laptop ARP conflict check could not run: SSH to
-`root@192.168.1.7` timed out before connecting. Do not count that attempt as an
+`root@192.0.2.7` timed out before connecting. Do not count that attempt as an
 ARP result. Wake/reconnect the authorized laptop before the next protocol-test
 window, then repeat the two-address conflict check. Earlier unanswered probes
 and Matt's address confirmation remain historical evidence only.

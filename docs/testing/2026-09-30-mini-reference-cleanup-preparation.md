@@ -49,7 +49,7 @@ cleanup only, not SSH/SMB acceptance or release readiness.
 
 ## Exact authority and scope
 
-- Mini only, `100.108.203.27`, ARM64, build `26A434`, boot `1790777754`.
+- Mini only, `203.0.113.27`, ARM64, build `26A434`, boot `1790777754`.
 - Original failure results:
   `/private/var/tmp/squirrelops-mini-post-reboot-results.3p_hssk9`.
 - Original private execution:
@@ -58,7 +58,7 @@ cleanup only, not SSH/SMB acceptance or release readiness.
   `/Library/SquirrelOps/acceptance-backups/post-reboot-1790777754-3a3cda47a7ea-attempt.json`.
   Require the expected parent, backup-name pattern and exact package digest.
 - Preserve IDs 1 through 6 exactly, plus ID 7, `home_assistant`, native address
-  `192.168.1.115`, port `51232`, active intent. Missing, additional, changed or
+  `192.0.2.115`, port `51232`, active intent. Missing, additional, changed or
   reordered rows fail the continuation; no SQL writes are performed.
 - The sole allowed system mutation is one `pfctl -X` for the privately retained
   token proven to match this run's original successful `pfctl -E`. No other
@@ -128,9 +128,9 @@ messages in unit-test output are not live cleanup evidence.
 ## Historical staging and command
 
 Fresh private mini directory:
-`/Users/matt/squirrelops-mini-reference-cleanup.PnCxjRUZ`.
+`/Users/operator/squirrelops-mini-reference-cleanup.PnCxjRUZ`.
 The directory is mode 0700, and all nine inputs are regular single-linked
-mode-0600 files owned by `matt`. Remote digests match the local reviewed inputs.
+mode-0600 files owned by `operator`. Remote digests match the local reviewed inputs.
 The unchanged candidate is copied only to extract a pinned private interpreter;
 it will not be installed. Remote plan-only execution and shell syntax passed.
 The original failure status digest still matches.
@@ -144,7 +144,7 @@ The original failure status digest still matches.
 The command below has completed. It is retained for provenance; do not rerun:
 
 ```bash
-sudo /bin/bash /Users/matt/squirrelops-mini-reference-cleanup.PnCxjRUZ/finish-mini-post-reboot-cleanup.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-reference-cleanup.PnCxjRUZ/finish-mini-post-reboot-cleanup.sh
 ```
 
 The attended confirmation used was:

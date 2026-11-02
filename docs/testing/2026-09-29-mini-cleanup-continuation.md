@@ -35,7 +35,7 @@ continuation uses the corrected wait when stopping the remaining helper.
 | New private child of this baseline | Preserve initial status, script, scope, command logs and an integrity-checked pre-cleanup SQLite backup |
 | Guest PID 27646 and VM PID 27647 | Revalidate UID, executable path and process start identity; SIGTERM only these identities, at most 45 seconds each; no SIGKILL |
 | `distnoted` PID 27648 | Inspect identity only; never signal it |
-| Owned VIP `192.168.1.240` | After runtime/listener absence, apply block-only quarantine, remove its alias and proxy ARP, then verify both approved VIPs absent |
+| Owned VIP `192.0.2.240` | After runtime/listener absence, apply block-only quarantine, remove its alias and proxy ARP, then verify both approved VIPs absent |
 | Product forwarding anchor and helper | Clear product forwards only after alias withdrawal, then boot out only `com.squirrelops.helper` with a bounded wait |
 | This run's PF reference | Match the private saved token to original successful acquisition and current references; release only that token after network absence, empty-policy inventory and original native listener/interface parity |
 | App, installed runtime, account, config, database, logs, earlier backups | Retain; no uninstall, recursive deletion, permission reset or restart |
@@ -72,7 +72,7 @@ concurrent or repeated mutation attempts. Never delete that marker to retry.
 
 ## Staging verification
 
-The new files were copied into `/Users/matt/squirrelops-mini-test.yktIwbVu`
+The new files were copied into `/Users/operator/squirrelops-mini-test.yktIwbVu`
 only after verifying they did not already exist. Original setup files and the
 candidate package were not overwritten. Remote checks matched these digests:
 
@@ -95,7 +95,7 @@ subsequently completed using the attended command below.
 Executed once on the mini after staged checksum verification. **Do not rerun:**
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-test.yktIwbVu/finish-mini-cleanup.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-test.yktIwbVu/finish-mini-cleanup.sh
 ```
 
 ## Live completion and independent verification

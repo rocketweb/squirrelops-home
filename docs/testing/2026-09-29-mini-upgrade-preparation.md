@@ -61,7 +61,7 @@ Tests do not establish that the root preflight, upgrade or live cleanup has run.
 
 ## Staged paths and identities
 
-Mini: `/Users/matt/squirrelops-mini-upgrade.Um4HlMcy`, `matt:staff`, mode 0700.
+Mini: `/Users/operator/squirrelops-mini-upgrade.Um4HlMcy`, `operator:staff`, mode 0700.
 Laptop: `/root/squirrelops-mini-upgrade-client.tnStT9B9`, `root:root`, mode 0700.
 
 | Artifact | SHA-256 |
@@ -81,10 +81,10 @@ configuration, PF, data and conflict checks remain in the attended preflight.
 
 ## Next operator action
 
-Keep SquirrelOps closed. Run this in **Terminal on the Mac mini**, not Studio:
+Keep SquirrelOps closed. Run this in **Terminal on test host B (the mini)**, not test host A:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-upgrade.Um4HlMcy/start-mini-upgrade-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-upgrade.Um4HlMcy/start-mini-upgrade-acceptance.sh
 ```
 
 Report the printed status and sanitized-results path. At `READY FOR TESTS`,

@@ -6,7 +6,7 @@ Use the separately verified
 instead of the original command below. Preserve this preparation record.
 
 The approved recovery is staged at:
-`/Users/matt/squirrelops-mini-reboot.37SbZXTy` on `matt@100.108.203.27`.
+`/Users/operator/squirrelops-mini-reboot.37SbZXTy` on `operator@203.0.113.27`.
 Directory mode 0700 and input modes 0600 were verified over SSH. Plan-only mode
 passed with the installed private Python; no recovery, installer or LAN probe
 was executed. Latest observed sensor remains PID 887, runs 1, exit timeout 5.
@@ -63,7 +63,7 @@ private root evidence; no root-owned live SQLite sidecar is introduced.
 On the mini, keep the GUI closed and run only this new command:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-reboot.37SbZXTy/stop-mini-reboot-recovery.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-reboot.37SbZXTy/stop-mini-reboot-recovery.sh
 ```
 
 If preflight and the disposable system-job proof pass, review the backup and

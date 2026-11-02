@@ -65,7 +65,7 @@ and the distinction between local tests and live acceptance.
   Host mutations are mocked; disposable local loopback listeners are real.
 - Ruff on the runner, client and tests; bootstrap `bash -n`; bootstrap input
   pins; plan-only execution; and `git diff --check` passed.
-- On the mini, the corrected checker ran read-only as `matt` against all six
+- On the mini, the corrected checker ran read-only as `operator` against all six
   installed pinned files: app, privileged helper, guest launcher, sensor main,
   orchestrator and Python. All metadata and checksum checks passed.
 - Fresh read-only checks confirmed boot `1790777754`, both product jobs
@@ -75,8 +75,8 @@ and the distinction between local tests and live acceptance.
 
 ## Corrected staging
 
-New mini directory: `/Users/matt/squirrelops-mini-post-reboot-v2.UU8waUaT`.
-It is mode 0700, owned by `matt`. All ten inputs are regular single-linked
+New mini directory: `/Users/operator/squirrelops-mini-post-reboot-v2.UU8waUaT`.
+It is mode 0700, owned by `operator`. All ten inputs are regular single-linked
 mode-0600 files owned by the staging user. Every remote digest matches its
 expected local value. The original staging and failed-run evidence are retained.
 
@@ -99,7 +99,7 @@ sent, and no synthetic credentials were transferred during this correction.
 Run in the mini's Terminal, with SquirrelOps still closed:
 
 ```bash
-sudo /bin/bash /Users/matt/squirrelops-mini-post-reboot-v2.UU8waUaT/start-mini-post-reboot-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-post-reboot-v2.UU8waUaT/start-mini-post-reboot-acceptance.sh
 ```
 
 After fresh verified backups and the scope preview, enter

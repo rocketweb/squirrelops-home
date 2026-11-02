@@ -24,7 +24,7 @@ Read-only SSH observations at 2026-09-30 11:30 UTC confirmed:
   It still reports `exit timeout = 5`, `keepalive`, and `runatload`.
 - Helper launchd job is running as root, PID 888, started 07:10:36 local.
 - Deception guest PID 1870 is UID 309, parent 887, started 07:11:08 local.
-- Mini `lo0` currently has `192.168.1.240/32`; en0 remains `192.168.1.115`.
+- Mini `lo0` currently has `192.0.2.240/32`; en0 remains `192.0.2.115`.
 - Sensor package receipt is still version 2.1.0, install-time 1790731448.
 - The sensor PID matches the unanswered Little Snitch mDNS prompt supplied by
   Matt. This is not a new candidate started by the failed test command.
@@ -48,7 +48,7 @@ an explicitly approved mini-only controlled shutdown, and a reversible plan to
 hold the stopped state across reboot while acceptance is pending. Durable
 cleanup evidence must be retained outside temporary storage, with boot identity
 and fresh service/runtime/alias/PF validation before continuation. Restore prior
-launchd enablement only at the approved boundary. Preserve Studio, native mini
+launchd enablement only at the approved boundary. Preserve test host A, native mini
 services, product data and all existing backups.
 
 No services, aliases, filter rules, installed files or Git publication state

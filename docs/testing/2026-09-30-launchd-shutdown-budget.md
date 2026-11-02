@@ -84,8 +84,8 @@ The failed run's private backup is
 Its original sanitized evidence remains unchanged in
 `/private/var/tmp/squirrelops-mini-upgrade-results.w3qacnps`.
 
-Prepared scripts are in `/Users/matt/squirrelops-mini-restart-cleanup.OaJV86GE`
-on `100.108.203.27`. `finish-mini-restart-cleanup.sh` verifies all script and
+Prepared scripts are in `/Users/operator/squirrelops-mini-restart-cleanup.OaJV86GE`
+on `203.0.113.27`. `finish-mini-restart-cleanup.sh` verifies all script and
 package hashes, extracts a private runtime from the already-tested ownership
 package, and does not invoke Installer. The old package is used only to run
 cleanup, not as the next candidate.

@@ -9,7 +9,7 @@ release approval. Production helper sources remain unchanged.
 Reuse the original runner's root preflight, retained-file backup/parity,
 native listener checks, .239/.240 conflict checks, unique PF anchor/reference,
 scoped packet capture and fail-closed cleanup. Sensor/helper remain disabled.
-No installed package, data, Little Snitch, Studio or .241 changes.
+No installed package, data, Little Snitch, test host A or .241 changes.
 
 1. `edge_healthy`: two actual UID-309 TCP sessions through .239:22/.240:445.
    Require both established PF states before continuing.
@@ -45,8 +45,8 @@ Return stops early. Leave new Little Snitch prompts unanswered and report them.
 
 Only these IPv4 reset packets may be suppressed:
 
-- 192.168.1.7:42839 to 192.168.1.239:22
-- 192.168.1.7:42840 to 192.168.1.240:445
+- 192.0.2.7:42839 to 192.0.2.239:22
+- 192.0.2.7:42840 to 192.0.2.240:445
 
 The client reserves both source ports and verifies its wlp0s20f3/.7 routes.
 The independent watchdog saves the current nftables ruleset privately, prints

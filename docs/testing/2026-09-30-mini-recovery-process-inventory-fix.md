@@ -53,7 +53,7 @@ should have excluded only that verified observer.
 
 ## New staging, same approved scope
 
-Use `/Users/matt/squirrelops-mini-reboot-v2.qegfyw1y` on the mini. The original
+Use `/Users/operator/squirrelops-mini-reboot-v2.qegfyw1y` on the mini. The original
 staging and root evidence were preserved. Only the parser/observer fix and its
 bootstrap checksum changed; the approved recovery scope is unchanged.
 
@@ -64,7 +64,7 @@ bootstrap checksum changed; the approved recovery scope is unchanged.
 | approved-scope.md | a23cf3bbbcd97eff1f6a971cc5989fdfd4660c8c2ee6d50dea318ceeb6c7d48a |
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-reboot-v2.qegfyw1y/stop-mini-reboot-recovery.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-reboot-v2.qegfyw1y/stop-mini-reboot-recovery.sh
 ```
 
 Confirmation remains `STOP MINI AND HOLD`, only after preflight and the native

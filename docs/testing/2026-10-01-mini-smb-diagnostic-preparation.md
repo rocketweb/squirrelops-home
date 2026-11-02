@@ -76,14 +76,14 @@ staging directory, not rebuilt, downloaded or installed.
 
 ## Attended command and one-shot handoff
 
-Mini staging: `/Users/matt/squirrelops-mini-smb.HvkPvRep`.
+Mini staging: `/Users/operator/squirrelops-mini-smb.HvkPvRep`.
 Laptop staging: `/root/squirrelops-mini-smb-client.7xhb0h1T` (root-owned 0700).
 Expected public result prefix: `/private/var/tmp/squirrelops-mini-smb-results.`
 
-With both apps closed, run on the **Mini**, not the Studio:
+With both apps closed, run on the **Mini**, not test host A:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-smb.HvkPvRep/start-mini-smb-diagnostic.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-smb.HvkPvRep/start-mini-smb-diagnostic.sh
 ```
 
 Confirmation: `START ONE SMB DIAGNOSTIC`. At `READY FOR TESTS`, immediately

@@ -1,4 +1,4 @@
-# Mac mini Home 2.1 live installation and protocol acceptance
+# Test host B (mini) Home 2.1 live installation and protocol acceptance
 
 Date: 2026-09-29. **Installation passed; functional acceptance failed.**
 **Cleanup completed at 14:38:18 UTC; service/address teardown independently verified.**
@@ -21,9 +21,9 @@ virtual-IP protocol failure or the A5 gate.
 
 ## Exact scope and artifact
 
-- Server: Matt's Mac mini, `100.108.203.27`, macOS 27.0 build `26A428`, ARM64.
-- Client: authorized laptop `192.168.1.7`, interface `wlp0s20f3`.
-- Allocated decoy: `192.168.1.240`, proxy ARP on mini `en0`.
+- Server: test host B (the mini), `203.0.113.27`, macOS 27.0 build `26A428`, ARM64.
+- Client: authorized laptop `192.0.2.7`, interface `wlp0s20f3`.
+- Allocated decoy: `192.0.2.240`, proxy ARP on mini `en0`.
   The other approved address, `.241`, was not allocated.
 - Artifact: `build/test-artifacts/SquirrelOpsHome-2.1.0-ai-setup-20260928-local-test.pkg`.
 - SHA-256: `3e8c0fc78befad3365fdbff5583d9f85c6b6fe01816b5863edbebeceaa4b8f5f`.
@@ -87,7 +87,7 @@ were used.
 ## Diagnostic evidence and interpretation
 
 The laptop's ARP entry for `.240` matched mini `en0` MAC
-`d0:11:e5:12:9a:c2`. The packet trace recorded replies from that MAC. SSH
+`00:00:5e:00:53:02`. The packet trace recorded replies from that MAC. SSH
 client port 34150 sent 32 bytes and the server acknowledged all 32; SMB client
 port 60298 sent 106 bytes and the server acknowledged all 106. Neither stream
 received server application payload during its bounded wait.

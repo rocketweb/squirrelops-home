@@ -14,7 +14,7 @@ with stopped guest, aliases absent, native endpoints present, only the test's PF
 reference released, and PF disabled. Independent read-only SSH checks confirmed
 both product launchd jobs absent, historical helper/guest/VM PIDs absent, and
 only `distnoted` under service UID 309. The mini still has sensor receipt
-`1790731448`. Native en0 remains `192.168.1.115`.
+`1790731448`. Native en0 remains `192.0.2.115`.
 
 The new runner pins this cleanup receipt and rechecks current root-only state
 in the attended preflight. It does not use a historical receipt as proof that
@@ -42,13 +42,13 @@ old 45-second removal poll reproduced a failure; the new bounded poll passes.
 | Mini runner and laptop client plan-only modes | Passed; no service startup or probe traffic |
 | Candidate and every staged script/scope digest | Matched local inputs |
 
-The laptop remains `192.168.1.7` through `wlp0s20f3`, verified with
-`ip -j route get 192.168.1.240`. SSH, SFTP, smbclient, Python and pexpect are
+The laptop remains `192.0.2.7` through `wlp0s20f3`, verified with
+`ip -j route get 192.0.2.240`. SSH, SFTP, smbclient, Python and pexpect are
 available. No new tools were installed.
 
 ## Staging
 
-- Mini: `/Users/matt/squirrelops-mini-launchd.8DCJWXsN`.
+- Mini: `/Users/operator/squirrelops-mini-launchd.8DCJWXsN`.
 - Laptop: `/root/squirrelops-mini-upgrade-client.7gztO3lV`.
 - Directories are private; staged inputs are mode 0600.
 - Candidate SHA-256: `3a3cda47a7eaec1a015edd82ad42edc91be10b64d181a805d29f114f2357893c`.
@@ -66,7 +66,7 @@ installation, backup and inverse, consent, restart and client gates, and limits.
 On the mini, with SquirrelOps closed:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-launchd.8DCJWXsN/start-mini-launchd-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-launchd.8DCJWXsN/start-mini-launchd-acceptance.sh
 ```
 
 Review the printed scope and type `UPGRADE AND TEST RESTART` if it matches.
@@ -83,7 +83,7 @@ Retain sanitized results and verify final cleanup before further installation
 or app launch. This is not the A5 live PF fault/isolation matrix or release
 approval.
 
-## Attempt stopped: Studio owns the second test address
+## Attempt stopped: test host A owns the second test address
 
 The operator ran the staged bootstrap. Root staging was
 `/private/var/root/squirrelops-mini-launchd.Fpl9w3AH`; the evidence directory was
@@ -104,11 +104,11 @@ jobs are absent, and its interface inventory has no `.240` or `.241` alias.
 
 Read-only checks identified the overlap:
 
-- Mini ARP entries map `.241` to `1c:1d:d3:e0:7d:03` on en0 and en1.
-- Mac Studio en0 has that exact MAC, with native address `192.168.1.18`.
-- Mac Studio lo0 owns `192.168.1.241/32` and its ARP table contains a permanent
+- Mini ARP entries map `.241` to `00:00:5e:00:53:01` on en0 and en1.
+- Test host A en0 has that exact MAC, with native address `192.0.2.18`.
+- Test host A lo0 owns `192.0.2.241/32` and its ARP table contains a permanent
   published proxy entry for `.241` using that MAC.
-- Studio's background sensor is running, PID 61581 when inspected. Closing the
+- Test host A's background sensor is running, PID 61581 when inspected. Closing the
   dashboard does not unload the sensor. Its current launchd exit timeout is
   still five seconds, so a blind full-sensor stop is not a safe workaround.
 
@@ -118,7 +118,7 @@ and remote ARP entry establish the present address conflict without needing a
 broad scan or changing either host. The Scapy cryptography deprecation warning
 is not the preflight stop reason.
 
-Proposed next scope, pending approval: keep Studio unchanged and narrow only
+Proposed next scope, pending approval: keep test host A unchanged and narrow only
 the mini's test pool in `/Library/SquirrelOps/sensor/config.yaml`:
 
 ```diff

@@ -14,8 +14,8 @@ active at startup and forbids broadening or making it permanent.
 
 At preparation, read-only SSH found the Mini's sensor/helper disabled and
 unloaded, no matching product/guest process and no `.240`/`.241` aliases.
-The previous root cleanup receipt is unchanged. The Studio's `.240` alias is
-also absent. Laptop route remains `wlp0s20f3`, source `192.168.1.7`.
+The previous root cleanup receipt is unchanged. Test host A's `.240` alias is
+also absent. Laptop route remains `wlp0s20f3`, source `192.0.2.7`.
 
 ## Minimal runner changes
 
@@ -68,7 +68,7 @@ rerun. This preparation does not authorize replaying an old window.
 
 ## Fresh staging and next command
 
-Mini: `/Users/matt/squirrelops-mini-filter-retest.1moGrUKm`.
+Mini: `/Users/operator/squirrelops-mini-filter-retest.1moGrUKm`.
 New public result prefix: `/private/var/tmp/squirrelops-mini-filter-retest-results.`
 Laptop: `/root/squirrelops-mini-upgrade-client.ROWFDZto`.
 
@@ -84,7 +84,7 @@ boot, package and remaining-time gates still apply.
 On the Mini, with both apps closed and the approved temporary rule still active:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-filter-retest.1moGrUKm/start-mini-filter-retest.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-filter-retest.1moGrUKm/start-mini-filter-retest.sh
 ```
 
 Confirmation: `START APPROVED FILTER RETEST`.

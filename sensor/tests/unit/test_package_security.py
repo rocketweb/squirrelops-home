@@ -585,7 +585,7 @@ def test_postinstall_clears_a_disabled_override_and_reports_bootstrap_errors() -
     """A label disabled by an operator (launchctl disable, unload -w) made every
     upgrade fail with "Failed to bootstrap sensor service" and nothing else,
     because the postinstall neither re-enabled the label nor kept launchctl's
-    stderr. Seen on a Mac Studio upgrading 2.1.0 to a local 2.1.2 build.
+    stderr. Seen on an Apple Silicon test Mac upgrading 2.1.0 to a local 2.1.2 build.
     """
     postinstall = (REPO_ROOT / "scripts/pkg/postinstall").read_text(encoding="utf-8")
     enable = postinstall.find('launchctl enable "system/${PLIST_NAME}"')

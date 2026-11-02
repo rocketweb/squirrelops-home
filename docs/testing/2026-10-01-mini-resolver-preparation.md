@@ -94,7 +94,7 @@ packaged-runtime and full sensor results remain in the
 | Scope | `18ced0435d5818755d7503bbb0339e56f7d72d7fbae6642a4830bef996b2333a` |
 
 After approval, stage the bootstrap and all pinned inputs in a new Mini
-`/Users/matt/squirrelops-mini-resolver.*` directory. Name the package
+`/Users/operator/squirrelops-mini-resolver.*` directory. Name the package
 `candidate.pkg`, the scope `approved-scope.md`, and the existing config
 reference `single-ip-config.yaml`. Do not reuse consumed staging or claims.
 Verify all hashes and run only plan mode during staging. The operator runs

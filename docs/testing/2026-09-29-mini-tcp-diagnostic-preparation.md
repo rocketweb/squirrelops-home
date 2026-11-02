@@ -32,7 +32,7 @@ implementation and require executed verification before the staging claim.
 
 ## Verification executed
 
-From `/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current`:
+From `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current`:
 
 ```sh
 sensor/.venv/bin/python -B -m unittest discover -s docs/testing/fixtures -p 'test_mini_tcp*.py' -v
@@ -57,8 +57,8 @@ remote machines. No remote root preflight has been claimed or attempted yet.
 
 ## Staged artifacts and verified hashes
 
-Mini, private directory owned by matt, mode 0700:
-`/Users/matt/squirrelops-tcp-test.TYYG7te5`
+Mini, private directory owned by operator, mode 0700:
+`/Users/operator/squirrelops-tcp-test.TYYG7te5`
 
 | File | SHA-256 |
 | --- | --- |
@@ -70,14 +70,14 @@ Laptop, root-owned directory mode 0700:
 `/root/squirrelops-tcp-client.50pnQQdV`
 
 Client SHA-256: `9811f0c95b9d08f3080eaf7f5468b5ba94c6138107b91694fe6943674d8b1336`.
-Read-only route check still selects `wlp0s20f3`, source `192.168.1.7`, for `.115`.
+Read-only route check still selects `wlp0s20f3`, source `192.0.2.7`, for `.115`.
 
 ## Operator step and continuation
 
-In an attended Terminal **on Matts-Mini-2, not the Mac Studio**:
+In an attended Terminal **on test host B (the mini), not test host A**:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-tcp-test.TYYG7te5/start-mini-tcp-diagnostic.sh
+sudo /bin/bash /Users/operator/squirrelops-tcp-test.TYYG7te5/start-mini-tcp-diagnostic.sh
 ```
 
 Leave the app closed and the Terminal open. Tell Codex immediately when it says
@@ -139,25 +139,25 @@ mini network diagnostic.
 Mixed-runtime verification command:
 
 ```sh
-env SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/shutdown-fix-extracted-20260929/sensor.pkg/Payload/Library/SquirrelOps/sensor/python/bin/python3.12 /usr/bin/python3 -B -m unittest discover -s docs/testing/fixtures -p 'test_mini_tcp*.py' -v
+env SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/shutdown-fix-extracted-20260929/sensor.pkg/Payload/Library/SquirrelOps/sensor/python/bin/python3.12 /usr/bin/python3 -B -m unittest discover -s docs/testing/fixtures -p 'test_mini_tcp*.py' -v
 ```
 
 Corrected script SHA-256:
 `b91bc0623c0cdb81b042fbb8f636d9a578c0ad2e9e2dc4d6635ae473149fd91d`.
 The wrapper's pin was updated. Approved scope and laptop client are unchanged;
 all original mini staging and run evidence are retained. New mini staging:
-`/Users/matt/squirrelops-tcp-test-v2.CTfRMK5n`.
+`/Users/operator/squirrelops-tcp-test-v2.CTfRMK5n`.
 
 Remote SHA-256 verification matched the corrected script, unchanged scope and
 wrapper (`3e51c62d6167ca5945ccc52f59bf7461689a44d8b62f4606a9f0662d46712d2c`).
-Remote `bash -n` and plan-only startup passed. The new directory is matt-owned
+Remote `bash -n` and plan-only startup passed. The new directory is operator-owned
 mode 0700. The laptop result file is still absent and its plan-only command
 passed: none of its six attempts has been consumed.
 
 Corrected attended command, **on the mini**:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-tcp-test-v2.CTfRMK5n/start-mini-tcp-diagnostic.sh
+sudo /bin/bash /Users/operator/squirrelops-tcp-test-v2.CTfRMK5n/start-mini-tcp-diagnostic.sh
 ```
 
 Use the same 180-second, six-client-probe scope and stop conditions. Do not use

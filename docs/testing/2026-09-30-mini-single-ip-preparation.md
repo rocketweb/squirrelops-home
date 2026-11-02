@@ -3,12 +3,12 @@
 Matt approved the two-field mini configuration change and revised test command.
 The new runner and client are staged and locally tested. Live configuration,
 installation and restart acceptance remain pending the attended command. No
-Studio configuration, service, alias or filter changes were performed.
+test host A configuration, service, alias or filter changes were performed.
 
 ## Scope and safeguards
 
 The [approved scope](2026-09-30-mini-single-ip-scope.md) limits the test to
-`192.168.1.240` and changes only `scouts.virtual_ip_range_end` from 241 to 240
+`192.0.2.240` and changes only `scouts.virtual_ip_range_end` from 241 to 240
 and `scouts.max_virtual_ips` from 2 to 1 in the mini's sensor YAML. The installer
 is unchanged, SHA-256
 `3a3cda47a7eaec1a015edd82ad42edc91be10b64d181a805d29f114f2357893c`.
@@ -65,7 +65,7 @@ replacement, installation, real-VM restart, LAN acceptance or A5 isolation.
 
 ## Staging and pins
 
-- Mini directory: `/Users/matt/squirrelops-mini-single-ip.GhTxy3KM`.
+- Mini directory: `/Users/operator/squirrelops-mini-single-ip.GhTxy3KM`.
 - Laptop directory: `/root/squirrelops-mini-upgrade-client.AK8t3vyw`.
 - Both are private mode-0700 directories with mode-0600 inputs.
 - Runner SHA: `3a37156ff54ee8e0086b84036cbe155f4758509d93471047e6a28262e165e943`.
@@ -84,7 +84,7 @@ and package have also been rehashed over SSH. No new package build is needed.
 On the mini, keep SquirrelOps closed and run:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-single-ip.GhTxy3KM/start-mini-single-ip-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-single-ip.GhTxy3KM/start-mini-single-ip-acceptance.sh
 ```
 
 Enter `USE 240 AND TEST RESTART` when the verified backup and scope are shown.
@@ -94,7 +94,7 @@ minutes, followed by guarded teardown; Return stops early.
 
 For client continuation, use only `mini_single_ip_client.py --run` with the new
 laptop directory. First verify fresh root-owned readiness for this exact package,
-`test_scope=mini-single-ip-240`, `test_vips=[192.168.1.240]`, and
+`test_scope=mini-single-ip-240`, `test_vips=[192.0.2.240]`, and
 `config_change_verified=true`. Transfer only the synthetic guest login and the
 matching endpoint/readiness JSON privately, without displaying credentials.
 The old wrapper must not be used for this scope. Retain results and verify

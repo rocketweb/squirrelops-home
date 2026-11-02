@@ -10,12 +10,12 @@ test, configuration edit, SQL recovery or filter-rule change was performed.
 
 ## Exact run
 
-- Mini: `100.108.203.27`, boot `1790777754`, virtual IP `192.168.1.240` only.
-- Laptop: `192.168.1.7`, route verified through `wlp0s20f3`.
+- Mini: `203.0.113.27`, boot `1790777754`, virtual IP `192.0.2.240` only.
+- Laptop: `192.0.2.7`, route verified through `wlp0s20f3`.
 - Package SHA-256:
   `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
 - [Approved scope](2026-10-01-mini-installed-protocol-scope.md).
-- Mini staging: `/Users/matt/squirrelops-mini-protocol.WJuCiUml`.
+- Mini staging: `/Users/operator/squirrelops-mini-protocol.WJuCiUml`.
 - Root-produced results: `/private/var/tmp/squirrelops-mini-protocol-results.75e9py0n`.
 - Laptop staging: `/root/squirrelops-mini-upgrade-client.GWA3Ee6a`.
 

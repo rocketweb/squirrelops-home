@@ -6,7 +6,7 @@ installation failed; Mini work paused at Matt's request.
 Historical attended command, **do not rerun**:
 
 ```bash
-sudo /bin/bash /Users/matt/squirrelops-mini-clean-upgrade.LtUQXpyS/resume-mini-clean-upgrade.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-clean-upgrade.LtUQXpyS/resume-mini-clean-upgrade.sh
 ```
 
 The copied package and script digests, shell syntax, read-only runner output
@@ -120,7 +120,7 @@ The same staged command is used; package bytes and destructive scope are unchang
 Matt explicitly authorized wiping the existing SquirrelOps installation and
 data on the Mini, installing an older version, and testing an in-place upgrade.
 This supersedes the macOS VM proposal. It does not authorize wiping the Mac,
-changing Home Assistant, Tailscale, Little Snitch, native services, the Studio,
+changing Home Assistant, Tailscale, Little Snitch, native services, test host A,
 `.241`, or global PF policy.
 
 ## First attended operation

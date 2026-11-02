@@ -112,7 +112,7 @@ is not a complete executable rollback or proof of upgrade success.
 From Terminal, verify the artifact first:
 
 ```bash
-cd /Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current
+cd /Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current
 shasum -a 256 -c build/test-artifacts/SquirrelOpsHome-2.1.0-acceptance2-20260926-local-test.pkg.sha256
 ```
 
@@ -121,7 +121,7 @@ one-attempt local-test approval and installs this exact package in the same
 root shell. This is an installation action, not a diagnostic check:
 
 ```bash
-sudo /bin/sh -c '/usr/bin/install -o root -g wheel -m 600 /dev/null /var/db/com.squirrelops.allow-local-test && /usr/sbin/installer -pkg /Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-acceptance2-20260926-local-test.pkg -target /'
+sudo /bin/sh -c '/usr/bin/install -o root -g wheel -m 600 /dev/null /var/db/com.squirrelops.allow-local-test && /usr/sbin/installer -pkg /Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-acceptance2-20260926-local-test.pkg -target /'
 ```
 
 The approval is consumed when installation starts, even if the attempt fails.

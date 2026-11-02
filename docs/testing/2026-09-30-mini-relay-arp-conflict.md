@@ -1,19 +1,19 @@
-# Mini diagnostic attempt stopped by a Studio address conflict
+# Mini diagnostic attempt stopped by a test host A address conflict
 
 At 2026-09-30 23:09:48 UTC, the attended diagnostic runner stopped before
-installation because `192.168.1.240` answered its ARP conflict check.
+installation because `192.0.2.240` answered its ARP conflict check.
 
 ## Current evidence
 
 - The [ARP report](evidence/2026-09-30-mini-relay-conflict/arp-check-1.json)
-  records one reply for `.240`, MAC `1c:1d:d3:e0:7d:03`.
-- Read-only local `ifconfig` identifies that MAC as the Mac Studio's `en0`,
-  whose real address is `.18`. The Studio also has `.240/32` on `lo0`.
-- The Studio's ARP table contains a permanent published proxy-only `.240`
+  records one reply for `.240`, MAC `00:00:5e:00:53:01`.
+- Read-only local `ifconfig` identifies that MAC as test host A's `en0`,
+  whose real address is `.18`. Test host A also has `.240/32` on `lo0`.
+- Test host A's ARP table contains a permanent published proxy-only `.240`
   entry on `en0` with the same MAC. Its SquirrelOps sensor job is running,
   PID 61581 at inspection time. The exact decoy row/host identity was not read.
-- The Mini's en0 MAC is `d0:11:e5:12:9a:c2`, a different machine. The responder
-  is therefore the Studio, not the Mini reflecting its own interface identity.
+- The Mini's en0 MAC is `00:00:5e:00:53:02`, a different machine. The responder
+  is therefore test host A, not the Mini reflecting its own interface identity.
 - Mini sensor receipt remains `1790784842`. Both product jobs remain explicitly
   disabled; no matching product process was observed. The new package was not
   installed. No new laptop client attempt occurred.
@@ -31,27 +31,27 @@ Public results remain at `/private/var/tmp/squirrelops-mini-relay-results.7kl1dq
 
 ## Approval boundary
 
-The approved Mini scope explicitly excludes Studio changes. Do not bypass ARP,
+The approved Mini scope explicitly excludes test host A changes. Do not bypass ARP,
 delete an interface alias manually, reset PF, or start two hosts on `.240`.
-Quitting the Studio app window is not a verified sensor shutdown.
+Quitting the test host A app window is not a verified sensor shutdown.
 
-Before another attempt, obtain approval either to temporarily pause the Studio
+Before another attempt, obtain approval either to temporarily pause the test host A
 fake host using `.240` through its supported lifecycle, preserving data and
 other hosts, or to plan a separate non-overlapping Mini address/configuration
-migration. For a scoped Studio pause, first identify the exact host and saved
+migration. For a scoped test host A pause, first identify the exact host and saved
 intent, verify backup and restoration, then confirm alias/proxy withdrawal
 before repeating the Mini preflight. Do not assume a UI click withdrew networking.
-Restore the Studio host only after verified Mini cleanup. No Studio mutation,
+Restore that fake host only after verified Mini cleanup. No test host A mutation,
 address migration or retry was performed during this diagnosis.
 
 The existing Mini SSH/SMB stall remains unresolved. This attempt reached no
 protocol test. The engineering-constraints skill guided evidence-first
 attribution rather than treating the conflict check as a defect to disable.
 
-## Studio pause follow-up
+## Test host A pause follow-up
 
-The user subsequently approved pausing the Studio `.240` host, then chose to
-disable and boot out the whole Studio sensor. Read-only verification confirmed
+The user subsequently approved pausing the `.240` fake host on test host A, then chose to
+disable and boot out the whole sensor on test host A. Read-only verification confirmed
 the sensor job was disabled and unloaded, with no UID 309 runtime observed.
 The old installed build nevertheless left ten loopback aliases and their
 published proxy entries, including `.240`. The root helper remained running.
@@ -72,7 +72,7 @@ a running service-account process and malformed/out-of-range identities.
 The second administrator authorization was canceled (`osascript` error `-128`),
 so the corrected cleanup has **not** executed and withdrawal is **not verified**.
 
-Prepared Studio command:
+Prepared test host A command:
 
 ```sh
 sudo /bin/bash /private/tmp/squirrelops-studio-withdraw.uzLaYAtC/withdraw-studio-240.sh

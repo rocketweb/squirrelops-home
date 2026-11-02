@@ -130,8 +130,8 @@ else
 fi
 
 # --- F-09 -------------------------------------------------------------------
-# arp -n emits unpadded octets (1c:1d:d3:e0:7d:3) while ifconfig pads them
-# (1c:1d:d3:e0:7d:03). Both sides must be normalized or every address the Mac
+# arp -n emits unpadded octets (0:0:5e:0:53:1) while ifconfig pads them
+# (00:00:5e:00:53:01). Both sides must be normalized or every address the Mac
 # owns looks foreign. This is the same trap H-03 pins in normalize_mac.
 normalize_mac() {
     echo "$1" | tr 'A-Z' 'a-z' | awk -F: '{

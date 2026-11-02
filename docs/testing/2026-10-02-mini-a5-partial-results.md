@@ -85,7 +85,7 @@ observed failing before correction. The local suite passed 38 checks in 0.590
 seconds with Apple Python as parent and Python 3.12 disposable loopback children:
 
 ```sh
-SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
+SQUIRRELOPS_DIAGNOSTIC_CHILD_PYTHON=/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/sensor/.venv/bin/python \
   /usr/bin/python3 -m unittest discover \
   -s docs/testing/fixtures/pf-acceptance -p 'test_*.py' -v
 ```
@@ -102,7 +102,7 @@ identical to the first bundle. Ruff, Bash syntax and whitespace checks passed.
 Remote checksums and both no-side-effect plan commands passed after copying:
 
 - Local bundle: `/private/tmp/squirrelops-a5-build.keG0PMTP/stage`.
-- Mini: `/Users/matt/squirrelops-mini-a5-v2.AgenMyrS`.
+- Mini: `/Users/operator/squirrelops-mini-a5-v2.AgenMyrS`.
 - Laptop: `/root/squirrelops-a5-client-v2.dMvYvqvq/client.py`.
 - Bundle manifest SHA-256:
   `c2e405364c5fd80e1949dc13cac0da0c37b13fd260fec399f8dc3d4c4d06a12d`.
@@ -114,7 +114,7 @@ Remote checksums and both no-side-effect plan commands passed after copying:
 The user starts the attended Mini run with:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-a5-v2.AgenMyrS/start-mini-a5.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-a5-v2.AgenMyrS/start-mini-a5.sh
 ```
 
 The same temporary VIPs, public/backend ports, UIDs, anchor boundary and scoped

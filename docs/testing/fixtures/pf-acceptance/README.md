@@ -5,11 +5,11 @@ sensor startup, whole A5 sign-off or permission to publish a release.
 
 ## Exact boundary
 
-- Mini `100.108.203.27`, ARM64 macOS 27.0.1 build 26A434. Ethernet `en0`
-  192.168.1.115, Wi-Fi `en1` 192.168.1.254. Existing jobs must stay disabled
+- Mini `203.0.113.27`, ARM64 macOS 27.0.1 build 26A434. Ethernet `en0`
+  192.0.2.115, Wi-Fi `en1` 192.0.2.254. Existing jobs must stay disabled
   and unloaded. The app and guest must remain closed.
-- Temporary IPs 192.168.1.239 and .240 only, each conflict-checked using the
-  production duplicate-address guard before publication. No Studio or .241.
+- Temporary IPs 192.0.2.239 and .240 only, each conflict-checked using the
+  production duplicate-address guard before publication. No test host A or .241.
 - Public ports 22 and 445 redirect to fixed disposable backends 61322 and
   61445. Children use the checksum-pinned installed Python executable with
   `-I -S -B`, cleared supplementary groups and UID 309 or 501, never root.
@@ -23,7 +23,7 @@ sensor startup, whole A5 sign-off or permission to publish a release.
   the recursively inspected policy. The runner acquires one reference. It
   marks both acquisition and release attempts durably before executing them.
   An uncertain result is never authorization to retry.
-- Fixed-source laptop probes from 192.168.1.7, bounded private packet captures
+- Fixed-source laptop probes from 192.0.2.7, bounded private packet captures
   on en0/en1, snaplen 96, 3,000 packets maximum each. Captures and full PF
   inventory remain root-private. Payloads contain synthetic tokens only.
 - Private byte copies and fingerprints of config, SQLite files, launch plists
@@ -95,7 +95,7 @@ read-only wrapper, coverage limits and approval boundary for additional tests.
 Start the staged `client.py --run` on the laptop over a persistent SSH session.
 Send each exact phase as one JSON line, in order, and retain its output.
 Only after the corresponding probes finish, write a small acknowledgement
-as Mini user `matt` to `<inbox>/<phase>.json` containing exactly
+as Mini user `operator` to `<inbox>/<phase>.json` containing exactly
 `{"nonce":"<status nonce>","phase":"<current phase>","action":"probes_done"}`.
 The inbox is not a root command interface. Old, extra or malformed fields stop
 the experiment. Do not send acknowledgements before recording client results.

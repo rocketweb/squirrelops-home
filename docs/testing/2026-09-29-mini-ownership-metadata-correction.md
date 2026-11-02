@@ -61,7 +61,7 @@ build/test-artifacts/ownership-fix-extracted-20260929/sensor.pkg/Payload/Library
 Result: **129 passed**. Ruff on the changed runner and tests passed. Local and
 remote `bash -n` passed. All six staged checksums matched the local files.
 
-New mini directory: `/Users/matt/squirrelops-mini-ownership-v2.290wspVB`, mode
+New mini directory: `/Users/operator/squirrelops-mini-ownership-v2.290wspVB`, mode
 0700. The original staging directory and failed attempt remain untouched.
 The laptop client at `/root/squirrelops-mini-upgrade-client.Ud9OIx96` is unchanged.
 
@@ -77,7 +77,7 @@ The laptop client at `/root/squirrelops-mini-upgrade-client.Ud9OIx96` is unchang
 Next attended command, on the mini with SquirrelOps closed:
 
 ```bash
-sudo /bin/bash /Users/matt/squirrelops-mini-ownership-v2.290wspVB/start-mini-ownership-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-ownership-v2.290wspVB/start-mini-ownership-acceptance.sh
 ```
 
 Review the five-row preview and type `RESTORE FIVE AND UPGRADE` to authorize

@@ -62,16 +62,16 @@ Pinned inputs:
 
 ## Attended commands
 
-On the MacBook, 192.168.1.97. Its working app and sensor can remain running:
+On the MacBook, 192.0.2.97. Its working app and sensor can remain running:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-release-review.oFmWviec/inspect-saved-release.sh macbook
+sudo /bin/bash /Users/operator/squirrelops-release-review.oFmWviec/inspect-saved-release.sh macbook
 ```
 
-On the Mini, 100.108.203.27. Leave its product services stopped:
+On the Mini, 203.0.113.27. Leave its product services stopped:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-release-review.6smlhIEz/inspect-saved-release.sh mini
+sudo /bin/bash /Users/operator/squirrelops-release-review.6smlhIEz/inspect-saved-release.sh mini
 ```
 
 Each wrapper checks the source hashes in a new root-private staging folder,

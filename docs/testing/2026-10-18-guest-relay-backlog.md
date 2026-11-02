@@ -1,6 +1,6 @@
 # Guest relay listener backlog (issue 66)
 
-Date: 2026-10-18. Machine: Apple Silicon Mac Studio, macOS 27, Virtualization.framework.
+Date: 2026-10-18. Machine: Apple Silicon test Mac, macOS 27, Virtualization.framework.
 Runtime: debug `SquirrelOpsDeceptionGuest` from the `feature/guest-auth-events` build
 (PR 65), ad-hoc signed with the Virtualization entitlement. The runtime was identical
 across both measurements; only the guest bundle changed.

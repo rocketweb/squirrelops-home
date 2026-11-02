@@ -8,7 +8,7 @@ completed export, not authorization for another live test.
 
 ## Scope and safety
 
-Target: Mini `100.108.203.27`, boot `1790777754`. Resolve the completed run
+Target: Mini `203.0.113.27`, boot `1790777754`. Resolve the completed run
 through the exact root-private claim
 `/Library/SquirrelOps/acceptance-backups/protocol-1790777754-3d18ebac2fae-attempt.json`.
 Require the expected package checksum, a direct child named
@@ -33,7 +33,7 @@ network state. The exporter does not query Little Snitch, issue live PF calls,
 read the database or sensor log, start services, or send network probes.
 
 The only writes are a new root-private copy of the checksum-verified exporter
-and a new sanitized JSON report, owned by Matt in a private directory. Original
+and a new sanitized JSON report, owned by the operator account in a private directory. Original
 evidence and permissions are unchanged. Both apps remain closed. There is no
 automatic retry, service restart, filter change or package installation.
 
@@ -66,7 +66,7 @@ Shell syntax and `git diff --check` passed. Remote copies match local hashes.
 On the Mini:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-protocol-evidence.a1qAUUsj/export-mini-protocol-evidence.sh
+sudo /bin/bash /Users/operator/squirrelops-protocol-evidence.a1qAUUsj/export-mini-protocol-evidence.sh
 ```
 
 Send the `READ-ONLY EXPORT COMPLETE` path. Administrator access is required

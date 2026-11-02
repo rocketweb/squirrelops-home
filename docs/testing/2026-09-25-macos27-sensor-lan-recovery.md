@@ -1,6 +1,6 @@
 # macOS 27 sensor startup repair
 
-Date: September 25, 2026. Host: Matt's arm64 Mac Studio, macOS 27.0 (26A428).
+Date: September 25, 2026. Host: Apple Silicon (arm64) test Mac, macOS 27.0 (26A428).
 
 ## Status
 
@@ -15,7 +15,7 @@ with a working installed app or with second-machine decoy ingress.
 Privileged sensor logs show repeated startup exits:
 
 ```text
-Auto-detected subnet: 100.96.4.0/24 (from local IP 100.96.4.79)
+Auto-detected subnet: 198.51.100.0/24 (from local IP 198.51.100.79)
 Could not verify the private IPv4 default route (route status 0)
 RuntimeError: Could not install startup quarantine for persisted virtual IPs
 ```
@@ -32,10 +32,10 @@ Read-only physical-network checks found:
 | Observation | Value |
 | --- | --- |
 | macOS first physical network service | Ethernet, `en0` |
-| Interface-scoped IPv4 gateway | `192.168.1.1` |
-| Physical LAN address | `192.168.1.18` |
-| Physical LAN subnet | `192.168.1.0/24` |
-| Additional physical interface | Wi-Fi, `en1`, `192.168.1.79` |
+| Interface-scoped IPv4 gateway | `192.0.2.1` |
+| Physical LAN address | `192.0.2.18` |
+| Physical LAN subnet | `192.0.2.0/24` |
+| Additional physical interface | Wi-Fi, `en1`, `192.0.2.79` |
 
 This proves a VPN/LAN-selection defect on this machine. It does not establish
 that macOS 27 introduced the networking defect. The separate SQLite installer
@@ -70,8 +70,8 @@ the tunnel. Both pass after the repair; malformed/off-link cases fail closed.
 - Full sensor suite: **2,229 passed, 1 skipped** in 83.75 seconds. The skip is
   the existing opt-in live guest test; this run is not guest/LAN acceptance.
 - Helper suite: **111 tests passed**, including live read-only LAN observation.
-  The new helper selected `en0`, `192.168.1.18`, `192.168.1.0/24`, gateway
-  `192.168.1.1` while the VPN remained enabled.
+  The new helper selected `en0`, `192.0.2.18`, `192.0.2.0/24`, gateway
+  `192.0.2.1` while the VPN remained enabled.
 - Tests against the exact extracted installer sensor: **199 passed**. This
   includes entry-point startup, settings routes, helper RPC, LAN-context,
   configuration persistence, package security, SQLite backup, and plist cases.
@@ -111,7 +111,7 @@ Swift test invocation passed.
 
 ## Exact candidate
 
-[SquirrelOpsHome-2.1.0-macos27-lan-repair-20260925-local-test.pkg](/Users/matt/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-macos27-lan-repair-20260925-local-test.pkg)
+[SquirrelOpsHome-2.1.0-macos27-lan-repair-20260925-local-test.pkg](/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current/build/test-artifacts/SquirrelOpsHome-2.1.0-macos27-lan-repair-20260925-local-test.pkg)
 
 - Version: 2.1.0, arm64, unsigned installer with ad-hoc-signed app components.
 - SHA-256: `cedb1b1f0170e07e19447c2e8e82ebe849c42f478cffeeb5faaec5a5dc3b0c02`.

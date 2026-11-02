@@ -84,7 +84,7 @@ Laptop `.240` routing remains `wlp0s20f3`, source `.7`. SSH, SFTP, Samba
 `4.19.5-Ubuntu` and Python `pexpect` are available. No dependency was installed.
 
 Mini staging is mode 0700, UID 501:
-`/Users/matt/squirrelops-mini-relay.C5Jt9KuC`.
+`/Users/operator/squirrelops-mini-relay.C5Jt9KuC`.
 The package and every script/config-reference/scope hash matched the local files.
 
 | Input | SHA-256 |
@@ -108,7 +108,7 @@ Review the [exact scope](2026-09-30-mini-relay-diagnostic-scope.md). On the Mini
 with SquirrelOps closed:
 
 ```sh
-sudo /bin/bash /Users/matt/squirrelops-mini-relay.C5Jt9KuC/start-mini-relay-diagnostic-acceptance.sh
+sudo /bin/bash /Users/operator/squirrelops-mini-relay.C5Jt9KuC/start-mini-relay-diagnostic-acceptance.sh
 ```
 
 After fresh checks and verified backups, enter `INSTALL DIAGNOSTICS AND TEST 240`
