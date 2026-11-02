@@ -38,10 +38,10 @@ entry points passed without listeners or client traffic.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `mini_tcp_diagnostic.py` | `8d3330aca67038485c0b8cf9ede00c8cb1864cc60363455a39ac7f4c2001d370` |
-| `mini_tcp_client.py` | `80c5fe73901aad2b40c0e0bede82ee5ebc2a48df9ae42257e9c81bb36f439719` |
-| `start-mini-tcp-diagnostic.sh` | `0a3d809c6f1dc3dd7097963c46874746aed1cf8d752d61f3532dca38ba31e912` |
-| `approved-scope.md` | `6f75109eb6cc4bb633411e47522638b8958cc1cc3fb7c148515fb54063471b61` |
+| `mini_tcp_diagnostic.py` | `26d36c3eb53630dd0c3ec104ddbf0d61d75a8c03b9facae3bb8aa06dfce8b403` |
+| `mini_tcp_client.py` | `18b5f73a3d6e322db19b04316299427c8161e0ebce3b28aa92586fe59aa55e6e` |
+| `start-mini-tcp-diagnostic.sh` | `509b9bb0d698bc73a86f8adad545cdd6fb8d55af621138cece5a3ea1d67ba3a3` |
+| `approved-scope.md` | `8c16143c93d67bd5b09eb79909c748e62e2c319a246e42105241212a6a3427d4` |
 
 All staged hashes matched. The mini's installed executable still hashes to
 `d2555cd22a33506826f9eb069bb13fb0cc41303c7da41da5b761967d616f4147`.

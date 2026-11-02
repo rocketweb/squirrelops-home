@@ -88,10 +88,10 @@ packaged-runtime and full sensor results remain in the
 | Input | SHA-256 |
 | --- | --- |
 | Installer | `47774088cd9eadc5aaddf38949e00a8b8f6eeb56c2192a5a72830d06d84a8aec` |
-| Mini runner | `1c79da779c82208f8524ddf4eaac338b8d68ad2dd7dc96e487bc66375ecaaab4` |
-| Mini bootstrap | `a56ab1bdb308092d4994bb9633167c0b287755afcbe5c1bb7ee10a60d89557d9` |
-| Laptop client | `6c3c9c28a9e994ea11f856ca76de46fac58507a72cad97ee962c6df88e6676ec` |
-| Scope | `18ced0435d5818755d7503bbb0339e56f7d72d7fbae6642a4830bef996b2333a` |
+| Mini runner | `dae2998da198cf220d1a0a7c7e98d035eb97e0f08a02fc41aa6ce9678543b436` |
+| Mini bootstrap | `740a7939ac5bb5d7b8f58ebe6821ac09cb18bb50ad32e76432535aeebd60a251` |
+| Laptop client | `712af351e14f74cf58c6fc53bacba5c6d0cb9ede45390bea19608eff28f645b1` |
+| Scope | `83da8dad5fa00a7842b570cfe37038c461421eecc62ed2eaadd957f0179e5535` |
 
 After approval, stage the bootstrap and all pinned inputs in a new Mini
 `/Users/operator/squirrelops-mini-resolver.*` directory. Name the package

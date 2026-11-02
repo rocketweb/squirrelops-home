@@ -162,7 +162,7 @@ def _get_local_ip(preferred_ip: str | None = None) -> str:
 
 
 def _get_mdns_hostname() -> str:
-    """Return the machine's mDNS hostname (e.g. ``matts-Mac-Studio.local.``).
+    """Return the machine's mDNS hostname (e.g. ``office-mac.local.``).
 
     On macOS, uses ``scutil --get LocalHostName`` which returns the Bonjour
     name.  On Linux, falls back to the short hostname.  The result always

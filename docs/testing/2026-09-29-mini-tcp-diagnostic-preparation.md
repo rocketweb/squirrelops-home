@@ -70,7 +70,7 @@ Laptop, root-owned directory mode 0700:
 `/root/squirrelops-tcp-client.50pnQQdV`
 
 Client SHA-256: `9811f0c95b9d08f3080eaf7f5468b5ba94c6138107b91694fe6943674d8b1336`.
-Read-only route check still selects `wlp0s20f3`, source `192.0.2.7`, for `.115`.
+Read-only route check still selects `wlp0s20f3`, source `192.168.20.7`, for `.115`.
 
 ## Operator step and continuation
 

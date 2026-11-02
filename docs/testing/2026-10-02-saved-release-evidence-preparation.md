@@ -56,19 +56,19 @@ Pinned inputs:
 
 | File | SHA-256 |
 | --- | --- |
-| `inspect_saved_release.py` | `2c801297ebbcfd36e7cc2d343095cc0c0bd5bc5ded6bcdf737db72e41a1f154c` |
-| `inspect_completed.py` | `aa876cc0fb1076b3f4cecce3a144bd4eee980ffa524b6cfb11fa58447c3ef739` |
-| `inspect-saved-release.sh` | `6ace16588eb951eca2396f149bcb6ad4e0b75a98e098d022579c380c306e1fef` |
+| `inspect_saved_release.py` | `254e57308dfe4ed81264aa6e1c16144fc8dc82ec8cf6e0c7e8deecd86761ee1f` |
+| `inspect_completed.py` | `b52ac6d84567b7a10bdf33664803451aa6dd80d6eeb96dd155fef5a4404cbd92` |
+| `inspect-saved-release.sh` | `6b88188cb60df58abc2f7c48ae8db9625b0efe192d894838d996f104bb9e9877` |
 
 ## Attended commands
 
-On the MacBook, 192.0.2.97. Its working app and sensor can remain running:
+On the MacBook, 192.168.20.97. Its working app and sensor can remain running:
 
 ```sh
 sudo /bin/bash /Users/operator/squirrelops-release-review.oFmWviec/inspect-saved-release.sh macbook
 ```
 
-On the Mini, 203.0.113.27. Leave its product services stopped:
+On the Mini, 100.64.0.27. Leave its product services stopped:
 
 ```sh
 sudo /bin/bash /Users/operator/squirrelops-release-review.6smlhIEz/inspect-saved-release.sh mini

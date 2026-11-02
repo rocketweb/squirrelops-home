@@ -49,7 +49,7 @@ cleanup only, not SSH/SMB acceptance or release readiness.
 
 ## Exact authority and scope
 
-- Mini only, `203.0.113.27`, ARM64, build `26A434`, boot `1790777754`.
+- Mini only, `100.64.0.27`, ARM64, build `26A434`, boot `1790777754`.
 - Original failure results:
   `/private/var/tmp/squirrelops-mini-post-reboot-results.3p_hssk9`.
 - Original private execution:
@@ -58,7 +58,7 @@ cleanup only, not SSH/SMB acceptance or release readiness.
   `/Library/SquirrelOps/acceptance-backups/post-reboot-1790777754-3a3cda47a7ea-attempt.json`.
   Require the expected parent, backup-name pattern and exact package digest.
 - Preserve IDs 1 through 6 exactly, plus ID 7, `home_assistant`, native address
-  `192.0.2.115`, port `51232`, active intent. Missing, additional, changed or
+  `192.168.20.115`, port `51232`, active intent. Missing, additional, changed or
   reordered rows fail the continuation; no SQL writes are performed.
 - The sole allowed system mutation is one `pfctl -X` for the privately retained
   token proven to match this run's original successful `pfctl -E`. No other
@@ -137,8 +137,8 @@ The original failure status digest still matches.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `mini_post_reboot_cleanup.py` | `197d68478fcf9a4ebced1d501840155876bb59a8bfd8be77d27db0a2181f054e` |
-| `finish-mini-post-reboot-cleanup.sh` | `85a3e7513ac1fca19d5d05b8840e84ef223f4e15b25b6ed9ecbd83c5482e5084` |
+| `mini_post_reboot_cleanup.py` | `45dd4f4ce9420e8a78c62e54383184464efba1b8470adea805d3745be68f7e75` |
+| `finish-mini-post-reboot-cleanup.sh` | `952c43c1f66b6d06656bb8c68c612af6584f5c2263687cc557927ec6bbec597e` |
 | Unchanged candidate | `3a3cda47a7eaec1a015edd82ad42edc91be10b64d181a805d29f114f2357893c` |
 
 The command below has completed. It is retained for provenance; do not rerun:

@@ -29,12 +29,12 @@ class IntentAndExport(unittest.TestCase):
     def test_seven_baseline_rows_are_preserved(self):
         self.assertEqual(module.validate_intent(module.EXPECTED_INTENT), [])
         for rows in (module.EXPECTED_INTENT[:-1], [*module.EXPECTED_INTENT, module.EXPECTED_INTENT[0]],
-                     [[1, "deep", "192.168.1.240", 445, "stopped"], *module.EXPECTED_INTENT[1:]]):
+                     [[1, "deep", "192.168.20.240", 445, "stopped"], *module.EXPECTED_INTENT[1:]]):
             with self.subTest(rows=rows), self.assertRaises(RuntimeError):
                 module.validate_intent(rows, additions=True)
 
     def test_automatic_host_listener_is_retained_after_start_not_at_baseline(self):
-        extra = [8, "dev_server", "192.168.1.115", 60123, "active"]
+        extra = [8, "dev_server", "192.168.20.115", 60123, "active"]
         rows = [*module.EXPECTED_INTENT, extra]
         with self.assertRaises(RuntimeError):
             module.validate_intent(rows)
@@ -42,11 +42,11 @@ class IntentAndExport(unittest.TestCase):
         self.assertEqual(rows[-1], extra)
 
     def test_new_virtual_hosts_and_native_ports_are_not_accepted(self):
-        for extra in ([8, "deep", "192.168.1.240", 8080, "active"],
-                      [8, "dev_server", "192.168.1.241", 60123, "active"],
-                      [8, "dev_server", "192.168.1.115", 22, "active"],
-                      [8, "mimic", "192.168.1.115", 60123, "active"],
-                      [8, "dev_server", "192.168.1.115", True, "active"]):
+        for extra in ([8, "deep", "192.168.20.240", 8080, "active"],
+                      [8, "dev_server", "192.168.20.241", 60123, "active"],
+                      [8, "dev_server", "192.168.20.115", 22, "active"],
+                      [8, "mimic", "192.168.20.115", 60123, "active"],
+                      [8, "dev_server", "192.168.20.115", True, "active"]):
             with self.subTest(extra=extra), self.assertRaises(RuntimeError):
                 module.validate_intent([*module.EXPECTED_INTENT, extra], additions=True)
 
@@ -75,16 +75,16 @@ class IntentAndExport(unittest.TestCase):
         result = subprocess.run([sys.executable, module.__file__], capture_output=True, text=True, timeout=5)
         self.assertEqual(result.returncode, 0, result.stderr)
         plan = json.loads(result.stdout)
-        self.assertEqual(plan["test_vips"], ["192.168.1.240"])
+        self.assertEqual(plan["test_vips"], ["192.168.20.240"])
         self.assertEqual(plan["configuration_edits"], 0)
         self.assertFalse(plan["database_recovery"])
         self.assertFalse(plan["third_party_filter_rule_changes"])
 
     def test_socket_export_keeps_only_scoped_guest_tcp_queues(self):
-        raw = ("p123\nccom.squir\nu309\nf5\nn192.168.1.240:50001->192.168.1.7:40000\n"
-               "TST=ESTABLISHED\nTQR=238\nTQS=0\nf6\nn192.168.1.240:50002\nTST=LISTEN\n"
-               "p124\ncother\nu501\nf5\nn192.168.1.240:50001\nTST=LISTEN\n"
-               "p125\ncother\nu309\nf5\nn192.168.1.115:12345->203.0.113.1:443\nTST=ESTABLISHED\n")
+        raw = ("p123\nccom.squir\nu309\nf5\nn192.168.20.240:50001->192.168.20.7:40000\n"
+               "TST=ESTABLISHED\nTQR=238\nTQS=0\nf6\nn192.168.20.240:50002\nTST=LISTEN\n"
+               "p124\ncother\nu501\nf5\nn192.168.20.240:50001\nTST=LISTEN\n"
+               "p125\ncother\nu309\nf5\nn192.168.20.115:12345->203.0.113.1:443\nTST=ESTABLISHED\n")
         rows = module.socket_metadata(raw)
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0], {"pid": 123, "local_port": 50001, "client_port": 40000,
@@ -133,7 +133,7 @@ class SessionGuards(unittest.TestCase):
     def test_preflight_requires_empty_ownership_not_old_stale_ledger(self):
         with patch.object(self.session, "owned", return_value=[]):
             self.session.check_stale_ledger()
-        for entries in (["192.168.1.240"], ["192.168.1.241"]):
+        for entries in (["192.168.20.240"], ["192.168.20.241"]):
             with patch.object(self.session, "owned", return_value=entries), self.assertRaises(RuntimeError):
                 self.session.check_stale_ledger()
 
@@ -247,7 +247,7 @@ class SessionGuards(unittest.TestCase):
         self.assertEqual(calls, [["/sbin/pfctl", "-s", "References"], ["/sbin/pfctl", "-X", token]])
 
     def test_baseline_addition_guard_switches_only_after_install(self):
-        extra = [8, "dev_server", "192.168.1.115", 60123, "active"]
+        extra = [8, "dev_server", "192.168.20.115", 60123, "active"]
         with patch.object(self.session, "read_intent", return_value=[*module.EXPECTED_INTENT, extra]):
             with self.assertRaises(RuntimeError):
                 self.session.verify_intent()
@@ -273,24 +273,24 @@ class SessionGuards(unittest.TestCase):
 class ClientGuards(unittest.TestCase):
     def inputs(self):
         now = 1790794800
-        endpoints = {"guest_ip": "192.168.1.240", "mappings": [
-            {"ip": "192.168.1.240", "port": port, "backend": 50000 + i}
+        endpoints = {"guest_ip": "192.168.20.240", "mappings": [
+            {"ip": "192.168.20.240", "port": port, "backend": 50000 + i}
             for i, port in enumerate((22, 445, 1234, 11434, 8765))]}
-        login = {"ip": "192.168.1.240", "username": "buildbot", "password": "Juniper!123456"}
+        login = {"ip": "192.168.20.240", "username": "buildbot", "password": "Juniper!123456"}
         status = {"phase": "ready_for_tests", "sensor_uid": 309, "remaining_seconds": 1100,
                   "package_sha256": module.PACKAGE_SHA, "test_scope": module.SCOPE,
-                  "test_vips": ["192.168.1.240"], "boot_seconds": module.post.BOOT,
+                  "test_vips": ["192.168.20.240"], "boot_seconds": module.post.BOOT,
                   "configuration_unchanged": True, "config_change_verified": True,
                   "time": datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
         return endpoints, login, status, now
 
     def test_valid_diagnostic_scope(self):
-        self.assertEqual(client_module.validate_inputs(*self.inputs()), "192.168.1.240")
+        self.assertEqual(client_module.validate_inputs(*self.inputs()), "192.168.20.240")
 
     def test_wrong_scope_boot_or_old_candidate_is_rejected(self):
         for key, value in (("test_scope", "mini-post-reboot-240"), ("boot_seconds", 1),
                            ("configuration_unchanged", False), ("config_change_verified", False),
-                           ("test_vips", ["192.168.1.241"]), ("package_sha256", "old"),
+                           ("test_vips", ["192.168.20.241"]), ("package_sha256", "old"),
                            ("remaining_seconds", 599), ("phase", "stopped")):
             endpoints, login, status, now = self.inputs()
             status[key] = value
@@ -299,7 +299,7 @@ class ClientGuards(unittest.TestCase):
 
     def test_extra_and_aliased_backends_are_rejected(self):
         endpoints, login, status, now = self.inputs()
-        endpoints["mappings"].append({"ip": "192.168.1.240", "port": 8080, "backend": 51000})
+        endpoints["mappings"].append({"ip": "192.168.20.240", "port": 8080, "backend": 51000})
         with self.assertRaises(RuntimeError):
             client_module.validate_inputs(endpoints, login, status, now)
         endpoints["mappings"].pop()

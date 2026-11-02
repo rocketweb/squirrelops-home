@@ -6,7 +6,7 @@ then let Matt perform an attended Apple-menu Restart after saving other work.
 
 ## Exact change and blast radius
 
-On `100.108.203.27` only, these two effective launchd overrides change:
+On `100.64.0.27` only, these two effective launchd overrides change:
 
 | Job | Before | After |
 | --- | --- | --- |
@@ -18,7 +18,7 @@ installation, database update, configuration edit, PF mutation or Little Snitch
 rule change. Already-running KeepAlive jobs can continue running while disabled.
 The two overrides are intended to prevent their loading on the next boot; this
 must be verified after the actual reboot. A pending receipt is not stopped-state
-acceptance. Nothing on the Studio or laptop is changed.
+acceptance. Nothing on test host A or the laptop is changed.
 
 The attended restart interrupts all mini workloads and SSH. The old five-second
 shutdown budget could still truncate cleanup. Do not claim the reboot proves a
@@ -46,7 +46,7 @@ On a failure, retain evidence and any partial disabled hold; do not automaticall
 enable, stop or restart anything. Do not reboot on a failure or blindly rerun.
 The inverse is `launchctl enable` for exactly the same two jobs, but only at the
 reviewed upgrade boundary after stopped-state and `.240`-only configuration
-checks. Do not reload the old pool while the Studio owns `.241`. Backups are
+checks. Do not reload the old pool while test host A owns `.241`. Backups are
 evidence, not permission for a database downgrade or global network reset.
 
 After `READY FOR ATTENDED RESTART`, Matt saves other work and restarts the mini.

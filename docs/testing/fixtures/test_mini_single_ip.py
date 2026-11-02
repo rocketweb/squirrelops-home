@@ -62,7 +62,7 @@ class SingleIPTests(unittest.TestCase):
         _canonicalize_profile_runtime(config)
         # Profile selection can override capacity, but never the range bounds.
         scouts = config["scouts"]
-        allocator = IPAllocator("192.168.1.0/24", "192.168.1.1", "192.168.1.115",
+        allocator = IPAllocator("192.168.20.0/24", "192.168.20.1", "192.168.20.115",
                                 scouts["virtual_ip_range_start"], scouts["virtual_ip_range_end"])
         self.assertEqual(allocator.allocate(50), [module.VIP])
         self.assertEqual(allocator.allocate(1), [])
@@ -184,9 +184,9 @@ class SingleIPTests(unittest.TestCase):
         change.assert_not_called()
 
     def test_ledger_rejects_studio_address(self):
-        self.assertEqual(module.base.parse_ledger("192.168.1.240|en0\n"), [module.VIP])
+        self.assertEqual(module.base.parse_ledger("192.168.20.240|en0\n"), [module.VIP])
         with self.assertRaisesRegex(RuntimeError, "approved scope"):
-            module.base.parse_ledger("192.168.1.241|en0\n")
+            module.base.parse_ledger("192.168.20.241|en0\n")
 
     def test_probe_is_bounded_to_240_and_retains_reply_evidence(self):
         from scapy.all import ARP, Ether
@@ -215,8 +215,8 @@ class SingleIPTests(unittest.TestCase):
             self.session.observe()
         self.assertEqual(popen.call_count, 2)
         for call in popen.call_args_list:
-            self.assertEqual(call.args[0][-1], "host 192.168.1.7 and host 192.168.1.240")
-            self.assertNotIn("192.168.1.241", " ".join(call.args[0]))
+            self.assertEqual(call.args[0][-1], "host 192.168.20.7 and host 192.168.20.240")
+            self.assertNotIn("192.168.20.241", " ".join(call.args[0]))
         for _, output, _ in self.session.captures:
             output.close()
 
@@ -245,7 +245,7 @@ class SingleIPTests(unittest.TestCase):
 
     def test_client_requires_verified_single_ip_scope(self):
         self.assertEqual(client.validate_inputs(*self.client_inputs()), module.VIP)
-        for field, value in (("test_scope", "old"), ("test_vips", ["192.168.1.241"]), ("config_change_verified", False)):
+        for field, value in (("test_scope", "old"), ("test_vips", ["192.168.20.241"]), ("config_change_verified", False)):
             endpoints, login, status, now = self.client_inputs()
             status[field] = value
             with self.subTest(field=field), self.assertRaises(RuntimeError):
@@ -253,10 +253,10 @@ class SingleIPTests(unittest.TestCase):
 
     def test_client_cannot_target_studio_even_with_candidate_and_scope(self):
         endpoints, login, status, now = self.client_inputs()
-        endpoints["mappings"].append({"ip": "192.168.1.241", "port": 22, "backend": 51000})
+        endpoints["mappings"].append({"ip": "192.168.20.241", "port": 22, "backend": 51000})
         with self.assertRaises(RuntimeError):
             client.validate_inputs(endpoints, login, status, now)
-        endpoints["guest_ip"] = login["ip"] = "192.168.1.241"
+        endpoints["guest_ip"] = login["ip"] = "192.168.20.241"
         with self.assertRaises(RuntimeError):
             client.validate_inputs(endpoints, login, status, now)
 

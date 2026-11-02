@@ -82,10 +82,10 @@ expected local value. The original staging and failed-run evidence are retained.
 
 | Input | SHA-256 |
 | --- | --- |
-| Corrected runner | `b97147d63a35f8a7b93eade3f01c7a2dfc03a80a6f09b3c29cec7156885cc068` |
-| Corrected bootstrap | `4e6fdb557e28ac976f83f4fd76f20f2497d5edefbf5d4a4b896e47f7fd40154b` |
+| Corrected runner | `5aeabcf7cb3a99a852a35c9582c3042642de49c4968d107824328f0c00b33c21` |
+| Corrected bootstrap | `0954ed7caa9154ffd52bec0c89dea52546ac83bc6fe130c765c6e6ca613dab86` |
 | Unchanged package | `3a3cda47a7eaec1a015edd82ad42edc91be10b64d181a805d29f114f2357893c` |
-| Unchanged approved scope | `288eb8eb45a50caaac9538f02ac1cc23ca697573e967771a06314cfb2725f24e` |
+| Unchanged approved scope | `881abc0e7cdc378aa6d84ca1380990a14b341daed8f9e5cedcc3670feb27cd05` |
 
 The unchanged candidate is
 `build/test-artifacts/SquirrelOpsHome-2.1.0-launchd-budget-20260930-local-test.pkg`.

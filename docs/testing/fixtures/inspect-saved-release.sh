@@ -29,8 +29,8 @@ verify_digest() {
         exit 1
     fi
 }
-verify_digest inspect_saved_release.py 2c801297ebbcfd36e7cc2d343095cc0c0bd5bc5ded6bcdf737db72e41a1f154c
-verify_digest inspect_completed.py aa876cc0fb1076b3f4cecce3a144bd4eee980ffa524b6cfb11fa58447c3ef739
+verify_digest inspect_saved_release.py 254e57308dfe4ed81264aa6e1c16144fc8dc82ec8cf6e0c7e8deecd86761ee1f
+verify_digest inspect_completed.py b52ac6d84567b7a10bdf33664803451aa6dd80d6eeb96dd155fef5a4404cbd92
 echo 'Pinned read-only inputs verified. Reading completed private evidence only.'
 echo 'No services, installed data, network probes, firewall rules or permissions will change.'
 exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C \

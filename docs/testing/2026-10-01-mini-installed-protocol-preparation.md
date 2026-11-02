@@ -61,9 +61,9 @@ The package file is only a source for a pinned private Python interpreter.
 | Input | SHA-256 |
 | --- | --- |
 | `mini_installed_protocol_window.py` | `a77017016b1f1a3da16367d3aa0210efa4c175c46757994a1c84465ca9e1ba32` |
-| Corrected shared diagnostic runner | `5f1c06c48157dc617bcbbfa92c74616bdf68d9f4457c7730f1b3df410c42a95b` |
+| Corrected shared diagnostic runner | `4e80676aa412417106317f6b140716069c1f0138c6846280e84071dfca558b8e` |
 | `start-mini-installed-protocol.sh` | `9bcd89898219e09b298fc427c857306efca5b5fdfe9a815f401d4f8e39341ea8` |
-| [Prepared scope](2026-10-01-mini-installed-protocol-scope.md) | `1bd6c86d12b7fc6adbe3b43f4b0d3d643e3ec968ce475d3f84075de1f4b73e8f` |
+| [Prepared scope](2026-10-01-mini-installed-protocol-scope.md) | `004310700b2f30603a0170b7a3fdd6cd42a828d301cc8b7e971eba6c4ffef0d8` |
 
 ```sh
 sudo /bin/bash /Users/operator/squirrelops-mini-protocol.WJuCiUml/start-mini-installed-protocol.sh

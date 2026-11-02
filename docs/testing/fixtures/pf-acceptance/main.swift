@@ -7,7 +7,7 @@ import os
 // Linked helper sources use this logger, but no enrollment service is started.
 let logger = Logger(subsystem: "com.squirrelops.test.pf-acceptance", category: "probe")
 
-let ips = ["192.168.1.239", "192.168.1.240"]
+let ips = ["192.168.20.239", "192.168.20.240"]
 let ports = [61322, 61445]
 let endpoints: [[String: Any]] = ips.map { ["ip": $0, "direct_ports": [Int]()] }
 let forwards: [[String: Any]] = ips.enumerated().map { index, ip in

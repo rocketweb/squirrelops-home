@@ -30,8 +30,8 @@ class ClientTests(unittest.TestCase):
         stream.recv.side_effect = reads
         with patch.object(client.socket, "socket", return_value=stream):
             result = client.probe(52000)
-        stream.bind.assert_called_once_with(("192.168.1.7", 0))
-        stream.connect.assert_called_once_with(("192.168.1.115", 52000))
+        stream.bind.assert_called_once_with(("192.168.20.7", 0))
+        stream.connect.assert_called_once_with(("192.168.20.115", 52000))
         stream.sendall.assert_not_called()
         return result
 
@@ -55,8 +55,8 @@ class ClientTests(unittest.TestCase):
             self.assertFalse(self.probe(reads=reads)["banner_valid"])
 
     def test_route_requires_the_authorized_interface_and_source(self):
-        client.validate_route([{"dev": "wlp0s20f3", "prefsrc": "192.168.1.7"}])
-        for rows in ([], [{"dev": "eth0", "prefsrc": "192.168.1.7"}], [{"dev": "wlp0s20f3", "prefsrc": "192.168.1.9"}]):
+        client.validate_route([{"dev": "wlp0s20f3", "prefsrc": "192.168.20.7"}])
+        for rows in ([], [{"dev": "eth0", "prefsrc": "192.168.20.7"}], [{"dev": "wlp0s20f3", "prefsrc": "192.168.20.9"}]):
             with self.assertRaises(RuntimeError):
                 client.validate_route(rows)
 

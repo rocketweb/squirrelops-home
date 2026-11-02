@@ -9,7 +9,7 @@ This is not a passing A5 record and does not authorize release publication.
 ## Verified hosts
 
 Matt selected test host B (the mini) and corrected its Tailscale address to
-`203.0.113.27`. Existing SSH credentials for `operator` connected with strict
+`100.64.0.27`. Existing SSH credentials for `operator` connected with strict
 host-key verification. No host-key exception or SSH configuration change was
 needed. Serial commands reuse a temporary local SSH control connection.
 
@@ -17,17 +17,17 @@ needed. Serial commands reuse a temporary local SSH control connection.
 | --- | --- |
 | Mini identity | Test host B, `test-host-b.tailnet.example` |
 | OS | macOS 27.0, build `26A428`, ARM64 |
-| Hardware | `Mac16,11`, 24 GiB RAM, hardware virtualization available |
+| Hardware | Apple M4 Pro, 24 GiB RAM, hardware virtualization available |
 | Available disk space | Approximately 41 GiB at the snapshot |
 | SSH and console user | `operator`, UID 501, administrator group membership |
 | Noninteractive administrator access | Unavailable; no password requested or read |
-| Ethernet | `en0`, `192.0.2.115/24`, MAC `00:00:5e:00:53:02` |
-| Wi-Fi | `en1`, `192.0.2.254/24`, current MAC `00:00:5e:00:53:03` |
-| Default physical route | `en0` through `192.0.2.1` |
-| Tailscale management | `203.0.113.27` on `utun4` |
+| Ethernet | `en0`, `192.168.20.115/24`, MAC `d0:11:e5:3c:4d:5e` |
+| Wi-Fi | `en1`, `192.168.20.254/24`, current MAC `ea:03:9b:4c:2d:01` |
+| Default physical route | `en0` through `192.168.20.1` |
+| Tailscale management | `100.64.0.27` on `utun4` |
 | Existing SquirrelOps | App, sensor directory, helper binary, component receipts and launchd jobs were not found; localhost health did not respond |
-| Linux client | Existing authorized SSH to `root@192.0.2.7`, hostname `laptop` |
-| Client physical route | `wlp0s20f3`, source `192.0.2.7`, to both mini LAN addresses |
+| Linux client | Existing authorized SSH to `root@192.168.20.7`, hostname `laptop` |
+| Client physical route | `wlp0s20f3`, source `192.168.20.7`, to both mini LAN addresses |
 
 One ICMP probe to each mini LAN address succeeded. That establishes basic
 reachability, not proof that each probe entered the expected interface. The
@@ -41,7 +41,7 @@ The mini has Python, Swift, tcpdump and netcat. No software was installed.
 
 The mini is not an empty disposable host:
 
-- Ollama listens on `192.0.2.115:11434`; another inference process listens on
+- Ollama listens on `192.168.20.115:11434`; another inference process listens on
   loopback. Do not stop, reconfigure or benchmark either service for A5.
 - Wildcard TCP listeners exist on ports 22 and 445, in both address families.
   Native SSH and file-sharing services must remain untouched. A successful TCP
@@ -95,7 +95,7 @@ loaded rules. Never globally flush rules or disable PF to obtain a clean test.
 
 - Test server: the mini only. Client: the laptop only. No firewall changes on
   test host A or laptop; no Tailscale, VPN, Wi-Fi or default-route changes.
-- Selected test VIPs: `192.0.2.240` and `192.0.2.241` on the physical LAN.
+- Selected test VIPs: `192.168.20.240` and `192.168.20.241` on the physical LAN.
   Matt replied, "confirmed, there is nothing on those ips", to the request to
   confirm they were unused and outside the DHCP pool. This records operator
   confirmation, not an independent router configuration audit. Three earlier

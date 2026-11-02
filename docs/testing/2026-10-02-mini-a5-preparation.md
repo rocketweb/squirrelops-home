@@ -8,7 +8,7 @@ The revised run has now completed all eight phases and scoped cleanup. See the
 The paths and 24-test count below describe the original bundle. Do not rerun it;
 the corrected bundle must be separately pinned and verified before another run.
 
-Matt approved Mini-only temporary IPs 192.0.2.239 and .240 after conflict
+Matt approved Mini-only temporary IPs 192.168.20.239 and .240 after conflict
 checks, disposable listeners, packet captures, deliberate listener/state-cleanup
 failures and scoped cleanup. This does not authorize changing the installed
 services/data, Little Snitch, test host A, .241, or releasing a package.
@@ -27,7 +27,7 @@ the installed helper socket or edit its alias ledger.
   Service UID/GID 309:309 and Matt UID/GID 501:20 remain unchanged.
 - Installed child Python hash remains
   `d2555cd22a33506826f9eb069bb13fb0cc41303c7da41da5b761967d616f4147`.
-- Laptop routes both targets through wlp0s20f3 as 192.0.2.7. The default
+- Laptop routes both targets through wlp0s20f3 as 192.168.20.7. The default
   interpreter has no Scapy, so the new client uses tested standard-library
   AF_PACKET frames instead. No dependency was installed.
 - Root-only PF inventory, database/config fingerprints and address-conflict

@@ -33,7 +33,7 @@ class RelayCleanupTests(unittest.TestCase):
     def records():
         def row(command, stdout="", stderr="", code=0):
             return dict(command=command, stdout=stdout, stderr=stderr, exit=code)
-        rows = [row(module.upgrade.LISTENERS, "u0\nn*:22\nn*:445\nn*:5900\nu501\nn192.168.1.115:11434\n")]
+        rows = [row(module.upgrade.LISTENERS, "u0\nn*:22\nn*:445\nn*:5900\nu501\nn192.168.20.115:11434\n")]
         rows.append(row(["/sbin/pfctl", "-s", "info"], "Status: Disabled\ncurrent entries 0\n"))
         for flags in (["-s", "Anchors"], ["-sr"], ["-sn"]):
             rows.append(row(["/sbin/pfctl", *flags]))
@@ -56,7 +56,7 @@ class RelayCleanupTests(unittest.TestCase):
         module.validate_cleanup_intent(after)
 
     def test_no_blanket_acceptance_of_new_changed_missing_or_reordered_rows(self):
-        variants = [module.EXPECTED[:-1], [*module.EXPECTED, [8, "home_assistant", "192.168.1.115", 50000, "active"]],
+        variants = [module.EXPECTED[:-1], [*module.EXPECTED, [8, "home_assistant", "192.168.20.115", 50000, "active"]],
                     list(reversed(module.EXPECTED))]
         for index in range(7):
             for field in range(5):
@@ -126,7 +126,7 @@ class RelayCleanupTests(unittest.TestCase):
 
     def test_command_allowlist_blocks_every_other_mutation(self):
         forbidden = [["/sbin/pfctl", "-E"], ["/sbin/pfctl", "-d"], ["/sbin/pfctl", "-F", "all"],
-                     ["/sbin/pfctl", "-f", "/tmp/rules"], ["/sbin/ifconfig", "en0", "-alias", "192.168.1.240"],
+                     ["/sbin/pfctl", "-f", "/tmp/rules"], ["/sbin/ifconfig", "en0", "-alias", "192.168.20.240"],
                      ["/bin/launchctl", "disable", "system/com.squirrelops.sensor"],
                      ["/bin/launchctl", "bootout", "system/com.squirrelops.sensor"],
                      ["/usr/sbin/installer", "-pkg", "candidate.pkg", "-target", "/"],

@@ -22,7 +22,7 @@ constitute successful decoy acceptance.
 Protected sensor logs show a successful deployment at 13:05:42 followed by:
 
 ```text
-IP conflict: real device at 192.0.2.200, evacuating mimic 'business.local'
+IP conflict: real device at 192.168.20.200, evacuating mimic 'business.local'
 ```
 
 The sensor also reported the Mac's own Ethernet MAC at both its physical
@@ -42,7 +42,7 @@ allocation; failed routine telemetry does not itself prove that an existing
 decoy should be removed. Real foreign-MAC conflicts remain detectable.
 
 Live native-helper test on this machine: 24 unique local link identities,
-selected LAN `en0`, address `192.0.2.18`, gateway `192.0.2.1`; the real
+selected LAN `en0`, address `192.168.20.18`, gateway `192.168.20.1`; the real
 Ethernet MAC was present and was not the privacy placeholder. No alias, PF,
 route, or VPN mutation was needed for that check.
 
@@ -71,12 +71,12 @@ defect explains a path to it.
 
 Classic decoys had a separate bind-address resolver that preferred the global
 UDP route even after the helper selected Ethernet. The regression uses an
-`en0` address of `192.0.2.18` and VPN route address `198.51.100.79`.
+`en0` address of `192.168.20.18` and VPN route address `100.65.4.79`.
 
 The configured interface is now authoritative. A route-selected address is
 preferred only if that interface owns it; otherwise its usable physical address
 is used. A missing LAN does not fall back to the VPN or wildcard bind. Live
-read-only resolution selected `192.0.2.18` while the VPN remained enabled.
+read-only resolution selected `192.168.20.18` while the VPN remained enabled.
 
 ### 4. Local-test credential isolation
 

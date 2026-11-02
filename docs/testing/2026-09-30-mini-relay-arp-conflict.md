@@ -1,18 +1,18 @@
 # Mini diagnostic attempt stopped by a test host A address conflict
 
 At 2026-09-30 23:09:48 UTC, the attended diagnostic runner stopped before
-installation because `192.0.2.240` answered its ARP conflict check.
+installation because `192.168.20.240` answered its ARP conflict check.
 
 ## Current evidence
 
 - The [ARP report](evidence/2026-09-30-mini-relay-conflict/arp-check-1.json)
-  records one reply for `.240`, MAC `00:00:5e:00:53:01`.
+  records one reply for `.240`, MAC `1c:1d:d3:5a:6b:03`.
 - Read-only local `ifconfig` identifies that MAC as test host A's `en0`,
   whose real address is `.18`. Test host A also has `.240/32` on `lo0`.
 - Test host A's ARP table contains a permanent published proxy-only `.240`
   entry on `en0` with the same MAC. Its SquirrelOps sensor job is running,
   PID 61581 at inspection time. The exact decoy row/host identity was not read.
-- The Mini's en0 MAC is `00:00:5e:00:53:02`, a different machine. The responder
+- The Mini's en0 MAC is `d0:11:e5:3c:4d:5e`, a different machine. The responder
   is therefore test host A, not the Mini reflecting its own interface identity.
 - Mini sensor receipt remains `1790784842`. Both product jobs remain explicitly
   disabled; no matching product process was observed. The new package was not

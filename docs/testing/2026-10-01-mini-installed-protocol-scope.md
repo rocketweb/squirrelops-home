@@ -4,12 +4,12 @@ Prepared scope. No startup is authorized until the attended confirmation below.
 
 ## Exact target
 
-- Mini `100.108.203.27`, ARM64 macOS build `26A434`, boot `1790777754`.
+- Mini `100.64.0.27`, ARM64 macOS build `26A434`, boot `1790777754`.
 - Already-installed diagnostic package SHA-256:
   `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
 - Both app/sensor receipt times: `1790818368`.
 - Decoy `.240` only. Laptop client `.7` through `wlp0s20f3`.
-- No Studio, `.241`, Mini native service probes, configuration edits or SQL recovery.
+- No test host A, `.241`, Mini native service probes, configuration edits or SQL recovery.
 - Installation and normal restart acceptance already passed; neither is repeated.
 
 ## Prior cleanup and preflight
@@ -28,9 +28,9 @@ Existing saved identities remain:
 
 | IDs | Address | Services |
 | --- | --- | --- |
-| 1 through 5 | 192.168.1.240 | SMB 445, SSH 22, Ollama 11434, OpenAI-compatible 1234, MCP 8765 |
-| 6 | 192.168.1.115 | dev_server 60556 |
-| 7 | 192.168.1.115 | home_assistant 51232 |
+| 1 through 5 | 192.168.20.240 | SMB 445, SSH 22, Ollama 11434, OpenAI-compatible 1234, MCP 8765 |
+| 6 | 192.168.20.115 | dev_server 60556 |
+| 7 | 192.168.20.115 | home_assistant 51232 |
 
 Saved active intent must remain unchanged. Existing discovery and automatic
 classic-decoy deployment may run; additional `.115` high-port listeners are
@@ -58,7 +58,7 @@ Consent: `START INSTALLED BUILD AND TEST 240`.
 
 The operator must send `READY FOR TESTS` immediately when it appears, rather than
 waiting for cleanup. Keep the Terminal open. New filter prompts stay unanswered.
-No Little Snitch rules, global PF policy, native services or Studio state change.
+No Little Snitch rules, global PF policy, native services or test host A state change.
 
 The package file is used only to extract a pinned private Python interpreter;
 it is never installed. The original installed artifact, database, configuration

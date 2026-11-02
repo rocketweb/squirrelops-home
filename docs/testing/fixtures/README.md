@@ -4,11 +4,15 @@ These are the source and regression tests for the attended Mini/laptop sessions
 recorded in the dated reports in the parent directory. They are not general
 installation, repair, cleanup or penetration-testing commands.
 
-The dated reports label machines generically (test host A, test host B or "the
-mini", the laptop client) and show addresses from documentation ranges, keeping
-each original last octet so shorthand such as `.240` still lines up. Scripts and
-scope documents pinned by digest were left byte-identical, so their literals can
-differ from the reports that describe them.
+The dated reports, scope documents and scripts label machines generically (test
+host A, test host B or "the mini", the laptop client) and use substitute
+addresses. The home LAN appears as 192.168.20.0/24, and tailnet and VPN addresses
+as other 100.64.0.0/10 addresses. Each keeps its original last octet, so shorthand
+such as `.240` still lines up. MAC addresses keep their vendor prefix or locally
+administered bit and their zero-padding pattern. Every SHA-256 that pins one of
+these files was recomputed after the substitution, so it describes the file as
+it is here, not the bytes originally run. Package digests are unchanged. The
+original files remain in git history.
 
 Live runners pin a particular package, host, boot, configuration, prior receipt
 and approved scope. Many of those sessions have been consumed. Do not run a

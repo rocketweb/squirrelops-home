@@ -17,21 +17,21 @@ struct LANRouteTests {
             #expect(arguments == ["-a"])
             return CommandResult(status: 0, stdout: """
                 en0: flags=1
-                    ether 1c:1d:d3:e0:7d:03
-                    ether 1c:1d:d3:e0:7d:03
+                    ether 1c:1d:d3:5a:6b:03
+                    ether 1c:1d:d3:5a:6b:03
                     ether 02:00:00:00:00:00
                     ether 00:00:00:00:00:00
                     ether ff:ff:ff:ff:ff:ff
                     ether invalid
                 """, stderr: "")
         }
-        #expect(macs == ["1c:1d:d3:e0:7d:03"])
+        #expect(macs == ["1c:1d:d3:5a:6b:03"])
     }
 
     @Test("Failed or redacted identity observation fails closed")
     func failedLocalMACObservation() {
         for result in [
-            CommandResult(status: 1, stdout: "ether 1c:1d:d3:e0:7d:03", stderr: "failed"),
+            CommandResult(status: 1, stdout: "ether 1c:1d:d3:5a:6b:03", stderr: "failed"),
             CommandResult(status: 0, stdout: "ether 02:00:00:00:00:00", stderr: ""),
         ] {
             #expect(throws: (any Error).self) {

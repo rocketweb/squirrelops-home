@@ -8,7 +8,7 @@ test host A configuration, service, alias or filter changes were performed.
 ## Scope and safeguards
 
 The [approved scope](2026-09-30-mini-single-ip-scope.md) limits the test to
-`192.0.2.240` and changes only `scouts.virtual_ip_range_end` from 241 to 240
+`192.168.20.240` and changes only `scouts.virtual_ip_range_end` from 241 to 240
 and `scouts.max_virtual_ips` from 2 to 1 in the mini's sensor YAML. The installer
 is unchanged, SHA-256
 `3a3cda47a7eaec1a015edd82ad42edc91be10b64d181a805d29f114f2357893c`.
@@ -68,12 +68,12 @@ replacement, installation, real-VM restart, LAN acceptance or A5 isolation.
 - Mini directory: `/Users/operator/squirrelops-mini-single-ip.GhTxy3KM`.
 - Laptop directory: `/root/squirrelops-mini-upgrade-client.AK8t3vyw`.
 - Both are private mode-0700 directories with mode-0600 inputs.
-- Runner SHA: `3a37156ff54ee8e0086b84036cbe155f4758509d93471047e6a28262e165e943`.
-- Bootstrap SHA: `e66dcc297f8b8bbc102867a32ac6bcaf8ce4c89fcee2353b51bccbb15f419e97`.
-- Scope SHA: `10335f119ef1b5c06dab6b522c3e0cdb8588ade7fae25e37823c002f8b7450f2`.
-- New config SHA: `6b492246632eee7bc3975e84fc7c75699d3dcdfc15f2ec542ec673ab243b4bd8`.
-- Laptop wrapper SHA: `71cc5a99982d0a4877f24f63c5d7ba70f14b93531cb85d93aaa6340ec455bec3`.
-- Unchanged client dependency SHA: `15b3bb270b77d3801870d2a81b64dee266a8f823ce234f6b2be2ff360b02b7f6`.
+- Runner SHA: `d2bd94df4abd88663cd07ed5df316ae667eb51c66f8fd2dacc6045225e7d4cde`.
+- Bootstrap SHA: `5a85561d47b6dcf36096377f4de4b4a03b334e7ac03b40204031698ad3d0e27b`.
+- Scope SHA: `f49145d774f5fbbbfa8e605bd707759ffa80abf1f3216b7d6e69f56868c747ce`.
+- New config SHA: `1318489677a7143395487f4a07703cac31b77577daf276000c36ca39414c2aa5`.
+- Laptop wrapper SHA: `1ef90457cbcab376dee6d6683d28947e90cd4240075f1fd1d421b0218992523e`.
+- Unchanged client dependency SHA: `f10d1b894eac9c05f13e2677f790d2f398d26e750eada6be2d63fdfcd44aab63`.
 
 All mini inputs and the unchanged candidate are checksum-verified by the root
 bootstrap after copying into a fresh private directory. The staged source files
@@ -94,7 +94,7 @@ minutes, followed by guarded teardown; Return stops early.
 
 For client continuation, use only `mini_single_ip_client.py --run` with the new
 laptop directory. First verify fresh root-owned readiness for this exact package,
-`test_scope=mini-single-ip-240`, `test_vips=[192.0.2.240]`, and
+`test_scope=mini-single-ip-240`, `test_vips=[192.168.20.240]`, and
 `config_change_verified=true`. Transfer only the synthetic guest login and the
 matching endpoint/readiness JSON privately, without displaying credentials.
 The old wrapper must not be used for this scope. Retain results and verify

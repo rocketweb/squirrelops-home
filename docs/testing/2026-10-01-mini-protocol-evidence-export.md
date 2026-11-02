@@ -8,7 +8,7 @@ completed export, not authorization for another live test.
 
 ## Scope and safety
 
-Target: Mini `203.0.113.27`, boot `1790777754`. Resolve the completed run
+Target: Mini `100.64.0.27`, boot `1790777754`. Resolve the completed run
 through the exact root-private claim
 `/Library/SquirrelOps/acceptance-backups/protocol-1790777754-3d18ebac2fae-attempt.json`.
 Require the expected package checksum, a direct child named
@@ -57,9 +57,9 @@ Shell syntax and `git diff --check` passed. Remote copies match local hashes.
 
 | Input | SHA-256 |
 | --- | --- |
-| `export-mini-protocol-evidence.sh` | `6c64f9d1b361ca81009d6ec1dbf201e4c9fb24b8c90066cf782ddfcec6bdc6b3` |
-| `mini_protocol_evidence_export.py` | `9d436c96a4e32cbe18197ecb85bf2f3f1efe6d2491e06e236673a1017cc809eb` |
-| Existing safe-read/parser dependency | `ff85896f538b1ff5410d06a06b2129d9035dfe6edb9a51cfdb88b4026bab0380` |
+| `export-mini-protocol-evidence.sh` | `fed800b8b50c2d172676e392bf2702de6071d52226f27b533478367ced73acd8` |
+| `mini_protocol_evidence_export.py` | `77188076e308febc2b46d501b7b7585d80bdfea06276f42cfa29597f37b2b8fd` |
+| Existing safe-read/parser dependency | `ffcabccb69fd9700ebf62ba91ebb1cf685abae91e9838ac6a2761ff2a5e13cfc` |
 
 ## Attended command
 

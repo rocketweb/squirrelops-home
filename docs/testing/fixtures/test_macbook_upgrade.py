@@ -22,7 +22,7 @@ def test_plan_does_not_require_privileges_or_mutate():
     result = subprocess.run([sys.executable, spec.origin], check=True, capture_output=True, text=True)
     plan = json.loads(result.stdout)
     assert plan['mode'] == 'plan_only'
-    assert plan['host'] == '192.168.1.97'
+    assert plan['host'] == '192.168.20.97'
     assert plan['preserve_data']
     assert not plan['uninstall'] and not plan['manual_pf_writes']
 
@@ -62,7 +62,7 @@ def test_rows_can_be_read_from_old_database_schema_without_side_effects():
 
 
 def test_unconditional_translation_rejected_after_upgrade():
-    old = 'rdr pass on en0 inet proto tcp from any to 192.168.1.203 port = 22 -> 127.0.0.1 port 60000\n'
+    old = 'rdr pass on en0 inet proto tcp from any to 192.168.20.203 port = 22 -> 127.0.0.1 port 60000\n'
     assert upgrade.check_translation(old, after=False)['legacy_rdr_pass'] == 1
     with pytest.raises(RuntimeError, match='survived upgrade'):
         upgrade.check_translation(old, after=True)

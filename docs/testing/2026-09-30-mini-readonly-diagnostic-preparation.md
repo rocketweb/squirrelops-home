@@ -78,8 +78,8 @@ Staged file hashes, independently checked over SSH:
 
 | File | SHA-256 |
 | --- | --- |
-| `mini_readonly_diagnostic_export.py` | `ff85896f538b1ff5410d06a06b2129d9035dfe6edb9a51cfdb88b4026bab0380` |
-| `export-mini-readonly-diagnostics.sh` | `d223a860295a5b539efbc9b1777ca731153a661435cb43a11368fc101c0a25d5` |
+| `mini_readonly_diagnostic_export.py` | `ffcabccb69fd9700ebf62ba91ebb1cf685abae91e9838ac6a2761ff2a5e13cfc` |
+| `export-mini-readonly-diagnostics.sh` | `fc9c2ac4229cec6703d743df9dbdb816d9706a55449b3964ad019b8caaf5017b` |
 
 The engineering verification skill informed redaction/guard tests and the
 separation between a prepared exporter and an executed, diagnosed live result.

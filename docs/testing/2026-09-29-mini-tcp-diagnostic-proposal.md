@@ -15,15 +15,15 @@ contains no corresponding inbound TCP records.
 
 ## Approved bounds
 
-- Server: Matt's mini, Tailscale management `100.108.203.27`, concrete Ethernet
-  address `192.168.1.115` on `en0`.
-- Client: authorized laptop `192.168.1.7`, through `wlp0s20f3`.
-- At most two temporary TCP listeners. Each binds only `192.168.1.115`, using
+- Server: test host B (the mini), Tailscale management `100.64.0.27`, concrete Ethernet
+  address `192.168.20.115` on `en0`.
+- Client: authorized laptop `192.168.20.7`, through `wlp0s20f3`.
+- At most two temporary TCP listeners. Each binds only `192.168.20.115`, using
   an OS-selected unused port in 49152 through 65535; no wildcard bind or port
   takeover. Verify allocated ports before client traffic.
 - Both use the same installed, root-owned sensor Python executable and fixed
   standalone probe code. One process drops privileges to `_squirrelops`
-  UID/GID 309; the other to `matt` UID 501, primary GID 20. Neither serves files,
+  UID/GID 309; the other to `operator` UID 501, primary GID 20. Neither serves files,
   authenticates users, starts a shell or executes client-supplied content.
 - Only the authorized laptop receives a fixed diagnostic response. Other peers
   are closed without a response. No real or synthetic credential is required.

@@ -15,7 +15,7 @@ The observation results below remain unchanged: no new protocol probes ran.
 ## Exact run and retained evidence
 
 - Package SHA-256: `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
-- Approved target: Mini `203.0.113.27`, decoy `.240` only.
+- Approved target: Mini `100.64.0.27`, decoy `.240` only.
 - Private execution: `/private/var/root/squirrelops-mini-relay.r2RulhrI`.
 - Private backup: `/Library/SquirrelOps/acceptance-backups/mini-relay-20260930.m06dh5r3`.
 - Sanitized results: `/private/var/tmp/squirrelops-mini-relay-results.b0fp2kjt`.

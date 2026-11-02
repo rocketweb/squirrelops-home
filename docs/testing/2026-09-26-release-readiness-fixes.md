@@ -74,7 +74,7 @@ keyboard-preference change was needed in this pass.
 
 Portable label regressions recorded six failed assertions with the original
 empty label before the fix. They now pass. The fixed synthetic app's native
-tree shows `Enable fake host studio-mini.local at 192.0.2.240` on its checked
+tree shows `Enable fake host studio-mini.local at 192.168.20.240` on its checked
 checkbox. Its Views and Models files were compared against the candidate.
 No live sensor, enrollment, Keychain, or decoy lifecycle request was used for
 these UI checks.

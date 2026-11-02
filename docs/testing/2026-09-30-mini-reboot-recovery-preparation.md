@@ -6,7 +6,7 @@ Use the separately verified
 instead of the original command below. Preserve this preparation record.
 
 The approved recovery is staged at:
-`/Users/operator/squirrelops-mini-reboot.37SbZXTy` on `operator@203.0.113.27`.
+`/Users/operator/squirrelops-mini-reboot.37SbZXTy` on `operator@100.64.0.27`.
 Directory mode 0700 and input modes 0600 were verified over SSH. Plan-only mode
 passed with the installed private Python; no recovery, installer or LAN probe
 was executed. Latest observed sensor remains PID 887, runs 1, exit timeout 5.
@@ -50,7 +50,7 @@ when local administrative validation was unavailable.
 | --- | --- |
 | mini_reboot_recovery.py | d995d90efe477209b29ede3c43d0aa06365010b39a2c01ab33386a1e3ccb552b |
 | stop-mini-reboot-recovery.sh | 041ab97e76c9771e1299c328c0f5b1277a6220b2cd36b5f40dcc7cbbcc9c4cc8 |
-| approved-scope.md | a23cf3bbbcd97eff1f6a971cc5989fdfd4660c8c2ee6d50dea318ceeb6c7d48a |
+| approved-scope.md | c9fc034e585acdb925fc2db6e26b4c9775105ea668d64c2bb35eba92f3e0fe0e |
 
 The bootstrap pins four unchanged dependency modules and the installed runtime
 hash as well. It does not extract or install another package. New durable root

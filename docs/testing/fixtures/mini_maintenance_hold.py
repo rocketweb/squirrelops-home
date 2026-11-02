@@ -35,7 +35,7 @@ class MaintenanceHold(recovery.Recovery):
             b"The inverse is launchctl enable system/com.squirrelops.sensor and\n"
             b"launchctl enable system/com.squirrelops.helper, only at a separately\n"
             b"reviewed upgrade boundary after stopped-state and .240-only config checks.\n"
-            b"Do not reload the old pool while the Studio owns .241.\n"
+            b"Do not reload the old pool while test host A owns .241.\n"
             b"A pending-reboot receipt is NOT evidence that services have stopped.\n"
         ))
 
@@ -62,7 +62,7 @@ class MaintenanceHold(recovery.Recovery):
                 and rows.get(self.helper_pid) == self.original_rows[self.helper_pid], "Runtime drift; review required")
         for job, pid in ((recovery.SENSOR_JOB, self.sensor_pid), (recovery.HELPER_JOB, self.helper_pid)):
             require(recovery.job_pid(self.job(job) or "", job) == pid, "Launchd PID drift")
-        require(self.owned() == ["192.168.1.240"]
+        require(self.owned() == ["192.168.20.240"]
                 and recovery.checked_bytes(recovery.base.LEDGER, 0, {0o600, 0o644}) == self.ledger_bytes,
                 "Alias ownership drift")
         require(self.inventory_policy() == self.policy and self.pf_enabled()
@@ -107,7 +107,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "disable_jobs": list(JOBS),
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "disable_jobs": list(JOBS),
                           "stop": False, "reboot": False, "install": False, "pf_changes": False}, indent=2))
     else:
         MaintenanceHold(args.run).run_hold()

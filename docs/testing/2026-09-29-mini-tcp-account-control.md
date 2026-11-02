@@ -11,8 +11,8 @@ and [clock-corrected preparation](2026-09-29-mini-tcp-diagnostic-preparation.md)
 apply. Matt started the v2 attended command on the mini. No product service,
 installer, virtual IP, PF policy change, packet capture or guest was invoked.
 
-- Mini address: `192.0.2.115`, management `203.0.113.27`.
-- Laptop source: `192.0.2.7`, route `wlp0s20f3`.
+- Mini address: `192.168.20.115`, management `100.64.0.27`.
+- Laptop source: `192.168.20.7`, route `wlp0s20f3`.
 - Root-private evidence: `/private/var/root/squirrelops-tcp-diag.Xxrf63pW`.
 - Root-owned sanitized status: `/private/var/tmp/squirrelops-tcp-results.qx2zbq0s/status.json`.
 - Script SHA-256: `b91bc0623c0cdb81b042fbb8f636d9a578c0ad2e9e2dc4d6635ae473149fd91d`.

@@ -63,7 +63,7 @@ _MAX_LIST_ITEMS = 64
 _FULL_MAC_RE = re.compile(
     r"(?i)(?<![0-9a-f])(?:"
     # One or two digits per octet: macOS `arp -an` drops the leading zero
-    # (ae:29:a:e5:cc:c5), and a rigid {2} let that form through unredacted.
+    # (ae:29:c:5d:6e:7f), and a rigid {2} let that form through unredacted.
     r"(?:[0-9a-f]{1,2}[:-]){5}[0-9a-f]{1,2}"
     r"|(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}"
     r"|[0-9a-f]{12}"

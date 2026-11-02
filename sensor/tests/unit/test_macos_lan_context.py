@@ -23,7 +23,7 @@ async def test_vpn_default_does_not_select_tunnel_for_sensor():
     with (
         patch.object(entry.sys, "platform", "darwin"),
         patch("squirrelops_home_sensor.privileged.helper.create_privileged_ops", return_value=helper),
-        patch.object(entry, "_detect_sensor_ip", return_value="100.96.4.79") as vpn_detect,
+        patch.object(entry, "_detect_sensor_ip", return_value="100.65.4.79") as vpn_detect,
     ):
         await entry.resolve_runtime_network(config)
         assert entry._runtime_network_config(config)["subnet"] == LAN["subnet"]
@@ -69,7 +69,7 @@ async def test_helper_lan_context_is_read_only_and_validated():
 @pytest.mark.parametrize("override", [
     {"interface": "utun12"}, {"interface": "en0;id"},
     {"subnet": "0.0.0.0/0"}, {"subnet": "192.168.0.0/16"},
-    {"sensor_ip": "100.96.4.79"}, {"gateway_ip": "8.8.8.8"},
+    {"sensor_ip": "100.65.4.79"}, {"gateway_ip": "8.8.8.8"},
     {"sensor_ip": "192.168.1.0"}, {"sensor_ip": "192.168.1.255"},
     {"gateway_ip": "192.168.1.18"}, {"subnet": None},
 ])

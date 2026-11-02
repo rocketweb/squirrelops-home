@@ -136,8 +136,8 @@ def verify_guarded_snapshot(snapshot: dict) -> list[dict]:
     mappings = []
     for line in snapshot["pf_nat"].splitlines():
         match = re.fullmatch(
-            r"rdr on en0 inet proto tcp from any to (192\.168\.1\.(?:240|241)) port = ([0-9]+) "
-            r"tag (squirrelops_[0-9_]+) -> (192\.168\.1\.(?:240|241)) port ([0-9]+)", line)
+            r"rdr on en0 inet proto tcp from any to (192\.168\.20\.(?:240|241)) port = ([0-9]+) "
+            r"tag (squirrelops_[0-9_]+) -> (192\.168\.20\.(?:240|241)) port ([0-9]+)", line)
         require(match is not None, "Unexpected PF translation grammar")
         ip, advertised, tag, backend_ip, backend = match.groups()
         require(ip == backend_ip and ip in snapshot["owned_aliases"] and 1024 <= int(backend) <= 65535
@@ -202,7 +202,7 @@ class Upgrade(base.Session):
         require((user.pw_uid, user.pw_gid, user.pw_dir, user.pw_shell) ==
                 (309, 309, "/var/empty", "/usr/bin/false") and group.gr_gid == 309 and not group.gr_mem,
                 "Service account drift")
-        require(base.pwd.getpwnam("matt").pw_uid == 501, "Operator account drift")
+        require(base.pwd.getpwnam("operator").pw_uid == 501, "Operator account drift")
         for path, expected in {**self.old_executables, RUNTIME: PYTHON_SHA}.items():
             info = path.lstat()
             require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0
@@ -235,13 +235,13 @@ class Upgrade(base.Session):
         require(not marker.exists() and not marker.is_symlink(), "Unexpected local-test opt-in")
 
     def host_baseline(self) -> None:
-        for interface, address in (("en0", "192.168.1.115"), ("en1", "192.168.1.254")):
+        for interface, address in (("en0", "192.168.20.115"), ("en1", "192.168.20.254")):
             require(self.command(["/usr/sbin/ipconfig", "getifaddr", interface]).stdout.strip() == address,
                     "Mini interface address drift")
         current = base.listener_endpoints(self.command(LISTENERS).stdout)
         require(self.baseline_listeners <= current, "Original endpoint/UID parity changed")
         route = self.command(["/sbin/route", "-n", "get", "-inet", "default"]).stdout
-        for value in (r"interface:\s+en0\b", r"gateway:\s+192\.168\.1\.1\b"):
+        for value in (r"interface:\s+en0\b", r"gateway:\s+192\.168\.20\.1\b"):
             require(re.search(value, route), "Default route changed")
 
     def check_conflicts(self) -> None:
@@ -300,7 +300,7 @@ class Upgrade(base.Session):
         require(base.digest(self.task_dir / "candidate.pkg") == self.package_sha, "Package checksum mismatch")
         require(self.command(["/usr/bin/uname", "-m"]).stdout.strip() == "arm64", "Wrong architecture")
         require(self.command(["/usr/bin/sw_vers", "-buildVersion"]).stdout.strip() == "26A428", "OS drift")
-        require("100.108.203.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong Tailscale host")
+        require("100.64.0.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong Tailscale host")
         container = Path("/Library/SquirrelOps/acceptance-backups")
         for path in (container.parent, container):
             base.safe_directory(path)
@@ -317,7 +317,7 @@ class Upgrade(base.Session):
             self.command(["/usr/bin/dscl", ".", "-read", "/" + record])
         self.baseline_listeners = base.listener_endpoints(self.command(LISTENERS).stdout)
         require(not any(endpoint.endswith(":8443") for _, endpoint in self.baseline_listeners), "API port occupied")
-        for endpoint in ("*:22", "*:445", "*:5900", "192.168.1.115:11434", "127.0.0.1:49199"):
+        for endpoint in ("*:22", "*:445", "*:5900", "192.168.20.115:11434", "127.0.0.1:49199"):
             require(any(address == endpoint for _, address in self.baseline_listeners), "Original listener missing")
         self.host_baseline()
         info = self.pf(["-s", "info"])
@@ -417,7 +417,7 @@ class Upgrade(base.Session):
             output = (self.backup / f"packet-metadata-{interface}.txt").open("w")
             process = subprocess.Popen([
                 "/usr/sbin/tcpdump", "-i", interface, "-n", "-q", "-tttt", "-l", "-s", "96",
-                "host 192.168.1.7 and (host 192.168.1.240 or host 192.168.1.241)",
+                "host 192.168.20.7 and (host 192.168.20.240 or host 192.168.20.241)",
             ], stdout=output, stderr=subprocess.DEVNULL)
             self.captures.append((process, output, interface))
         time.sleep(1)
@@ -523,7 +523,7 @@ def main() -> None:
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "package_sha256": PACKAGE_SHA,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "package_sha256": PACKAGE_SHA,
                           "vips": sorted(base.VIPS), "observe_seconds": 1200, "upgrade_existing": True,
                           "third_party_filter_rule_changes": False, "fault_injection": False}, indent=2))
         return

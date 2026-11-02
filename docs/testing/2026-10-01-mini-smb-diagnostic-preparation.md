@@ -65,10 +65,10 @@ remote plan-only modes passed. The fresh laptop result guard is unused.
 
 | New input | SHA-256 |
 | --- | --- |
-| Mini window | `bf7a529e88c51feaf13fd12b793e1a6a8a55ac3b8fe04e8ba58d4e634bb11db5` |
-| Mini bootstrap | `d5f802ab0ef7af4dbfc88d4da6f144239a1b3c3a903a27abc16f3693244a6509` |
-| Approved scope | `e7c943e85f7563211c5634d2bf6e2a956b9346fe4607fe0abf9f2cfd1c0f73e4` |
-| Laptop client | `203404d31a5476dced345fbc4db0fdb2c7fe27d9e008a5be45465209c0c220da` |
+| Mini window | `874b3db55ce6e096b2c78f60497027a746021dc4e0a2c156432b49b221ef2db3` |
+| Mini bootstrap | `bc05eabf5e5f7dc9b5b46a9f96e7cbe7b352cf8591bb303bd0f28de74fa4b4d2` |
+| Approved scope | `c435a3458ff5bd47a38c35e4de445591e14f049ab1cccbbc84f968cd91538a17` |
+| Laptop client | `2bc07a0a4ec0ac624a7fb0d8bc197e15e97799d8772007b59857773a1528b892` |
 
 Every unchanged bootstrap dependency and the existing package were also
 checksum-verified on the Mini. The package was copied from the prior private

@@ -122,9 +122,9 @@ checksums were verified before replacement. Initial-attempt copies also remain.
 
 | Input | SHA-256 |
 | --- | --- |
-| `start-mini-acceptance.sh` | `2ea3332bdb536fea9d8fdd9f4602dd4b8d70a94085437cb5e91de5a99eb8fc72` |
-| `mini_acceptance.py` | `47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a` |
-| `mini-a5-config.yaml` | `6e210567e3baae3950d91153b44090876ae6978b2a67677b1690aaf5c8f02330` |
+| `start-mini-acceptance.sh` | `34f15d6f6cbc99e13f4aaf4044cf45e70b5611b05ed2abe33e01bc009324238d` |
+| `mini_acceptance.py` | `46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f` |
+| `mini-a5-config.yaml` | `10f6f8c800308a47f5fd728aaf9a6ae6eeed9f6d437427a43bae3039ea663087` |
 | `candidate.pkg` | `3e8c0fc78befad3365fdbff5583d9f85c6b6fe01816b5863edbebeceaa4b8f5f` |
 
 After remote hash and shell-syntax verification, the attended recovery command
@@ -146,7 +146,7 @@ extracted, isolated Python interpreter. Privileged recovery had not yet been
 executed at that checkpoint; the linked live report records the subsequent run.
 
 At that staging checkpoint, the attempted fresh laptop ARP conflict check could not run: SSH to
-`root@192.0.2.7` timed out before connecting. Do not count that attempt as an
+`root@192.168.20.7` timed out before connecting. Do not count that attempt as an
 ARP result. Wake/reconnect the authorized laptop before the next protocol-test
 window, then repeat the two-address conflict check. Earlier unanswered probes
 and Matt's address confirmation remain historical evidence only.

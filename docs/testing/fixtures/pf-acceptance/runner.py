@@ -21,10 +21,10 @@ import tempfile
 import time
 import uuid
 
-IPS = ("192.168.1.239", "192.168.1.240")
+IPS = ("192.168.20.239", "192.168.20.240")
 PORTS = (61322, 61445)
 PUBLIC_PORTS = (22, 445)
-PEER = "192.168.1.7"
+PEER = "192.168.20.7"
 PYTHON = "/Library/SquirrelOps/sensor/python/bin/python3.12"
 PYTHON_SHA = "d2555cd22a33506826f9eb069bb13fb0cc41303c7da41da5b761967d616f4147"
 ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C"}
@@ -357,14 +357,14 @@ class Session:
                 and self.root.name.startswith("mini-a5-"), "Unexpected private evidence path")
         require(self.command(["/usr/bin/sw_vers", "-buildVersion"]).stdout.strip() == "26A434", "Mini OS changed")
         require(self.command(["/usr/bin/uname", "-m"]).stdout.strip() == "arm64", "Wrong architecture")
-        for interface, address, mac in (("en0", "192.168.1.115", "d0:11:e5:12:9a:c2"),
-                                        ("en1", "192.168.1.254", "ea:03:72:63:7e:01")):
+        for interface, address, mac in (("en0", "192.168.20.115", "d0:11:e5:3c:4d:5e"),
+                                        ("en1", "192.168.20.254", "ea:03:9b:4c:2d:01")):
             text = self.command(["/sbin/ifconfig", interface]).stdout
             require("inet " + address + " " in text and "ether " + mac in text and "status: active" in text,
                     "Mini interface identity changed")
         route = self.command(["/sbin/route", "-n", "get", PEER]).stdout
         require(re.search(r"interface:\s+en0\b", route), "Laptop route changed")
-        require([(pwd.getpwnam(name).pw_uid, pwd.getpwnam(name).pw_gid) for name in ("_squirrelops", "matt")]
+        require([(pwd.getpwnam(name).pw_uid, pwd.getpwnam(name).pw_gid) for name in ("_squirrelops", "operator")]
                 == [(309, 309), (501, 20)], "Account identity changed")
         require(hashlib.sha256(safe_read(Path(PYTHON))).hexdigest() == PYTHON_SHA, "Pinned child runtime changed")
         for directory in [*Path(PYTHON).parents, Path(PYTHON).parent.parent / "lib/python3.12"]:

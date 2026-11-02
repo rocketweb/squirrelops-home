@@ -15,7 +15,7 @@ active at startup and forbids broadening or making it permanent.
 At preparation, read-only SSH found the Mini's sensor/helper disabled and
 unloaded, no matching product/guest process and no `.240`/`.241` aliases.
 The previous root cleanup receipt is unchanged. Test host A's `.240` alias is
-also absent. Laptop route remains `wlp0s20f3`, source `192.0.2.7`.
+also absent. Laptop route remains `wlp0s20f3`, source `192.168.20.7`.
 
 ## Minimal runner changes
 
@@ -56,10 +56,10 @@ Remote input hashes match local values:
 
 | Input | SHA-256 |
 | --- | --- |
-| New retest runner | `f5e26d68e523c4dfd4d1f8fe51dc8d468ddc87504284f37e42fbab86f27b277a` |
-| Shared start-only runner with default-preserving claim prefix | `01a5091fb201aed0ad3eb498cd4b3a8a38155a57030256c3b52b2ffc58d96c0a` |
-| New bootstrap | `6b65d80eb0f346b8ebd4ef58eebe85a0b4b72e777f20012f045d033e742140a4` |
-| Approved scope | `4cd55fe800701962d972c88b6c929ef15c0154e9959da5e37f1b2c8fb434ed0c` |
+| New retest runner | `7d2cbb6fa804960a8a2a3ea9696c634ee8382aec1da7fa03d0d1038e9e5b9e4d` |
+| Shared start-only runner with default-preserving claim prefix | `aedd37a278710ee221bd9b137df51bd987ec716438ebc672e2672722eaac1ff9` |
+| New bootstrap | `f5be67f7448c19af8538ff415422c82abf59b256512741b5266a39e55bf338c4` |
+| Approved scope | `6210c455cb4d333a289f006f4a96d9901ae6a2650b54b935ee53e3d62bb05e27` |
 | Unchanged package | `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea` |
 
 The old local bootstrap's shared-runner hash was updated to preserve its local
@@ -74,9 +74,9 @@ Laptop: `/root/squirrelops-mini-upgrade-client.ROWFDZto`.
 
 The laptop contains only the same two checksum-verified scripts, no credentials,
 readiness or results yet. Diagnostic wrapper SHA-256:
-`bc36f73427a1a2f9b15260b922e72636b138d13330ad8329d32212ab0ab91c03`.
+`b0864df795a10c9bf7062ec620889cb276d4a53f28babc631e62bec183b897d2`.
 Shared client SHA-256:
-`15b3bb270b77d3801870d2a81b64dee266a8f823ce234f6b2be2ff360b02b7f6`.
+`f10d1b894eac9c05f13e2677f790d2f398d26e750eada6be2d63fdfcd44aab63`.
 Its plan-only mode passed. The existing readiness scope remains
 `mini-relay-diagnostics-240`; fresh timestamp, current phase, exact mappings,
 boot, package and remaining-time gates still apply.

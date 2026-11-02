@@ -8,7 +8,7 @@ Test date: September 4, 2026. Functional testing began at 11:48 EDT on an Apple 
 
 - The installed Network Share works end to end: HTTP requests reached the running sensor, all 10 appeared in its forensic log, and synthetic credential reuse produced two Critical alerts and two credential trips.
 - Real SSH, SFTP, and SMB worked in a disposable guest booted from the installed app's runtime and guest bundle. Authentication, all three SMB shares, file operations, containment checks, concurrency, stop, and restart passed.
-- Studio Build Mac was absent from the running app. No persistent guest process or former `192.0.2.203` alias was present. The successful disposable guest tests do **not** establish that the installed sensor publishes this host or receives its LAN traffic.
+- Studio Build Mac was absent from the running app. No persistent guest process or former `192.168.20.203` alias was present. The successful disposable guest tests do **not** establish that the installed sensor publishes this host or receives its LAN traffic.
 - Installed-code regression tests: **464 passed, 3 failed**. The failures concern newer alert-evidence fields absent from this older installation. The same three tests passed against the committed candidate source.
 - Two AI streaming fidelity checks failed. The live file-share SSH-key bait also failed a normal PEM parser check.
 
@@ -27,7 +27,7 @@ The engineering-constraints skill was used to keep installed behavior, isolated 
 | Candidate checkout | `/Users/operator/code/squirrelops-home/.worktrees/deception-depth-2.1-current` |
 | Candidate branch | `feature/deception-depth-2.1.0-current` |
 | Candidate commit | `6b6ef8b5fe3d694695a9bc74982cbe80d05baeb5` |
-| Local sensor address | `192.0.2.18` |
+| Local sensor address | `192.168.20.18` |
 | Installed app binary SHA-256 | `e5d05180351fb66dc87e9ecdccf315f5a4b6841430e4bcf2ee60c944147995be` |
 | Existing newer installer SHA-256 | `212c493cec3a995603ee0cd19f0712b6df99aa289d3afa837f60f5aaf14259b0` |
 
@@ -59,20 +59,20 @@ The Decoys view reported **8 fake hosts, 25 service decoys, and 1 host listener*
 
 | Fake host | Virtual IP | Services | Displayed historical hits |
 | --- | --- | ---: | ---: |
-| business.local | 192.0.2.200 | 2 | 0 |
-| docs.local | 192.0.2.201 | 1 | 0 |
-| media.local | 192.0.2.204 | 7 | 3 |
-| shared.local | 192.0.2.206 | 3 | 7 |
-| office-nas.local | 192.0.2.212 | 7 | 509 |
-| office-printer.local | 192.0.2.216 | 3 | 374 |
-| financials | 192.0.2.243 | 1 | 13 |
-| runner | 192.0.2.244 | 1 | 11 |
+| business.local | 192.168.20.200 | 2 | 0 |
+| docs.local | 192.168.20.201 | 1 | 0 |
+| media.local | 192.168.20.204 | 7 | 3 |
+| shared.local | 192.168.20.206 | 3 | 7 |
+| office-nas.local | 192.168.20.212 | 7 | 509 |
+| office-printer.local | 192.168.20.216 | 3 | 374 |
+| financials | 192.168.20.243 | 1 | 13 |
+| runner | 192.168.20.244 | 1 | 11 |
 
-These historical hits are inventory context, not new successful test connections. Visible service cards were labeled ACTIVE. The separate Network Share host listener was ACTIVE at `192.0.2.18:63219`, decoy ID 3.
+These historical hits are inventory context, not new successful test connections. Visible service cards were labeled ACTIVE. The separate Network Share host listener was ACTIVE at `192.168.20.18:63219`, decoy ID 3.
 
 ### Same-host mimic probes
 
-The 25 private backend listeners were associated with sensor PID 31785 before probing. Every direct connection from this Mac timed out. The host listener at `192.0.2.18:63219` connected and returned HTTP 200.
+The 25 private backend listeners were associated with sensor PID 31785 before probing. Every direct connection from this Mac timed out. The host listener at `192.168.20.18:63219` connected and returned HTTP 200.
 
 Do **not** interpret the 25 timeouts as proof of 25 broken decoys. The helper's PF construction intentionally blocks direct backend access and admits advertised ports through physical-interface redirection. Same-host direct-backend probes do not reproduce that path. The relevant implementation is `app/Sources/SquirrelOpsHelper/RPCMethods.swift`, including the default-deny explanation near line 1487 and the final block rule near line 1565.
 
@@ -80,7 +80,7 @@ Live PF rules could not be inspected with available privileges. Advertised-port 
 
 ## Live Network Share and alert pipeline
 
-Target: `http://192.0.2.18:63219`. All credentials came from this decoy's synthetic password file and were kept out of saved evidence.
+Target: `http://192.168.20.18:63219`. All credentials came from this decoy's synthetic password file and were kept out of saved evidence.
 
 | ID | Action | Result | Observed evidence |
 | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ Counter reconciliation:
 | After four credential-phase requests | 10 | 2 | Two Critical alerts at 11:58:51 |
 | Final detail inspection | 10 | 2 | 10 forensic rows, two CREDENTIAL badges, password file TRIPPED, failures 0 |
 
-The Critical detail showed source `192.0.2.18`, TCP port `63219`, path `/`, detection `HTTP Decoy`, and Network Share decoy ID 3. It also showed the matched synthetic credential, which is redacted from this report.
+The Critical detail showed source `192.168.20.18`, TCP port `63219`, path `/`, detection `HTTP Decoy`, and Network Share decoy ID 3. It also showed the matched synthetic credential, which is redacted from this report.
 
 Critical filtering displayed the two credential alerts. Opening one marked it read; History retained it. High filtering displayed both current-test High alerts along with older history. No history was deleted. Two test alerts remained unread at the end.
 
@@ -205,7 +205,7 @@ Private installed logs/database and live PF inspection required administrator ac
 
 ## Side effects and final state
 
-- Network Share retained 10 test connection rows and two synthetic credential-trip events, all from `192.0.2.18`.
+- Network Share retained 10 test connection rows and two synthetic credential-trip events, all from `192.168.20.18`.
 - Four alerts from this round were visible in history: two High connection alerts and two Critical credential alerts. Two remained unread. Reviewing details marked two test alerts read; no existing history was cleared.
 - Only disposable guest files were written, renamed, and deleted. The guest was stopped, destroying its memory-only filesystem. Small synthetic fixture files and QA scripts remain in `/private/tmp/squirrelops-functional-20260904` for reproduction.
 - Temporary AI listeners and guest relays were closed. Final process inspection showed the original app, sensor, and helper PIDs unchanged and no test guest running.

@@ -37,12 +37,12 @@ class OwnershipGuards(unittest.TestCase):
             INSERT INTO history VALUES (1, 'preserve existing alert');
         """)
         for ident, port in module.EXPECTED.items():
-            self.db.execute("INSERT INTO decoys VALUES (?,?,'deep','active','192.168.1.240',NULL,7,?, ?,0,'old')",
+            self.db.execute("INSERT INTO decoys VALUES (?,?,'deep','active','192.168.20.240',NULL,7,?, ?,0,'old')",
                             (ident, port, int(ident == 1), '{"synthetic":true}'))
         self.original = module.decoy_rows(self.db)
         self.db.execute("UPDATE decoys SET status='stopped', updated_at='failure'")
-        self.db.execute("INSERT INTO decoys VALUES (6,60556,'dev_server','active','192.168.1.115',NULL,NULL,0,'{}',9,'old')")
-        self.db.execute("INSERT INTO decoys VALUES (7,8080,'mimic','stopped','192.168.1.241',NULL,NULL,0,'{}',2,'old')")
+        self.db.execute("INSERT INTO decoys VALUES (6,60556,'dev_server','active','192.168.20.115',NULL,NULL,0,'{}',9,'old')")
+        self.db.execute("INSERT INTO decoys VALUES (7,8080,'mimic','stopped','192.168.20.241',NULL,NULL,0,'{}',2,'old')")
         self.db.commit()
         self.journal = self.root / "recovery.json"
 
@@ -67,7 +67,7 @@ class OwnershipGuards(unittest.TestCase):
 
     def test_recovery_rejects_all_unexpected_row_drift_without_writing(self):
         for field, value in [('port', 23), ('id', 8), ('decoy_type', 'mimic'), ('status', 'active'),
-                             ('bind_address', '192.168.1.115'), ('retired_at', 'today'),
+                             ('bind_address', '192.168.20.115'), ('retired_at', 'today'),
                              ('host_id', 99), ('is_primary', 0), ('config', '{}'), ('connection_count', 1)]:
             current = module.decoy_rows(self.db)
             current[0][field] = value
@@ -167,7 +167,7 @@ class OwnershipGuards(unittest.TestCase):
         path = self.root / 'restart.sqlite'
         with sqlite3.connect(path) as target:
             self.db.backup(target)
-        for processes, aliases, reason in (([123], [], 'survived restart'), ([], ['192.168.1.240'], 'Aliases survived')):
+        for processes, aliases, reason in (([123], [], 'survived restart'), ([], ['192.168.20.240'], 'Aliases survived')):
             session = module.OwnershipUpgrade(self.root)
             with patch.object(module, 'DATABASE', path), patch.object(module.upgrade.Upgrade, 'install'), \
                     patch.object(session, 'snapshot'), patch.object(session, 'stop_job'), \

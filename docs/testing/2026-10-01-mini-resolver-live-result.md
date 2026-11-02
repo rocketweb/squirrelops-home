@@ -117,7 +117,7 @@ sudo -u _squirrelops /usr/bin/sqlite3 -batch -init /dev/null -readonly -header -
    json_extract(detail,'$.last_seen') AS last_seen,
    json_extract(detail,'$.service_counts') AS services
    FROM home_alerts
-   WHERE id=3 AND source_ip='192.0.2.7' AND alert_type='decoy.trip';"
+   WHERE id=3 AND source_ip='192.168.20.7' AND alert_type='decoy.trip';"
 ```
 
 Do not acknowledge or clear the alert to manufacture a new one. Do not send

@@ -24,7 +24,7 @@ class FilterRetestTests(unittest.TestCase):
         receipt = json.loads(path.read_text())
         m.validate_cleanup(receipt)
         for key, value in (("phase", "ready_for_tests"), ("pf_enabled", True), ("pf_enabled", 0),
-                           ("test_scope", "other"), ("boot_seconds", 0), ("test_vips", ["192.168.1.241"]),
+                           ("test_scope", "other"), ("boot_seconds", 0), ("test_vips", ["192.168.20.241"]),
                            ("own_pf_reference_released", False), ("guest_stopped", False),
                            ("aliases_absent", False), ("configuration_unchanged", False),
                            ("config_change_verified", False), ("installation_retained", False),
@@ -75,7 +75,7 @@ class FilterRetestTests(unittest.TestCase):
             runner.confirm_scope()
         text = " ".join(str(call.args[0]) for call in output.call_args_list)
         self.assertIn("30-minute", text)
-        self.assertIn("192.168.1.7", text)
+        self.assertIn("192.168.20.7", text)
         self.assertIn("No Little Snitch changes", text)
         with patch("builtins.input", return_value=""), patch("builtins.print"), self.assertRaises(RuntimeError):
             runner.confirm_scope()

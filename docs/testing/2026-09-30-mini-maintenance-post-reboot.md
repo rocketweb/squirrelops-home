@@ -8,7 +8,7 @@ Fresh validation/backups at the upgrade boundary remain required. No upgrade,
 restart, LAN probe or release follows automatically from this result.
 
 Matt reported restarting after the maintenance-preparation instructions. Fresh
-read-only SSH inspection of `203.0.113.27` returned:
+read-only SSH inspection of `100.64.0.27` returned:
 
 - Host `test-host-b.localdomain`, macOS build `26A434`.
 - New boot epoch `1790777754`, replacing `1790766531`.
@@ -17,7 +17,7 @@ read-only SSH inspection of `203.0.113.27` returned:
 - `launchctl print` for each exact system job: service not found.
 - `ps -axo uid=,pid=,ppid=,comm=` filtered for UID 309, SquirrelOps and
   Virtualization: no matching processes.
-- `ifconfig -a`: mini LAN `.115` and Tailscale `203.0.113.27` remain; no local
+- `ifconfig -a`: mini LAN `.115` and Tailscale `100.64.0.27` remain; no local
   `.240` or `.241` alias. ARP inventory showed neither test address.
 - Both installed package receipts remain version 2.1.0, install time
   `1790731448`. The new shutdown-budget candidate has not been installed.
@@ -54,7 +54,7 @@ Matt supplied the requested output:
   within the previously verified service-owned 0700 directory. This is expected
   metadata, not an integrity result.
 - The root-owned, single-link 0600 ownership ledger retains exactly
-  `192.0.2.240|en0`, despite the observed absence of live aliases/processes.
+  `192.168.20.240|en0`, despite the observed absence of live aliases/processes.
 - The preparation receipt is retained at
   `/Library/SquirrelOps/acceptance-backups/mini-reboot-20260930.7KofaDMk/pending-reboot.json`.
   It records the old boot `1790766531`, both disabled jobs and
@@ -101,12 +101,12 @@ CLI in read-only mode and an empty initialization file. Matt supplied:
 ```text
 SQLITE_CHECK_STARTED
 ok
-1|deep|192.0.2.240|445|active
-2|deep|192.0.2.240|22|active
-3|deep|192.0.2.240|11434|active
-4|deep|192.0.2.240|1234|active
-5|deep|192.0.2.240|8765|active
-6|dev_server|192.0.2.115|60556|active
+1|deep|192.168.20.240|445|active
+2|deep|192.168.20.240|22|active
+3|deep|192.168.20.240|11434|active
+4|deep|192.168.20.240|1234|active
+5|deep|192.168.20.240|8765|active
+6|dev_server|192.168.20.115|60556|active
 ```
 
 This establishes a successful `PRAGMA quick_check` and the expected saved decoy

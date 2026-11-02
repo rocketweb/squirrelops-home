@@ -7,7 +7,7 @@ and pre-upgrade observations below are retained as historical evidence.
 ## Approved scope and baseline
 
 Matt approved backup and a data-preserving in-place upgrade on the MacBook at
-192.0.2.97. This does not authorize an uninstall, wipe, manual PF reset,
+192.168.20.97. This does not authorize an uninstall, wipe, manual PF reset,
 Little Snitch changes, changes to test host A or resuming Mini work.
 
 Pre-upgrade SSH observations:
@@ -17,8 +17,8 @@ Pre-upgrade SSH observations:
 - Sensor and helper system jobs are running. The loopback health endpoint
   returned `status: ok`; this is not a full protocol acceptance test.
 - App signature metadata names Rocket Web Inc, Team ID PSQ5HK5U65.
-- en0 is 192.0.2.97 with hardware address `00:00:5e:00:53:04`.
-- Existing lo0 aliases: .203, .204, .205, .207 and .212 on 192.0.2.0/24.
+- en0 is 192.168.20.97 with hardware address `ae:29:0c:5d:6e:7f`.
+- Existing lo0 aliases: .203, .204, .205, .207 and .212 on 192.168.20.0/24.
 - Sensor data is mode 0700, UID/GID 309. The SSH user cannot read its database.
 - Administrative access requires an attended password. No password was requested
   in chat, stored or transmitted by the agent.

@@ -1,5 +1,5 @@
 #!/bin/bash
-# One approved, attended, data-preserving upgrade on 192.168.1.97 only.
+# One approved, attended, data-preserving upgrade on 192.168.20.97 only.
 set -euo pipefail
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 umask 077
@@ -26,8 +26,8 @@ verify_digest() {
 }
 verify_digest candidate.pkg 669e4b2b5762f819b4b07c4f5cddc5b6797bae4cd7519282280ee049d3533c17
 verify_digest old.pkg 252bd6bd559b4dbf578410aa959611675d3b627163ee885f404857cb67ab23f8
-verify_digest macbook_upgrade.py 3c361ad888be5f35ce087a1c15f97ddfcd8f73279781672bdcfd10d2eba555a9
-verify_digest mini_clean_upgrade.py 90504c8a7a1f422e5692bac138ecd7e15f5ad0479cb51579f2f4284cd065afe0
+verify_digest macbook_upgrade.py 4a1acc994d567cdf28317deeb1231743e8ecb031b5b6649f27c955ff91ff0de3
+verify_digest mini_clean_upgrade.py 940bbe44675f80f7a074722b3e6c231b1214f281413269b971cbbbd8c0d3c320
 echo 'Pinned upgrade inputs verified. Preparing private Python; no product change yet.'
 /usr/sbin/pkgutil --expand-full "$task_dir/candidate.pkg" "$task_dir/expanded"
 runtime="$task_dir/expanded/sensor.pkg/Payload/Library/SquirrelOps/sensor/python/bin/python3.12"

@@ -109,7 +109,7 @@ Remote checksums and both no-side-effect plan commands passed after copying:
 - Mini launcher SHA-256:
   `2ba97999208b6a3c4901b8efcfdc93dbd04ffcf666040bfb189bc54e05d285c7`.
 - Laptop client SHA-256:
-  `00393e309433797434bf3eaae92dc70bd240d2ffd46f380ed4b3bc40c40d2417`.
+  `b5596c5553219addc7d9e4c7aa5c93722d72e3af9549c09594421ecb4dd42de6`.
 
 The user starts the attended Mini run with:
 

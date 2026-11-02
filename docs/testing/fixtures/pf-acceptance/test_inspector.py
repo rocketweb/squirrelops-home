@@ -56,11 +56,11 @@ class Inspector(unittest.TestCase):
 
     def test_counter_export_identifies_rules_without_copying_raw_text(self):
         source = (
-            "@0 pass in quick on en0 inet proto tcp from any to 192.168.1.239 port = 61322 "
-            "user = _squirrelops flags any tagged squirrelops_192_168_1_239_22_61322 keep state\n"
+            "@0 pass in quick on en0 inet proto tcp from any to 192.168.20.239 port = 61322 "
+            "user = _squirrelops flags any tagged squirrelops_192_168_20_239_22_61322 keep state\n"
             "  [ Evaluations: 12 Packets: 8 Bytes: 440 States: 1 ]\n"
             "  [ Inserted: uid 0 pid 987 ]\n"
-            "@1 block drop in quick inet from any to 192.168.1.239\n"
+            "@1 block drop in quick inet from any to 192.168.20.239\n"
             "  [ Evaluations: 8 Packets: 4 Bytes: 240 States: 0 ]\n"
             "SECRET-DO-NOT-EXPORT\n"
         )
@@ -72,7 +72,7 @@ class Inspector(unittest.TestCase):
         self.assertNotIn("SECRET", str(result))
 
     def test_counter_deltas_require_same_rules_and_monotonic_counters(self):
-        source = "@0 block drop in quick inet from any to 192.168.1.239\n[ Evaluations: 8 Packets: 4 Bytes: 240 States: 0 ]\n"
+        source = "@0 block drop in quick inet from any to 192.168.20.239\n[ Evaluations: 8 Packets: 4 Bytes: 240 States: 0 ]\n"
         before = inspector.counter_summary(source)
         after = inspector.counter_summary(source.replace("Packets: 4", "Packets: 7").replace("Bytes: 240", "Bytes: 420"))
         result = inspector.counter_delta(before, after)
@@ -84,9 +84,9 @@ class Inspector(unittest.TestCase):
 
     def test_unknown_or_incomplete_counters_cannot_be_counted_as_proof(self):
         for source in (
-            "@0 pass from any to 192.168.1.9\n[ Evaluations: 1 Packets: 1 Bytes: 1 States: 0 ]\n",
-            "@0 block drop in quick inet from any to 192.168.1.239\n",
-            "@0 block drop in quick inet from any to 192.168.1.239\n[ Evaluations: 1 Packets: 1 Packets: 2 Bytes: 1 States: 0 ]\n",
+            "@0 pass from any to 192.168.20.9\n[ Evaluations: 1 Packets: 1 Bytes: 1 States: 0 ]\n",
+            "@0 block drop in quick inet from any to 192.168.20.239\n",
+            "@0 block drop in quick inet from any to 192.168.20.239\n[ Evaluations: 1 Packets: 1 Packets: 2 Bytes: 1 States: 0 ]\n",
         ):
             result = inspector.counter_summary(source)
             self.assertFalse(inspector.counter_delta(result, result)["comparable"])
@@ -94,9 +94,9 @@ class Inspector(unittest.TestCase):
     def test_child_events_distinguish_loopback_from_lan_and_withhold_unknowns(self):
         events = [
             {"event": "accepted", "source": "127.0.0.1", "source_port": 40500, "uid": 501},
-            {"event": "accepted", "source": "192.168.1.7", "source_port": 40501, "uid": 309},
+            {"event": "accepted", "source": "192.168.20.7", "source_port": 40501, "uid": 309},
             {"event": "echo", "uid": 309},
-            {"event": "accepted", "source": "192.168.1.9", "source_port": 40502, "uid": 309},
+            {"event": "accepted", "source": "192.168.20.9", "source_port": 40502, "uid": 309},
             {"event": "SECRET"},
             {"event": "stopped"},
         ]
@@ -125,15 +125,15 @@ class Inspector(unittest.TestCase):
 
     def test_known_state_pair_parses_without_prefix_assumption(self):
         for prefix in ("all", "ALL", "en0"):
-            source = prefix + " tcp 192.168.1.239:61322 (192.168.1.239:22) <- 192.168.1.7:35301 ESTABLISHED:ESTABLISHED\n"
+            source = prefix + " tcp 192.168.20.239:61322 (192.168.20.239:22) <- 192.168.20.7:35301 ESTABLISHED:ESTABLISHED\n"
             result = inspector.state_summary(source)
             self.assertEqual(len(result["selected"]), 1)
             self.assertEqual(result["selected"][0]["state_pair"], "ESTABLISHED:ESTABLISHED")
 
     def test_other_addresses_and_unrecognized_states_are_withheld(self):
-        for source in ("all tcp 192.168.1.7:43111 <- 192.168.1.9:22 ESTABLISHED:ESTABLISHED",
-                       "all tcp 192.168.1.7:43111 <- 192.168.1.240:61445 SECRET:SECRET",
-                       "all tcp 192.168.1.7:43111 <- 192.168.1.240:70000 ESTABLISHED:ESTABLISHED"):
+        for source in ("all tcp 192.168.20.7:43111 <- 192.168.20.9:22 ESTABLISHED:ESTABLISHED",
+                       "all tcp 192.168.20.7:43111 <- 192.168.20.240:61445 SECRET:SECRET",
+                       "all tcp 192.168.20.7:43111 <- 192.168.20.240:70000 ESTABLISHED:ESTABLISHED"):
             result = inspector.state_summary(source)
             self.assertEqual(result["selected"], [])
             self.assertEqual(result["withheld_lines"], 1)

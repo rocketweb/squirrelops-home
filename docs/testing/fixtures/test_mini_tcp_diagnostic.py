@@ -47,10 +47,10 @@ class Guards(unittest.TestCase):
     def test_snapshot_guards(self):
         baseline = valid_snapshot()
         diag.validate_snapshot(baseline)
-        cases = {"build": "different", "architecture": "x86_64", "address": "192.168.1.5",
+        cases = {"build": "different", "architecture": "x86_64", "address": "192.168.20.5",
                  "en0": baseline["en0"].replace(diag.ETHER, "00:00:00:00:00:00"),
-                 "route": "interface: en1", "interfaces": "inet 192.168.1.240 netmask x",
-                 "arp": "? (192.168.1.241) at 00:01:02:03:04:05 permanent published",
+                 "route": "interface: en1", "interfaces": "inet 192.168.20.240 netmask x",
+                 "arp": "? (192.168.20.241) at 00:01:02:03:04:05 permanent published",
                  "pf": "Status: Enabled\n", "processes": "31 309 /Library/SquirrelOps/sensor/python/bin/python3.12 -m squirrelops_home_sensor"}
         for key, value in cases.items():
             with self.subTest(key=key), self.assertRaises(RuntimeError):
@@ -128,7 +128,7 @@ class Guards(unittest.TestCase):
             public.mkdir()
             session = diag.Session(root)
             before = valid_snapshot()
-            before.update(listeners="p1\nu0\nn*:22\nn*:445\nn*:5900\np2\nu501\nn192.168.1.115:11434\n",
+            before.update(listeners="p1\nu0\nn*:22\nn*:445\nn*:5900\np2\nu501\nn192.168.20.115:11434\n",
                           pf_rules="anchor com.apple", pf_nat="rdr-anchor com.apple")
             stack.enter_context(patch.object(session, "preflight", return_value=before))
             stack.enter_context(patch.object(session, "baseline", return_value=before))
@@ -169,14 +169,14 @@ class Guards(unittest.TestCase):
         child.terminate.assert_not_called()
 
     def test_scoped_socket_rows_do_not_expose_unrelated_rows(self):
-        rows = "tcp4 0 0 192.168.1.115.52000 192.168.1.7.43000 ESTABLISHED\ntcp4 0 0 192.168.1.115.22 192.168.1.8.10000 ESTABLISHED\n"
+        rows = "tcp4 0 0 192.168.20.115.52000 192.168.20.7.43000 ESTABLISHED\ntcp4 0 0 192.168.20.115.22 192.168.20.8.10000 ESTABLISHED\n"
         self.assertEqual(len(diag.scoped_rows(rows, [52000])), 1)
         self.assertEqual(diag.scoped_rows(rows, [52001]), [])
 
 
 def valid_snapshot():
     return dict(build="26A428", architecture="arm64", address=diag.ADDRESS,
-                en0="ether " + diag.ETHER, route="interface: en0", interfaces="inet 192.168.1.115 netmask x",
+                en0="ether " + diag.ETHER, route="interface: en0", interfaces="inet 192.168.20.115 netmask x",
                 arp="", pf="Status: Disabled\n", processes="1 0 /sbin/launchd")
 
 

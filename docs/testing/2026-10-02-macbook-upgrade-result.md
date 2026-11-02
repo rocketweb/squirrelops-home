@@ -7,9 +7,9 @@ acceptance, and no release was published.
 ## Host, artifact and authority
 
 Matt approved a backed-up, data-preserving upgrade of the existing MacBook
-installation at 192.0.2.97. No uninstall or wipe was authorized or performed.
+installation at 192.168.20.97. No uninstall or wipe was authorized or performed.
 The host is ARM64, macOS 26.6.1 build 25G76, en0 hardware address
-`00:00:5e:00:53:04`. The Mini remained outside this operation.
+`ae:29:0c:5d:6e:7f`. The Mini remained outside this operation.
 
 Installed candidate SHA-256:
 `669e4b2b5762f819b4b07c4f5cddc5b6797bae4cd7519282280ee049d3533c17`.

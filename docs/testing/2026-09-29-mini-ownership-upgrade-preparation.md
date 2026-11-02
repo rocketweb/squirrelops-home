@@ -34,7 +34,7 @@ notarized release. The prior full product validation is recorded in
   `distnoted` under service UID 309, installed receipt timestamp `1790711659`.
   Protected database contents cannot be inspected as `operator`; the attended
   root preflight must still verify them before offering the five-row preview.
-- Laptop route: `192.0.2.240` uses `wlp0s20f3`, source `192.0.2.7`.
+- Laptop route: `192.168.20.240` uses `wlp0s20f3`, source `192.168.20.7`.
   Python, pexpect, SSH/SFTP and smbclient are available.
 
 ## Staged inputs
@@ -49,12 +49,12 @@ the local inputs:
 | Input | SHA-256 |
 | --- | --- |
 | candidate.pkg | `2d5f4d287ca3ce971fd201f539d27a9272431f160a5a5debddc8d1b0b4dc7c82` |
-| mini_acceptance.py | `47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a` |
-| mini_upgrade_acceptance.py | `4c732720e89da4b4a872b56e951b1b70b121e2db603185ecb36d298c99c464d3` |
+| mini_acceptance.py | `46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f` |
+| mini_upgrade_acceptance.py | `bb5e7b1c8155f7301f25139e6bd6091a3d5c116f6dc4efe39207937b08e3ae5a` |
 | mini_ownership_acceptance.py | `fbefdc9a86cfde776fb691802ab443b8453b8067746872d62112e83fe5de8f22` |
 | approved-scope.md | `48eeb6d6e1d5aad583493f6dd7315d653767c1655247e19c26eb82d3477d5b68` |
 | start-mini-ownership-acceptance.sh | `872b2f9c31c946e99a4c7a2b0ea99e056597404c4c3b99038882b41a11a31d17` |
-| mini_upgrade_client.py | `15b3bb270b77d3801870d2a81b64dee266a8f823ce234f6b2be2ff360b02b7f6` |
+| mini_upgrade_client.py | `f10d1b894eac9c05f13e2677f790d2f398d26e750eada6be2d63fdfcd44aab63` |
 | mini_ownership_client.py | `35749262826c5b4a0b37b7add8481146dd6fbb40641e02e3f403ef4156dead93` |
 
 ## Next attended action

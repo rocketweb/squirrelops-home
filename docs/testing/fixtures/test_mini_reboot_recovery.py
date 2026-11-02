@@ -154,13 +154,13 @@ class RecoveryGuards(unittest.TestCase):
         s.sensor_pid, s.helper_pid, s.started = 887, 888, "known start"
         s.original_rows = {887: {"uid": 309, "parent": 1, "executable": str(m.RUNTIME)}}
         s.original_rows[888] = {"uid": 0, "parent": 1, "executable": str(m.base.HELPER)}
-        s.original_intent = [(1, "deep", "192.168.1.240", 445, "active")]
+        s.original_intent = [(1, "deep", "192.168.20.240", 445, "active")]
         s.policy = {m.upgrade.PRODUCT_ANCHOR: {"children": [], "-sr": "rules", "-sn": "nat"}}
         s.references, s.listeners = "private refs", {("0", "*:22")}
         s.assert_boot = Mock()
         s.hold_state = Mock(side_effect=[dict.fromkeys(m.upgrade.JOBS, False)] + [dict.fromkeys(m.upgrade.JOBS, True)] * 2)
         s.rows = Mock(side_effect=[s.original_rows, s.original_rows, {}, {}, {888: s.original_rows[888]}, {}])
-        s.owned = Mock(return_value=["192.168.1.240"])
+        s.owned = Mock(return_value=["192.168.20.240"])
         s.inventory_policy = Mock(side_effect=[s.policy, {}, {}])
         s.pf_enabled = Mock(return_value=True)
         s.pf = Mock(return_value=s.references)
@@ -227,7 +227,7 @@ class RecoveryGuards(unittest.TestCase):
 
     def test_intent_drift_prevents_success_receipt(self):
         s = self.prepared()
-        s.database_backup.return_value = [(1, "deep", "192.168.1.240", 445, "stopped")]
+        s.database_backup.return_value = [(1, "deep", "192.168.20.240", 445, "stopped")]
         with patch.object(m.os, "kill"), self.assertRaisesRegex(RuntimeError, "intent changed"):
             s.stop_and_hold()
         self.assertFalse((self.root / "held-stopped.json").exists())
@@ -245,9 +245,9 @@ class RecoveryGuards(unittest.TestCase):
         source = parent / "squirrelops.db"
         with sqlite3.connect(source) as db:
             db.executescript("CREATE TABLE decoys(id,decoy_type,bind_address,port,status);"
-                             "INSERT INTO decoys VALUES(1,'deep','192.168.1.240',445,'active');"
+                             "INSERT INTO decoys VALUES(1,'deep','192.168.20.240',445,'active');"
                              "CREATE TABLE virtual_ips(ip_address);"
-                             "INSERT INTO virtual_ips VALUES('192.168.1.240');")
+                             "INSERT INTO virtual_ips VALUES('192.168.20.240');")
         before = source.read_bytes()
         run, metadata, checked, temporary = subprocess.run, Path.lstat, m.checked_bytes, tempfile.mkdtemp
         def launch(args, **kw):
@@ -266,7 +266,7 @@ class RecoveryGuards(unittest.TestCase):
                 patch.object(Path, "lstat", source_metadata), \
                 patch.object(m, "checked_bytes", side_effect=lambda path, uid, modes, limit: checked(path, os.getuid(), modes, limit)), \
                 patch.object(m.tempfile, "mkdtemp", side_effect=lambda **kw: temporary(prefix=kw["prefix"], dir=self.root)):
-            self.assertEqual(self.session.database_backup("test"), [(1, "deep", "192.168.1.240", 445, "active")])
+            self.assertEqual(self.session.database_backup("test"), [(1, "deep", "192.168.20.240", 445, "active")])
         self.assertEqual(source.read_bytes(), before)
         self.assertEqual(stat.S_IMODE((self.root / "test.sqlite").stat().st_mode), 0o600)
 

@@ -45,8 +45,8 @@ Return stops early. Leave new Little Snitch prompts unanswered and report them.
 
 Only these IPv4 reset packets may be suppressed:
 
-- 192.0.2.7:42839 to 192.0.2.239:22
-- 192.0.2.7:42840 to 192.0.2.240:445
+- 192.168.20.7:42839 to 192.168.20.239:22
+- 192.168.20.7:42840 to 192.168.20.240:445
 
 The client reserves both source ports and verifies its wlp0s20f3/.7 routes.
 The independent watchdog saves the current nftables ruleset privately, prints

@@ -35,7 +35,7 @@ sensor:
   port: 8443
 network:
   interface: en0
-  subnet: 192.168.1.0/24
+  subnet: 192.168.20.0/24
 scouts:
   enabled: false
 home_assistant:
@@ -171,7 +171,7 @@ class Reset:
         require('No pf starter references held' in refs.stdout + refs.stderr,
                 'Existing PF reference needs review; no release attempted')
         addresses = self.command(['/sbin/ifconfig', '-a']).stdout
-        require(not re.search(r'\binet 192\.168\.1\.(?:239|240|241)\s', addresses),
+        require(not re.search(r'\binet 192\.168\.20\.(?:239|240|241)\s', addresses),
                 'Test alias remains; no reset authorized')
         return {flag: self.command(['/sbin/pfctl', flag]).stdout for flag in ('-sr', '-sn')}
 
@@ -191,7 +191,7 @@ class Reset:
         os.umask(0o077)
         for p in (Path('/Library/SquirrelOps'), ARCHIVES, self.task):
             safe_root(p)
-        require('d0:11:e5:12:9a:c2' in self.command(['/sbin/ifconfig', 'en0']).stdout,
+        require('d0:11:e5:3c:4d:5e' in self.command(['/sbin/ifconfig', 'en0']).stdout,
                 'Wrong machine: this operation is for the Mini only')
         package, uninstall = self.task / 'old.pkg', SENSOR / 'uninstall.sh'
         safe_root(package, False)
@@ -300,7 +300,7 @@ def main():
     parser.add_argument('--run', type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps(dict(mode='plan_only', host='100.108.203.27', targets=list(map(str, TARGETS)),
+        print(json.dumps(dict(mode='plan_only', host='100.64.0.27', targets=list(map(str, TARGETS)),
                               old_package_sha256=OLD_SHA, upgrade_run=False), indent=2))
         return
     reset = Reset(args.run)

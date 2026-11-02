@@ -68,11 +68,11 @@ The laptop client at `/root/squirrelops-mini-upgrade-client.Ud9OIx96` is unchang
 | Input | SHA-256 |
 | --- | --- |
 | candidate.pkg | `2d5f4d287ca3ce971fd201f539d27a9272431f160a5a5debddc8d1b0b4dc7c82` |
-| mini_acceptance.py | `47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a` |
-| mini_upgrade_acceptance.py | `4c732720e89da4b4a872b56e951b1b70b121e2db603185ecb36d298c99c464d3` |
-| mini_ownership_acceptance.py | `98d8729e112e8ff48bbf320b094ab96471e597dd48cec6a726b17807d07986e6` |
-| approved-scope.md | `6a1b627d0a143a8c7eb661f0b5d13f5e2547c69196bc69b3207ec771fb2b59fe` |
-| start-mini-ownership-acceptance.sh | `2e2cf33fae6d178fd0c251ebcd96930073b2a078458fc7345deae1a14ac22dd4` |
+| mini_acceptance.py | `46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f` |
+| mini_upgrade_acceptance.py | `bb5e7b1c8155f7301f25139e6bd6091a3d5c116f6dc4efe39207937b08e3ae5a` |
+| mini_ownership_acceptance.py | `1edd5706b7dd5f0fc8285b50ce2d895a9952208218c19d1ddf66934715191287` |
+| approved-scope.md | `5fc275e07234019f883627c4bbe68013d6be62350c6bed3bb2e82c3c0875c862` |
+| start-mini-ownership-acceptance.sh | `0e01036ff484050be9e5a19efa1621324729c8b0975ba2f7d1a0094dc5c4894c` |
 
 Next attended command, on the mini with SquirrelOps closed:
 

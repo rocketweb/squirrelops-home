@@ -23,7 +23,7 @@ require = base.require
 PACKAGE_SHA = "3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea"
 SCOPE = "mini-relay-diagnostics-240"
 CONSENT = "INSTALL DIAGNOSTICS AND TEST 240"
-EXPECTED_INTENT = [*post.EXPECTED_INTENT, [7, "home_assistant", "192.168.1.115", 51232, "active"]]
+EXPECTED_INTENT = [*post.EXPECTED_INTENT, [7, "home_assistant", "192.168.20.115", 51232, "active"]]
 STAGES = frozenset("listener_activated listener_readable accept_failed client_setup_failed accepted "
                    "main_actor_entered capacity_rejected guest_connect_started guest_connected "
                    "guest_connect_failed guest_connect_timeout relay_started first_read read_eof "
@@ -49,7 +49,7 @@ def validate_intent(rows, *, additions=False):
     extras = [row for row in rows if row[0] not in {saved[0] for saved in EXPECTED_INTENT}]
     require(additions or not extras, "Stopped baseline contains unreviewed decoys")
     require(all(row[0] > 7 and isinstance(row[1], str) and re.fullmatch(r"[a-z_]{1,40}", row[1])
-                and row[1] not in {"deep", "mimic"} and row[2] == "192.168.1.115"
+                and row[1] not in {"deep", "mimic"} and row[2] == "192.168.20.115"
                 and type(row[3]) is int and 1024 <= row[3] <= 65535
                 and row[4] in {"active", "stopped", "degraded"} for row in extras),
             "New decoy outside host-listener scope; retain evidence")
@@ -89,7 +89,7 @@ def socket_metadata(text):
             current = None
         elif line.startswith("n"):
             current = None
-            endpoint = re.fullmatch(r"n192\.168\.1\.240:(\d{1,5})(?:->192\.168\.1\.7:(\d{1,5}))?", line)
+            endpoint = re.fullmatch(r"n192\.168\.20\.240:(\d{1,5})(?:->192\.168\.20\.7:(\d{1,5}))?", line)
             if not endpoint or uid != "309" or pid is None or len(result) >= 128:
                 continue
             local, remote = int(endpoint[1]), int(endpoint[2]) if endpoint[2] else None
@@ -165,7 +165,7 @@ class RelayDiagnosticUpgrade(post.PostRebootUpgrade):
         require(base.digest(self.task_dir / "candidate.pkg") == PACKAGE_SHA, "Package checksum mismatch")
         require(self.command(["/usr/bin/uname", "-m"]).stdout.strip() == "arm64", "Wrong architecture")
         require(self.command(["/usr/bin/sw_vers", "-buildVersion"]).stdout.strip() == post.BUILD, "OS drift")
-        require("100.108.203.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong host")
+        require("100.64.0.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong host")
         container = Path("/Library/SquirrelOps/acceptance-backups")
         for path in (container.parent, container):
             base.safe_directory(path)
@@ -184,7 +184,7 @@ class RelayDiagnosticUpgrade(post.PostRebootUpgrade):
         self.baseline_listeners = base.listener_endpoints(self.command(upgrade.LISTENERS).stdout)
         require(not any(uid == "309" or endpoint.endswith(":8443") for uid, endpoint in self.baseline_listeners),
                 "Unexpected service/API listener")
-        for endpoint in ("*:22", "*:445", "*:5900", "192.168.1.115:11434"):
+        for endpoint in ("*:22", "*:445", "*:5900", "192.168.20.115:11434"):
             require(any(address == endpoint for _, address in self.baseline_listeners), "Native listener missing")
         self.host_baseline()
         info = self.pf(["-s", "info"])
@@ -203,7 +203,7 @@ class RelayDiagnosticUpgrade(post.PostRebootUpgrade):
     def confirm_scope(self):
         print("Verified backups retained. Install pinned diagnostics, restart once, permit one bounded laptop run.", flush=True)
         print("Existing sensor discovery/auto-deployment can run; new host listeners are retained and reported.", flush=True)
-        print("No Little Snitch, global PF policy, Studio or .241 changes. Restore both disabled jobs after tests.", flush=True)
+        print("No Little Snitch, global PF policy, test host A or .241 changes. Restore both disabled jobs after tests.", flush=True)
         print(f"Type {CONSENT} to approve, or Return to stop:", flush=True)
         require(input().strip() == CONSENT, "Diagnostic upgrade not approved")
 
@@ -317,7 +317,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "boot_seconds": post.BOOT,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "boot_seconds": post.BOOT,
                           "package_sha256": PACKAGE_SHA, "test_scope": SCOPE, "test_vips": [single.VIP],
                           "configuration_edits": 0, "database_recovery": False,
                           "normal_restart": True, "restore_disabled_jobs": True,

@@ -3,16 +3,16 @@
 Matt approved this scope with "keep going" after the completed filter retest:
 one SMB-only diagnostic window on the same installed Mini build, with no
 installer, firewall changes or file writes. He subsequently confirmed the
-narrow incoming guest rule from laptop `192.168.1.7` is still active. This is
+narrow incoming guest rule from laptop `192.168.20.7` is still active. This is
 operator-reported, not a rule audit or approval to renew/broaden it.
 
 ## Baseline and startup
 
-Mini `100.108.203.27`, boot `1790777754`, ARM64 macOS build `26A434`.
+Mini `100.64.0.27`, boot `1790777754`, ARM64 macOS build `26A434`.
 Package SHA-256:
 `3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea`.
 Retain the same seven saved decoys and `.240`-only configuration. Both apps
-stay closed. No Studio restart, `.241` test, SQL recovery, global PF policy
+stay closed. No test host A restart, `.241` test, SQL recovery, global PF policy
 edit, Little Snitch change or installer operation.
 
 Resolve the prior durable backup only through the exact root-private claim

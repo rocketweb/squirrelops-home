@@ -20,7 +20,7 @@ time `1790818368`. The old guest manifest and guest executable hashes match.
 No privileged PF, database or rule inspection was attempted in this staging
 step; the root-attended preflight performs those checks before installation.
 
-The laptop route remains `wlp0s20f3`, source `192.0.2.7`. Installed Samba is
+The laptop route remains `wlp0s20f3`, source `192.168.20.7`. Installed Samba is
 `4.19.5-Ubuntu`; its help confirms the empty-config, explicit IP/port,
 anonymous-user and Kerberos-off flags. `pexpect` is available.
 
@@ -29,7 +29,7 @@ candidate payload supplied. Local and remote installer SHA-256 match:
 `47774088cd9eadc5aaddf38949e00a8b8f6eeb56c2192a5a72830d06d84a8aec`.
 All 12 Mini staged files, including the bootstrap, match their recorded pins.
 The laptop client matches
-`6c3c9c28a9e994ea11f856ca76de46fac58507a72cad97ee962c6df88e6676ec`.
+`712af351e14f74cf58c6fc53bacba5c6d0cb9ede45390bea19608eff28f645b1`.
 
 Remote shell syntax and both remote no-traffic plan modes passed. The Mini
 directory is operator-owned 0700; the bootstrap copies and hashes its inputs

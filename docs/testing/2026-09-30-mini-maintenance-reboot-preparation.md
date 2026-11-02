@@ -5,7 +5,7 @@ shutdown, reboot, installation or network-filter change was made by the agent.
 
 ## Live baseline
 
-Read-only SSH checks still show mini `203.0.113.27`, build `26A434`, boot
+Read-only SSH checks still show mini `100.64.0.27`, build `26A434`, boot
 `1790766531`, sensor PID 887 (runs 1, exit timeout 5), helper PID 888 (runs 1),
 and no disabled override for either product service. This is pre-reboot evidence,
 not a durable promise of the host's later state. The attended preparation
@@ -54,13 +54,13 @@ After logging back in, keep SquirrelOps closed and report that the mini is back
 for the post-boot audit. If it stops, do not reboot or rerun; report the output.
 
 Staged wrapper SHA-256:
-`3700143d63f334e8354e48a865595ec77d8e9b77dfb8d2dba8a2d71ff1697028`
+`1d911e42009ec0a53e665cdab76b69b2b310da0a0431feb0a6d4bfdd83bcecef`
 
 New entry-point SHA-256:
-`a90f94885c5eec19ebbdafa8e75444ddaab54b485b71b3fb937815f8c9904314`
+`88258c1041aa27bb2438ab90172691d52081b9a5a08d3ca2c925fd06d2530af3`
 
 Scope SHA-256:
-`6bb043a98dd66573e3955d889499c13b9245ff7b03b28c25be01be326560c5aa`
+`cee144283bf5a92700db3186f14d9bd6c06ad94ef5d700b77954f22f98a765b1`
 
 All prior staging directories, backups and source changes remain intact.
 No commit, push, rebuild, installation or release was performed.

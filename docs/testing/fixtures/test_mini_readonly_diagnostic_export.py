@@ -17,9 +17,9 @@ spec.loader.exec_module(m)
 class ExportTests(unittest.TestCase):
     def test_packet_direction_bytes_and_retransmits(self):
         lines = [
-            '2026-09-30 12:19:00.001 IP 192.168.1.7.40000 > 192.168.1.240.22: tcp 0',
-            '2026-09-30 12:19:01.002 IP 192.168.1.240.22 > 192.168.1.7.40000: tcp 25',
-            '2026-09-30 12:19:02.002 IP 192.168.1.240.22 > 192.168.1.7.40000: tcp 25',
+            '2026-09-30 12:19:00.001 IP 192.168.20.7.40000 > 192.168.20.240.22: tcp 0',
+            '2026-09-30 12:19:01.002 IP 192.168.20.240.22 > 192.168.20.7.40000: tcp 25',
+            '2026-09-30 12:19:02.002 IP 192.168.20.240.22 > 192.168.20.7.40000: tcp 25',
         ]
         r = m.packets('\n'.join(lines))
         self.assertEqual(r['unparsed_or_out_of_scope_lines'], 0)
@@ -28,9 +28,9 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(r['groups'][0]['packets'], 2)
 
     def test_packet_unknown_lines_never_echoed(self):
-        for line in ('secret-token', '2026-09-30 12:19:00.001 IP 192.168.1.7.40000 > 192.168.1.7.22: tcp 2',
-                     '2026-09-30 12:19:00.001 IP 192.168.1.7.40000 > 192.168.1.240.5900: tcp 2',
-                     '2026-09-30 12:19:00.001 IP 192.168.1.7.999999 > 192.168.1.240.22: tcp 2'):
+        for line in ('secret-token', '2026-09-30 12:19:00.001 IP 192.168.20.7.40000 > 192.168.20.7.22: tcp 2',
+                     '2026-09-30 12:19:00.001 IP 192.168.20.7.40000 > 192.168.20.240.5900: tcp 2',
+                     '2026-09-30 12:19:00.001 IP 192.168.20.7.999999 > 192.168.20.240.22: tcp 2'):
             r = m.packets(line)
             self.assertEqual(r, dict(groups=[], unparsed_or_out_of_scope_lines=1))
 
@@ -53,15 +53,15 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(m.log_events(data)['exception_counts'], {})
 
     def test_listener_exact_command_and_endpoint_only(self):
-        record = dict(command=m.LISTENERS, exit=0, stdout='p15923\nu309\nn192.168.1.240:49878\nn*:22\nn192.168.1.115:22\nsecret-token\n')
+        record = dict(command=m.LISTENERS, exit=0, stdout='p15923\nu309\nn192.168.20.240:49878\nn*:22\nn192.168.20.115:22\nsecret-token\n')
         self.assertEqual(m.listener_records(record), [dict(pid=15923, uid=309, ip=m.VIP, port=49878)])
         self.assertEqual(m.listener_records(dict(record, command=['/sbin/pfctl', '-s', 'References'])), [])
         self.assertEqual(m.listener_records(dict(record, exit=1)), [])
 
     def test_traffic_is_scoped_and_redacted(self):
         header = 'date,direction,uid,ipAddress,remoteHostname,protocol,port,connectCount,denyCount,byteCountIn,byteCountOut,connectingExecutable,parentAppExecutable\n'
-        row = '2026-09-30T16:19:00Z,in,309,192.168.1.7,secret-token,6,22,1,0,100,20,"/Library/SquirrelOps/sensor/python/bin/python3.12",secret-token\n'
-        r = m.traffic(header + row + row.replace('192.168.1.7', '192.168.1.111'))
+        row = '2026-09-30T16:19:00Z,in,309,192.168.20.7,secret-token,6,22,1,0,100,20,"/Library/SquirrelOps/sensor/python/bin/python3.12",secret-token\n'
+        r = m.traffic(header + row + row.replace('192.168.20.7', '192.168.20.111'))
         self.assertEqual(len(r), 1)
         self.assertEqual(r[0]['process'], 'sensor_python')
         self.assertNotIn('secret-token', json.dumps(r))
@@ -111,7 +111,7 @@ class ExportTests(unittest.TestCase):
             if path == m.RECEIPT:
                 return receipt
             if path.name.startswith('packet-'):
-                return b'2026-09-30 12:19:00.001 IP 192.168.1.7.40000 > 192.168.1.240.22: tcp 0\n'
+                return b'2026-09-30 12:19:00.001 IP 192.168.20.7.40000 > 192.168.20.240.22: tcp 0\n'
             raise FileNotFoundError
         calls = []
         def run(args, **kwargs):

@@ -18,8 +18,8 @@ create a VM, run an installer, start product services or change network policy.
 
 | Check | Read-only result |
 | --- | --- |
-| Host | `operator@203.0.113.27`, macOS 27.0.1 build 26A434, ARM64 |
-| Hardware | Mac16,11, Apple M4 Pro, 12 CPUs, 24 GiB RAM |
+| Host | `operator@100.64.0.27`, macOS 27.0.1 build 26A434, ARM64 |
+| Hardware | Apple M4 Pro, 12 CPUs, 24 GiB RAM |
 | Hypervisor | `kern.hv_support=1` |
 | Storage | Internal Data volume: 460 GiB total, about 30 GiB available |
 | External storage | No external data volume mounted; `/Volumes/Recovery` is not a test destination |

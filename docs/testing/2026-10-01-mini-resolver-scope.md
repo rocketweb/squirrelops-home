@@ -5,9 +5,9 @@ it or start another live window. This document defines the next exact scope.
 
 ## Targets and artifact
 
-- Mini: `matt@100.108.203.27`, ARM64, macOS build `26A434`, boot `1790777754`.
-- Client: Linux laptop `192.168.1.7`, route through `wlp0s20f3`.
-- Test virtual host: `192.168.1.240` only. No Studio or `.241` operations.
+- Mini: `operator@100.64.0.27`, ARM64, macOS build `26A434`, boot `1790777754`.
+- Client: Linux laptop `192.168.20.7`, route through `wlp0s20f3`.
+- Test virtual host: `192.168.20.240` only. No test host A or `.241` operations.
 - Candidate: `SquirrelOpsHome-2.1.0-guest-resolver-20261001-local-test.pkg`.
 - SHA-256: `47774088cd9eadc5aaddf38949e00a8b8f6eeb56c2192a5a72830d06d84a8aec`.
 - Unsigned local-test installer; payloads are ad-hoc signed, not notarized.
@@ -44,7 +44,7 @@ it or start another live window. This document defines the next exact scope.
 ## Data preservation and exclusions
 
 Saved rows 1 through 7 are preserved. Configuration remains `.240` only,
-SHA-256 `6b492246632eee7bc3975e84fc7c75699d3dcdfc15f2ec542ec673ab243b4bd8`.
+SHA-256 `1318489677a7143395487f4a07703cac31b77577daf276000c36ca39414c2aa5`.
 No SQL recovery, config edits or deletions of existing files are authorized.
 The test deletes only its uniquely named synthetic guest uploads. Normal
 sensor discovery and automatic host-listener deployment can run; new classic
@@ -53,7 +53,7 @@ listeners are retained and reported, not silently removed.
 Do not change Little Snitch rules or global PF rules. Verify that the existing
 guest-only incoming TCP allowance from `.7` is active before starting. Leave
 new or mismatching filter prompts unanswered and report them. Both apps stay
-closed; the Studio is untouched. Native SSH, SMB, VNC, Ollama and unrelated
+closed; test host A is untouched. Native SSH, SMB, VNC, Ollama and unrelated
 launchd jobs are preserved.
 
 ## Failure and inverse operation

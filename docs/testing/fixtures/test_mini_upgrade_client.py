@@ -15,20 +15,20 @@ spec.loader.exec_module(module)
 class ClientGuards(unittest.TestCase):
     def inputs(self):
         now = 1790709500
-        endpoints = {"guest_ip": "192.168.1.240", "mappings": [
-            {"ip": "192.168.1.240", "port": port, "backend": 50000 + i}
+        endpoints = {"guest_ip": "192.168.20.240", "mappings": [
+            {"ip": "192.168.20.240", "port": port, "backend": 50000 + i}
             for i, port in enumerate((22, 445, 1234, 11434, 8765))]}
-        login = {"ip": "192.168.1.240", "username": "buildbot", "password": "Juniper!123456"}
+        login = {"ip": "192.168.20.240", "username": "buildbot", "password": "Juniper!123456"}
         status = {"phase": "ready_for_tests", "sensor_uid": 309, "package_sha256": module.PACKAGE_SHA,
                   "time": datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                   "remaining_seconds": 1100}
         return endpoints, login, status, now
 
     def test_valid_live_inventory(self):
-        self.assertEqual(module.validate_inputs(*self.inputs()), "192.168.1.240")
+        self.assertEqual(module.validate_inputs(*self.inputs()), "192.168.20.240")
 
     def test_wrong_guest_or_credential_is_rejected(self):
-        for key, value in (("ip", "192.168.1.115"), ("username", "matt"), ("password", "real-credential")):
+        for key, value in (("ip", "192.168.20.115"), ("username", "operator"), ("password", "real-credential")):
             endpoints, login, status, now = self.inputs()
             login[key] = value
             with self.subTest(key=key), self.assertRaises(RuntimeError):
@@ -58,7 +58,7 @@ class ClientGuards(unittest.TestCase):
         stream.__enter__.return_value = stream
         stream.recv.side_effect = TimeoutError()
         with patch.object(module.socket, "create_connection", return_value=stream):
-            result = module.banner_probe("192.168.1.240")
+            result = module.banner_probe("192.168.20.240")
         self.assertTrue(result["connected"])
         self.assertFalse(result["passed"])
         self.assertEqual(result["stage"], "banner")
@@ -69,7 +69,7 @@ class ClientGuards(unittest.TestCase):
             stream.__enter__.return_value = stream
             stream.recv.return_value = data
             with patch.object(module.socket, "create_connection", return_value=stream):
-                self.assertEqual(module.banner_probe("192.168.1.240")["passed"], valid)
+                self.assertEqual(module.banner_probe("192.168.20.240")["passed"], valid)
 
     def test_http_requires_service_specific_payload_not_just_json(self):
         for port, body in ((1234, {"data": [{"id": "synthetic"}]}),

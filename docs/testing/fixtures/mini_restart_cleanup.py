@@ -26,10 +26,10 @@ BASELINE = Path("/Library/SquirrelOps/acceptance-backups/mini-upgrade-20260929.z
 PUBLIC = Path("/private/var/tmp/squirrelops-mini-upgrade-results.w3qacnps")
 STAGE = Path("/private/var/root/squirrelops-mini-ownership.s4L9F0BA")
 INPUTS = {
-    "mini_acceptance.py": "47b6c6df59083230ac63f97f1b32c55fa804f71839d433bfbc9fb952bf7bd40a",
-    "mini_upgrade_acceptance.py": "4c732720e89da4b4a872b56e951b1b70b121e2db603185ecb36d298c99c464d3",
-    "mini_ownership_acceptance.py": "98d8729e112e8ff48bbf320b094ab96471e597dd48cec6a726b17807d07986e6",
-    "approved-scope.md": "6a1b627d0a143a8c7eb661f0b5d13f5e2547c69196bc69b3207ec771fb2b59fe",
+    "mini_acceptance.py": "46f441987cf092c0cf4cb38eb6b76bbef1452eca54d66b37ff1e98523a2dcb3f",
+    "mini_upgrade_acceptance.py": "bb5e7b1c8155f7301f25139e6bd6091a3d5c116f6dc4efe39207937b08e3ae5a",
+    "mini_ownership_acceptance.py": "1edd5706b7dd5f0fc8285b50ce2d895a9952208218c19d1ddf66934715191287",
+    "approved-scope.md": "5fc275e07234019f883627c4bbe68013d6be62350c6bed3bb2e82c3c0875c862",
 }
 EVIDENCE = {
     "status.json": "586e1e64908489d7fb26cec9bc517ac49c3064372a10916dbe6ae655ae271a5f",
@@ -58,7 +58,7 @@ def recover_baseline(records, token):
                  if row["command"] == upgrade.LISTENERS and row["exit"] == 0]
     require(bool(listeners) and all(item == listeners[0] for item in listeners),
             "Original listener baseline is missing or inconsistent")
-    for endpoint in ("*:22", "*:445", "*:5900", "192.168.1.115:11434", "127.0.0.1:49199"):
+    for endpoint in ("*:22", "*:445", "*:5900", "192.168.20.115:11434", "127.0.0.1:49199"):
         require(any(address == endpoint for _, address in listeners[0]), "Incomplete native listener baseline")
     require(not any(uid == "309" for uid, _ in listeners[0]), "Pre-install runtime listener found")
 
@@ -118,7 +118,7 @@ class RestartCleanup(upgrade.Upgrade):
         require(self.service_loaded("com.squirrelops.helper"), "Original helper unavailable")
         for pid in PIDS:
             self.process_identity(pid)
-        require(self.owned() == ["192.168.1.240"], "Alias ownership changed")
+        require(self.owned() == ["192.168.20.240"], "Alias ownership changed")
         for key, flag in (("pf_rules", "-sr"), ("pf_nat", "-sn")):
             require(self.pf(["-a", upgrade.PRODUCT_ANCHOR, flag]) == self.first_start[key],
                     "Product PF rules changed; retain protection")
@@ -161,7 +161,7 @@ class RestartCleanup(upgrade.Upgrade):
         for name in EVIDENCE:
             shutil.copy2(PUBLIC / name, self.backup / name)
         require(self.command(["/usr/bin/sw_vers", "-buildVersion"]).stdout.strip() == "26A428", "OS changed")
-        require("100.108.203.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong host")
+        require("100.64.0.27" in self.command(["/sbin/ifconfig", "-a"]).stdout, "Wrong host")
         require(base.pwd.getpwnam("_squirrelops").pw_uid == 309 and
                 base.grp.getgrnam("_squirrelops").gr_gid == 309, "Service identity changed")
         for path, expected in {**self.old_executables, upgrade.RUNTIME: upgrade.PYTHON_SHA}.items():

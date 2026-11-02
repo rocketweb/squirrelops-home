@@ -26,8 +26,8 @@ verify_digest() {
 }
 verify_digest old.pkg 252bd6bd559b4dbf578410aa959611675d3b627163ee885f404857cb67ab23f8
 verify_digest current.pkg 47774088cd9eadc5aaddf38949e00a8b8f6eeb56c2192a5a72830d06d84a8aec
-verify_digest mini_clean_upgrade.py 90504c8a7a1f422e5692bac138ecd7e15f5ad0479cb51579f2f4284cd065afe0
-verify_digest mini_resume_clean_upgrade.py 9aafd26e22f9bdb2bb4b66e7f9d71c7cd023f278856a8ea50b160c1c70db300e
+verify_digest mini_clean_upgrade.py 940bbe44675f80f7a074722b3e6c231b1214f281413269b971cbbbd8c0d3c320
+verify_digest mini_resume_clean_upgrade.py 3f89a2268b94f911755b27b52853b59d5b9fcc39a86a1489f4e995fbeaf2d4d2
 verify_digest uninstall-fixed.sh 1f2e64b73b20db7cbacf5caf9ac0d79053c7a1db754684dbc96b4e6a9f3166b6
 echo "Resume inputs verified. Preparing private Python; no cleanup performed yet."
 /usr/sbin/pkgutil --expand-full "$task_dir/current.pkg" "$task_dir/expanded"

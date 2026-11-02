@@ -14,7 +14,7 @@ import time
 
 SCOPE = "mini-smb-only-diagnostic-240"
 PACKAGE_SHA = "3d18ebac2fae343fd9c710ad2a187ec3f4bf6e4fd9cfda3bc3654214db7c67ea"
-VIP, SOURCE = "192.168.1.240", "192.168.1.7"
+VIP, SOURCE = "192.168.20.240", "192.168.20.7"
 
 
 def require(condition, message):
@@ -51,7 +51,7 @@ def command():
 def classify(text):
     """Fixed vocabulary only; never echo arbitrary server/debug text publicly."""
     result = []
-    checks = (("Connecting to 192.168.1.240 at port 445", "connect_attempt"),
+    checks = (("Connecting to 192.168.20.240 at port 445", "connect_attempt"),
               ("Anonymous login successful", "anonymous_session"),
               ("session setup failed", "session_setup_failed"),
               ("protocol negotiation failed", "negotiation_failed"),

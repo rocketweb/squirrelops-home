@@ -40,7 +40,7 @@ def validate_cleanup(receipt):
     require(isinstance(receipt, dict) and receipt.get("phase") == "stopped"
             and receipt.get("test_scope") == "mini-relay-diagnostics-240"
             and receipt.get("diagnostic_scope") == "mini-smb-only-diagnostic-240"
-            and receipt.get("test_vips") == ["192.168.1.240"]
+            and receipt.get("test_vips") == ["192.168.20.240"]
             and receipt.get("boot_seconds") == post.BOOT and receipt.get("pf_enabled") is False
             and all(receipt.get(key) is True for key in (
                 "configuration_unchanged", "config_change_verified", "installation_retained",
@@ -98,8 +98,8 @@ class ResolverUpgrade(relay.RelayDiagnosticUpgrade):
         print("Install the pinned resolver fix, test one normal restart, then one bounded laptop protocol run.", flush=True)
         print("Verified private backups retained. Preserve seven decoys and .240-only configuration; no SQL edits.", flush=True)
         print("Existing discovery/auto-deployment may run; new host listeners are retained and reported.", flush=True)
-        print("Both apps stay closed. No Studio, .241 or Little Snitch changes. Leave new prompts unanswered.", flush=True)
-        print("Confirm the existing guest-only incoming rule from 192.168.1.7 is still active; this script does not change it.", flush=True)
+        print("Both apps stay closed. No test host A, .241 or Little Snitch changes. Leave new prompts unanswered.", flush=True)
+        print("Confirm the existing guest-only incoming rule from 192.168.20.7 is still active; this script does not change it.", flush=True)
         print("After one client run, Return stops services, removes aliases, restores disabled jobs and releases only our PF reference.", flush=True)
         print("The new installation and data remain. Failure retains evidence; no automatic downgrade or force-kill.", flush=True)
         print(f"Type {CONSENT} to approve, or Return to stop:", flush=True)
@@ -111,8 +111,8 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps(dict(mode="plan_only", host="100.108.203.27", boot_seconds=post.BOOT,
-                              package_sha256=PACKAGE_SHA, test_scope=SCOPE, test_vips=["192.168.1.240"],
+        print(json.dumps(dict(mode="plan_only", host="100.64.0.27", boot_seconds=post.BOOT,
+                              package_sha256=PACKAGE_SHA, test_scope=SCOPE, test_vips=["192.168.20.240"],
                               configuration_edits=0, database_recovery=False, normal_restart=True,
                               restore_disabled_jobs=True, third_party_filter_rule_changes=False,
                               confirmation=CONSENT), indent=2))

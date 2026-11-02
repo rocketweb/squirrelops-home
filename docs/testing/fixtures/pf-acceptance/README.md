@@ -5,10 +5,10 @@ sensor startup, whole A5 sign-off or permission to publish a release.
 
 ## Exact boundary
 
-- Mini `203.0.113.27`, ARM64 macOS 27.0.1 build 26A434. Ethernet `en0`
-  192.0.2.115, Wi-Fi `en1` 192.0.2.254. Existing jobs must stay disabled
+- Mini `100.64.0.27`, ARM64 macOS 27.0.1 build 26A434. Ethernet `en0`
+  192.168.20.115, Wi-Fi `en1` 192.168.20.254. Existing jobs must stay disabled
   and unloaded. The app and guest must remain closed.
-- Temporary IPs 192.0.2.239 and .240 only, each conflict-checked using the
+- Temporary IPs 192.168.20.239 and .240 only, each conflict-checked using the
   production duplicate-address guard before publication. No test host A or .241.
 - Public ports 22 and 445 redirect to fixed disposable backends 61322 and
   61445. Children use the checksum-pinned installed Python executable with
@@ -23,7 +23,7 @@ sensor startup, whole A5 sign-off or permission to publish a release.
   the recursively inspected policy. The runner acquires one reference. It
   marks both acquisition and release attempts durably before executing them.
   An uncertain result is never authorization to retry.
-- Fixed-source laptop probes from 192.0.2.7, bounded private packet captures
+- Fixed-source laptop probes from 192.168.20.7, bounded private packet captures
   on en0/en1, snaplen 96, 3,000 packets maximum each. Captures and full PF
   inventory remain root-private. Payloads contain synthetic tokens only.
 - Private byte copies and fingerprints of config, SQLite files, launch plists

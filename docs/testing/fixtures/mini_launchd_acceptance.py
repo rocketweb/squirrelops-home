@@ -27,7 +27,7 @@ def validate_active_rows(rows):
     require(len(rows) == 5 and {row["id"]: row["port"] for row in rows} == ownership.EXPECTED,
             "Expected exactly the five restored Studio rows")
     require(all(row["status"] == "active" and row["decoy_type"] == "deep" and
-                row["bind_address"] == "192.168.1.240" and row["retired_at"] is None for row in rows),
+                row["bind_address"] == "192.168.20.240" and row["retired_at"] is None for row in rows),
             "Studio intent changed; no automatic row recovery")
     require(len({row["host_id"] for row in rows}) == 1 and rows[0]["host_id"] is not None
             and [row["id"] for row in rows if row["is_primary"]] == [1], "Studio grouping changed")
@@ -125,7 +125,7 @@ def main():
     parser.add_argument("--run", type=Path)
     args = parser.parse_args()
     if args.run is None:
-        print(json.dumps({"mode": "plan_only", "host": "100.108.203.27", "package_sha256": PACKAGE_SHA,
+        print(json.dumps({"mode": "plan_only", "host": "100.64.0.27", "package_sha256": PACKAGE_SHA,
                           "database_recovery": False, "normal_restart": True, "sensor_exit_timeout": 60,
                           "confirmation": CONSENT, "observe_seconds": 1200,
                           "third_party_filter_rule_changes": False, "fault_injection": False}, indent=2))

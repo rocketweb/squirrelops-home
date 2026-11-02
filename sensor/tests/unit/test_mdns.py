@@ -150,7 +150,7 @@ class TestIsLanIp:
         "addr",
         [
             "100.64.0.1",    # CGNAT start
-            "100.96.3.13",   # Tailscale typical
+            "100.65.3.13",   # Tailscale typical
             "100.127.255.255",  # CGNAT end
         ],
     )
@@ -177,25 +177,25 @@ class TestGetLocalIp:
         """When both LAN and CGNAT IPs are available, LAN wins."""
         with patch(
             "squirrelops_home_sensor.mdns._collect_interface_ips",
-            return_value=["100.96.3.13", "192.168.1.18"],
+            return_value=["100.65.3.13", "192.168.1.18"],
         ):
             assert _get_local_ip() == "192.168.1.18"
 
     def test_cgnat_only_falls_back_to_udp(self) -> None:
         """CGNAT-only IPs are not private in Python — falls back to UDP."""
         mock_sock = MagicMock()
-        mock_sock.getsockname.return_value = ("100.96.3.13", 0)
+        mock_sock.getsockname.return_value = ("100.65.3.13", 0)
         with (
             patch(
                 "squirrelops_home_sensor.mdns._collect_interface_ips",
-                return_value=["100.96.3.13"],
+                return_value=["100.65.3.13"],
             ),
             patch("socket.socket", return_value=mock_sock),
         ):
             result = _get_local_ip()
             # CGNAT (100.64/10) is neither RFC 1918 private nor Python-private,
             # so it's skipped entirely and UDP socket trick runs instead.
-            assert result == "100.96.3.13"
+            assert result == "100.65.3.13"
 
     def test_no_interfaces_falls_back_to_udp(self) -> None:
         """When no interfaces found, fall back to UDP socket trick."""
