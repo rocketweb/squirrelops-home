@@ -35,6 +35,7 @@ class _SecretStore:
 class _IPManager:
     def __init__(self, calls: list[str]) -> None:
         self.calls = calls
+        self.free = True
 
     async def allocate_verified(self, count: int) -> list[str]:
         assert count == 1
@@ -51,7 +52,7 @@ class _IPManager:
 
     async def is_verified_free(self, address: str) -> bool:
         self.calls.append(f"verify:{address}")
-        return True
+        return self.free
 
     def release_reservation(self, address: str) -> None:
         self.calls.append(f"release:{address}")
@@ -396,6 +397,85 @@ async def test_failed_restart_is_saved_as_degraded_not_as_an_operator_stop(tmp_p
         orchestrator._next_retry_at = 0
         assert await orchestrator.reconcile() is True
         assert orchestrator.diagnostics["status"] == "active"
+        statuses = await (
+            await db.execute("SELECT DISTINCT status FROM decoys WHERE decoy_type = 'deep'")
+        ).fetchall()
+        assert [row[0] for row in statuses] == ["active"]
+        await orchestrator.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_ip_conflict_evacuation_is_saved_as_degraded_not_as_an_operator_stop(
+    tmp_path,
+) -> None:
+    calls: list[str] = []
+    async with aiosqlite.connect(tmp_path / "evacuate.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, events = await _orchestrator(db, calls)
+        assert await orchestrator.start() is True
+        primary_id = int((await (
+            await db.execute("SELECT id FROM decoys WHERE decoy_type = 'deep' AND port = 445")
+        ).fetchone())["id"])
+        calls.clear()
+        events.items.clear()
+
+        assert await orchestrator.handle_ip_conflict("192.0.2.240", "aa:bb:cc:dd:ee:ff") is True
+
+        assert orchestrator.is_active is False
+        assert calls.index("quarantine:192.0.2.240") < calls.index("alias:remove:192.0.2.240")
+        assert f"forwards:remove:{primary_id}" in calls
+        rows = await (await db.execute(
+            "SELECT status, failure_count, last_failure_at FROM decoys WHERE decoy_type = 'deep'"
+        )).fetchall()
+        assert len(rows) == 5
+        assert {row["status"] for row in rows} == {"degraded"}
+        assert {row["failure_count"] for row in rows} == {1}
+        assert all(row["last_failure_at"] for row in rows)
+        statuses = [payload["status"] for kind, payload in events.items if kind == "decoy.status_changed"]
+        assert statuses == ["degraded"] * 5
+        assert orchestrator.diagnostics["status"] == "degraded"
+        reason = orchestrator.diagnostics["reason"]
+        assert isinstance(reason, str)
+        assert "192.0.2.240" in reason and "aa:bb:cc:dd:ee:ff" in reason
+
+        # The scan that found the claimant does not republish in the same breath.
+        assert await orchestrator.reconcile() is False
+        assert "verify:192.0.2.240" not in calls
+
+        # While the claimant holds the address the retry fails closed and stays degraded.
+        orchestrator._next_retry_at = 0
+        cast(Any, orchestrator._ip_manager).free = False
+        assert await orchestrator.reconcile() is False
+        assert orchestrator.diagnostics["status"] == "degraded"
+        assert "forwards:add:192.0.2.240" not in calls
+
+        # Once the address is verified free again the host comes back on its own.
+        orchestrator._next_retry_at = 0
+        cast(Any, orchestrator._ip_manager).free = True
+        assert await orchestrator.reconcile() is True
+        assert orchestrator.diagnostics["status"] == "active"
+        statuses = await (
+            await db.execute("SELECT DISTINCT status FROM decoys WHERE decoy_type = 'deep'")
+        ).fetchall()
+        assert [row[0] for row in statuses] == ["active"]
+        await orchestrator.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_ip_conflict_on_another_address_leaves_the_host_running(tmp_path) -> None:
+    calls: list[str] = []
+    async with aiosqlite.connect(tmp_path / "other-ip.db") as db:
+        db.row_factory = aiosqlite.Row
+        await apply_migrations(db)
+        orchestrator, _ = await _orchestrator(db, calls)
+        assert await orchestrator.start() is True
+        calls.clear()
+
+        assert await orchestrator.handle_ip_conflict("192.0.2.241", "aa:bb:cc:dd:ee:ff") is False
+
+        assert orchestrator.is_active is True
+        assert calls == []
         statuses = await (
             await db.execute("SELECT DISTINCT status FROM decoys WHERE decoy_type = 'deep'")
         ).fetchall()

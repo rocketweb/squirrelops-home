@@ -803,15 +803,7 @@ class DeepDecoyOrchestrator:
                 return True
             if decoy_id not in active.service_ids.values():
                 return False
-            if not await self._port_forward.quarantine_endpoints(
-                {active.primary_id: active.virtual_ip}
-            ):
-                return False
-            await self._stop_components(active)
-            self._active = None
-            if not await self._ip_manager.remove_alias(active.virtual_ip):
-                return False
-            if not await self._port_forward.remove_forwards(active.primary_id):
+            if not await self._withdraw_active_host(active):
                 return False
             now = datetime.now(UTC).isoformat()
             await self._db.execute(
@@ -822,6 +814,24 @@ class DeepDecoyOrchestrator:
             self._startup_status, self._failure_reason = "stopped", None
             await self._publish_status(active, "stopped", now)
             return True
+
+    async def _withdraw_active_host(self, active: _ActiveDeepHost) -> bool:
+        """Quarantine, stop, and release the running host's network state.
+
+        Quarantine comes first so a failure anywhere later leaves the address
+        isolated rather than exposed. ``_active`` is cleared as soon as the
+        components are down, so a failed alias or forwarding release never
+        leaves a stopped host reported as running.
+        """
+        if not await self._port_forward.quarantine_endpoints(
+            {active.primary_id: active.virtual_ip}
+        ):
+            return False
+        await self._stop_components(active)
+        self._active = None
+        if not await self._ip_manager.remove_alias(active.virtual_ip):
+            return False
+        return await self._port_forward.remove_forwards(active.primary_id)
 
     async def enable(self, decoy_id: int) -> bool:
         """Enable a stopped deep host through the same fail-closed start path."""
@@ -867,7 +877,15 @@ class DeepDecoyOrchestrator:
         row = await cursor.fetchone()
         if row is None or row["host_id"] is None:
             return
-        now = datetime.now(UTC).isoformat()
+        await self._save_host_failure(int(row["host_id"]), datetime.now(UTC).isoformat())
+        logger.warning(
+            "Studio Mini deep decoy restart failed after its stop completed; "
+            "saved as degraded for retry: %s",
+            self._failure_reason or "no reason recorded",
+        )
+
+    async def _save_host_failure(self, host_id: int, now: str) -> None:
+        """Persist that an enabled host is down for a reason the operator did not choose."""
         await self._db.execute(
             """UPDATE decoys
                SET status = 'degraded',
@@ -875,19 +893,44 @@ class DeepDecoyOrchestrator:
                    last_failure_at = ?,
                    updated_at = ?
                WHERE host_id = ? AND retired_at IS NULL""",
-            (now, now, row["host_id"]),
+            (now, now, host_id),
         )
         await self._db.commit()
-        logger.warning(
-            "Studio Mini deep decoy restart failed after its stop completed; "
-            "saved as degraded for retry: %s",
-            self._failure_reason or "no reason recorded",
-        )
 
-    async def handle_ip_conflict(self, ip: str) -> bool:
-        """Stop the deep host if a real LAN device claims its address."""
-        active = self._active
-        if active is None or active.virtual_ip != ip:
-            return False
-        logger.error("Real device claimed deep-decoy address %s; stopping host", ip)
-        return await self.disable(active.primary_id)
+    async def handle_ip_conflict(self, ip: str, owner_mac: str | None = None) -> bool:
+        """Evacuate the deep host when a real LAN device claims its address.
+
+        The operator did not turn the host off, so the rows are saved as
+        ``degraded`` with the failure recorded, never as ``stopped``:
+        ``reconcile`` retries the host once its address is verified free
+        again, and the startup log reports a failure with its reason instead
+        of an operator stop.
+        """
+        async with self._lifecycle_lock:
+            active = self._active
+            if active is None or active.virtual_ip != ip:
+                return False
+            claimant = owner_mac or "an unidentified device"
+            logger.error(
+                "Real device %s claimed deep-decoy address %s; evacuating host",
+                claimant,
+                ip,
+            )
+            # The scan that found the claimant is no evidence the address is
+            # free again, so the first retry waits for a later scan.
+            self._next_retry_at = time.monotonic() + 60.0
+            self._failed(
+                f"Studio address {ip} was claimed by a real device ({claimant}). "
+                "The host was evacuated and is retried once the address is "
+                "verified free again."
+            )
+            if not await self._withdraw_active_host(active):
+                logger.error(
+                    "Deep-decoy evacuation of %s is incomplete; isolation rules are retained",
+                    ip,
+                )
+                return False
+            now = datetime.now(UTC).isoformat()
+            await self._save_host_failure(active.host_id, now)
+            await self._publish_status(active, "degraded", now)
+            return True

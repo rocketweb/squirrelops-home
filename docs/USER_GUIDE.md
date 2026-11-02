@@ -501,8 +501,11 @@ logged as a warning that carries the reason shown on the Degraded badge.
 A Restart that stops the host but fails to bring it back saves the host as
 Degraded with the failure recorded, not as stopped. It is retried like any
 other startup failure, so an interrupted restart never turns into a silent
-stop across sensor restarts. Every enable, disable, and restart is written to
-the sensor log with the paired client that requested it and the outcome.
+stop across sensor restarts. The same holds when a real device claims the
+Studio address: the host is evacuated and saved as Degraded, the sensor log
+records the claimant's MAC, and the host comes back on its own once its address
+is verified free again. Every enable, disable, and restart is written to the
+sensor log with the paired client that requested it and the outcome.
 
 Restarting or upgrading the sensor preserves the Studio host's saved state.
 Its five services do not count against the separate classic host-listener
@@ -1510,7 +1513,9 @@ Virtual IPs used by mimic and Studio Build Mac decoys are:
 - Excluded from the sensor's own scan loop to prevent false device discoveries
 - Scheduled for evacuation if an active real device claims the same IP. The
   affected fake host stops and its alias is withdrawn when cleanup succeeds;
-  failed cleanup retains isolation rules rather than authorizing exposure.
+  failed cleanup retains isolation rules rather than authorizing exposure. An
+  evacuated Studio host is saved as Degraded, not stopped, and is retried once
+  its address is verified free again.
 
 On macOS, the virtual IPs are published through proxy ARP and therefore share
 the sensor Mac's physical MAC address. The sensor advertises distinct mDNS
