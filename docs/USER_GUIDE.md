@@ -442,7 +442,7 @@ Classic decoys are selected from observed service categories: dev-server ports,
 Home Assistant port 8123, and SMB/AFP ports select their corresponding HTTP
 presentations. If none matches, a file-directory decoy is the fallback. The
 sensor avoids duplicate classic decoy types and respects stopped rows; it
-can emulate a category that already exists on a real device. Mimics and Studio
+can emulate a category that already exists on a real device. Mimics and the Studio Build Mac
 appear alongside classic listeners in the Decoys grid.
 
 ### Studio Build Mac
@@ -486,7 +486,7 @@ deployment.
 
 ### Safely test the Studio Build Mac
 
-If Studio has no service cards, a **Studio Build Mac** notice at the top of
+If the Studio Build Mac has no service cards, a **Studio Build Mac** notice at the top of
 Decoys shows startup progress or an actionable diagnostic reason. Normal stopped
 and disabled states stay quiet. Pull down on the list or press **Command-R** to
 reload that evidence; refreshing does not bypass startup checks or restart the guest. An enabled
@@ -495,24 +495,24 @@ than once per minute. An intentionally stopped host stays stopped, and the
 sensor startup log says so: "Studio Mini deep decoy is stopped by the operator;
 enable it from the Decoys tab to publish it". A stopped host stays listed on
 Decoys with its host toggle off; turn the toggle on to publish it again, since
-the Decoys tab is the only place a Studio host is enabled. A startup failure is
+the Decoys tab is the only place the Studio Build Mac is enabled. A startup failure is
 logged as a warning that carries the reason shown on the Degraded badge.
 
 A Restart that stops the host but fails to bring it back saves the host as
 Degraded with the failure recorded, not as stopped. It is retried like any
 other startup failure, so an interrupted restart never turns into a silent
 stop across sensor restarts. The same holds when a real device claims the
-Studio address: the host is evacuated and saved as Degraded, the sensor log
+Studio Build Mac's address: the host is evacuated and saved as Degraded, the sensor log
 records the claimant's MAC, and the host comes back on its own once its address
 is verified free again. Every enable, disable, and restart is written to the
 sensor log with the paired client that requested it and the outcome.
 
-Restarting or upgrading the sensor preserves the Studio host's saved state.
+Restarting or upgrading the sensor preserves the Studio Build Mac's saved state.
 Its five services do not count against the separate classic host-listener
-limit. Changing that limit must not stop Studio or turn its SSH/SMB services
+limit. Changing that limit must not stop the Studio Build Mac or turn its SSH/SMB services
 into HTTP listeners.
 
-An earlier 2.1 test build could incorrectly mark Studio services stopped during
+An earlier 2.1 test build could incorrectly mark Studio Build Mac services stopped during
 startup. The ownership fix prevents this but does not automatically enable
 previously stopped hosts. If your test installation was affected, keep it
 stopped until its saved state and backup have been reviewed. Do not bulk-enable
@@ -882,7 +882,7 @@ Lists all collected service fingerprints in a scrollable table:
 The mimic system adds synthetic bait files to one observed HTTP service per
 host. Without a supported HTTP route, no credential bait is planted. A generic
 mimic's SSH banner does not implement SSH negotiation or authentication;
-Studio's separate guest provides real SSH/SFTP and SMB.
+the Studio Build Mac's separate guest provides real SSH/SFTP and SMB.
 
 | Category | Credential Strategy |
 |----------|-------------------|
@@ -932,7 +932,7 @@ Every individual connection is still retained in the decoy's forensic log.
 
 | Type | Severity | Meaning |
 |------|----------|---------|
-| Credential Trip | Critical | A supported HTTP decoy recognized submitted planted credentials, or the Studio guest's `sshd`/`smbd` accepted a login with the planted password |
+| Credential Trip | Critical | A supported HTTP decoy recognized submitted planted credentials, or the Studio Build Mac guest's `sshd`/`smbd` accepted a login with the planted password |
 | Decoy Trip | High, Critical on write activity | Unexpected decoy activity. On the Studio Build Mac the title names what the campaign has shown so far (credential hunting, AI agent probing, write activity), the alert escalates to Critical when write activity is reached and never steps back down, and Slack and push messages carry the intent and stage. Automatic printer discovery and activity from devices you marked as trusted scanners are retained as evidence without an alert |
 | Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
 | ARP Ownership Conflict | High | The scan cannot establish a unique IP/MAC owner |
@@ -1117,7 +1117,7 @@ Synthetic credentials are exposed on supported HTTP decoy routes. Requesting
 `/.env` or `/passwords.txt` records ordinary decoy activity. A **Critical**
 credential alert requires a supported handler to recognize a planted value
 submitted in the request. Banner-only services do not implement authentication.
-Studio's SSH/SMB relays stay opaque, but an accepted guest login with the
+The Studio Build Mac's SSH/SMB relays stay opaque, but an accepted guest login with the
 planted password is reported by the guest's own daemons and raises the same
 Critical alert.
 
@@ -1331,14 +1331,14 @@ been stopped.
 **Symptoms:** A decoy card shows a "Degraded" status badge.
 
 **What happened:** The service could not be fully started or published. Causes
-include unavailable networking, helper failure, missing Studio artifacts,
+include unavailable networking, helper failure, missing Studio Build Mac artifacts,
 packet-filter checks, or Bonjour registration failure. A Degraded badge does
 not establish that a decoy crashed three times.
 
 **What to do:**
 1. Click the **Restart** button on the decoy card
 2. If it degrades again, check the sensor logs for the underlying error
-3. Classic listeners saved as degraded are retried after scans; enabled Studio
+3. Classic listeners saved as degraded are retried after scans; enabled Studio Build Mac
    startup failures have their separate scan-driven retry. Classic periodic
    crash checks and the standalone 30-minute recovery method are not scheduled
    by this runtime.
@@ -1370,7 +1370,7 @@ not establish that a decoy crashed three times.
 logs reporting the Mac's own Ethernet MAC as an IP conflict can indicate the
 Python interface-identity redaction issue. The recovery build reads identities
 through the authenticated helper. A `decoy_hosts.bind_address` uniqueness error
-is separate: stopped Studio hosts still reserve their addresses, and new mimics
+is separate: stopped Studio Build Mac hosts still reserve their addresses, and new mimics
 must skip those reservations. Do not delete the database or history to work
 around either issue. Classic listeners also need to bind to the selected LAN,
 not a VPN's default-route address. See the
@@ -1497,7 +1497,7 @@ also requires each peer to prove possession of its corresponding private key.
 
 ### What the Sensor Does NOT Do
 
-- **No passive packet inspection:** The sensor does not capture unrelated devices' traffic. Scout probes read bounded service samples; decoys inspect HTTP requests sent to them. Studio SSH/SMB relays observe connection metadata without parsing those protocols.
+- **No passive packet inspection:** The sensor does not capture unrelated devices' traffic. Scout probes read bounded service samples; decoys inspect HTTP requests sent to them. Studio Build Mac SSH/SMB relays observe connection metadata without parsing those protocols.
 - **Decoy forwarding:** Packet-filter rules publish and isolate owned virtual
   decoy addresses. The product does not implement a general device-blocking
   policy. Reserve its address pool and investigate reported IP conflicts.
@@ -1514,7 +1514,7 @@ Virtual IPs used by mimic and Studio Build Mac decoys are:
 - Scheduled for evacuation if an active real device claims the same IP. The
   affected fake host stops and its alias is withdrawn when cleanup succeeds;
   failed cleanup retains isolation rules rather than authorizing exposure. An
-  evacuated Studio host is saved as Degraded, not stopped, and is retried once
+  evacuated Studio Build Mac is saved as Degraded, not stopped, and is retried once
   its address is verified free again.
 
 On macOS, the virtual IPs are published through proxy ARP and therefore share
