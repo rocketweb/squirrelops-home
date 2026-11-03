@@ -3,8 +3,7 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "09:00"
       timezone: America/Indiana/Indianapolis
     open-pull-requests-limit: 5
@@ -19,8 +18,7 @@ updates:
   - package-ecosystem: docker
     directory: /sensor
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "09:15"
       timezone: America/Indiana/Indianapolis
     open-pull-requests-limit: 5
@@ -43,8 +41,7 @@ updates:
   - package-ecosystem: uv
     directory: /sensor
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "09:30"
       timezone: America/Indiana/Indianapolis
     open-pull-requests-limit: 5
