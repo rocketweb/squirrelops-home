@@ -38,6 +38,48 @@ def _load_persisted_json(raw: object) -> object:
         return None
 
 
+_ARP_IP_CLAIMED_BY_MULTIPLE_MACS = "ip_claimed_by_multiple_macs"
+_ARP_MAC_AT_MULTIPLE_IPS = "mac_observed_at_multiple_ips"
+
+
+def _arp_conflict_identity(conflict: dict[str, Any]) -> dict[str, Any]:
+    """The observed claim alone, without sensor-added enrichment."""
+    return {
+        "kind": str(conflict.get("kind", "")),
+        "ip_addresses": [str(ip) for ip in conflict.get("ip_addresses", [])],
+        "mac_addresses": [str(mac) for mac in conflict.get("mac_addresses", [])],
+    }
+
+
+def _arp_conflict_identities(detail: object) -> list[dict[str, Any]] | None:
+    if not isinstance(detail, dict) or not isinstance(detail.get("conflicts"), list):
+        return None
+    return [
+        _arp_conflict_identity(conflict)
+        for conflict in detail["conflicts"]
+        if isinstance(conflict, dict)
+    ]
+
+
+def _arp_conflict_summary(conflicts: list[dict[str, Any]]) -> str:
+    """One line for Slack, push, and webhooks.
+
+    Addresses only: device names and vendors stay in the detail, which
+    outbound channels never render.
+    """
+    parts: list[str] = []
+    for conflict in conflicts:
+        ips = conflict["ip_addresses"]
+        macs = conflict["mac_addresses"]
+        if conflict["kind"] == _ARP_IP_CLAIMED_BY_MULTIPLE_MACS and ips:
+            parts.append(f"{ips[0]} answered from {len(macs)} MAC addresses")
+        elif conflict["kind"] == _ARP_MAC_AT_MULTIPLE_IPS:
+            parts.append(f"one MAC answered at {', '.join(ips)}")
+        else:
+            parts.append(f"ambiguous ARP claim for {', '.join(ips)}")
+    return "; ".join(parts)
+
+
 class SecurityInsightAnalyzer:
     """Generates security insight alerts grouped by issue type.
 
@@ -60,7 +102,7 @@ class SecurityInsightAnalyzer:
         """Create, update, or resolve the grouped ARP-identity alert."""
         issue_key = "arp:identity-conflict"
         normalized = sorted(
-            conflicts,
+            (_arp_conflict_identity(conflict) for conflict in conflicts),
             key=lambda conflict: (
                 str(conflict.get("kind", "")),
                 tuple(str(ip) for ip in conflict.get("ip_addresses", [])),
@@ -90,6 +132,11 @@ class SecurityInsightAnalyzer:
                     detail = _load_persisted_json(existing["detail"])
                     if not isinstance(detail, dict):
                         detail = {}
+                    # Keep what was ambiguous so the resolved row still
+                    # explains itself.
+                    previous_conflicts = detail.get("conflicts")
+                    if isinstance(previous_conflicts, list) and previous_conflicts:
+                        detail["resolved_conflicts"] = previous_conflicts
                     detail["conflicts"] = []
                     detail["conflict_count"] = 0
                     detail["resolved_at"] = now
@@ -137,8 +184,9 @@ class SecurityInsightAnalyzer:
                     detail = {
                         "issue_key": issue_key,
                         "conflict_count": len(normalized),
-                        "conflicts": normalized,
+                        "conflicts": await self._with_known_devices(normalized),
                     }
+                    summary = _arp_conflict_summary(normalized)
                     title = (
                         "Conflicting ARP identity claims detected"
                         if len(normalized) == 1
@@ -193,6 +241,7 @@ class SecurityInsightAnalyzer:
                                 "read_at": None,
                                 "actioned_at": None,
                                 "detail": detail,
+                                "summary": summary,
                                 "affected_devices": None,
                                 "alert_count": None,
                                 "device_count": len(normalized),
@@ -202,6 +251,15 @@ class SecurityInsightAnalyzer:
                     else:
                         previous_detail = _load_persisted_json(existing["detail"])
                         if previous_detail == detail:
+                            return
+                        if _arp_conflict_identities(previous_detail) == normalized:
+                            # Same claims, fresher device names. The alert
+                            # has not changed, so nobody is notified again.
+                            await self._db.execute(
+                                "UPDATE home_alerts SET detail = ? WHERE id = ?",
+                                (json.dumps(detail, sort_keys=True), existing["id"]),
+                            )
+                            await self._db.commit()
                             return
                         await self._db.execute(
                             """UPDATE home_alerts
@@ -229,6 +287,7 @@ class SecurityInsightAnalyzer:
                                 "read_at": existing["read_at"],
                                 "actioned_at": existing["actioned_at"],
                                 "detail": detail,
+                                "summary": summary,
                                 "affected_devices": None,
                                 "alert_count": None,
                                 "device_count": len(normalized),
@@ -247,6 +306,49 @@ class SecurityInsightAnalyzer:
                 payload,
                 source_id=f"issue:{issue_key}",
             )
+
+    async def _with_known_devices(
+        self,
+        conflicts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Attach the inventory devices that own each conflict's addresses.
+
+        A device matches on its MAC or its last known IP, so an operator can
+        tell an extender answering for its clients from an unknown claimant.
+        """
+        enriched: list[dict[str, Any]] = []
+        for conflict in conflicts:
+            ips = conflict["ip_addresses"]
+            macs = [mac.upper() for mac in conflict["mac_addresses"]]
+            known_devices: list[dict[str, Any]] = []
+            if ips or macs:
+                ip_marks = ",".join("?" * len(ips)) or "NULL"
+                mac_marks = ",".join("?" * len(macs)) or "NULL"
+                cursor = await self._db.execute(
+                    f"""SELECT id, ip_address, mac_address, hostname, vendor,
+                               custom_name
+                        FROM devices
+                        WHERE ip_address IN ({ip_marks})
+                           OR UPPER(mac_address) IN ({mac_marks})
+                        ORDER BY id""",
+                    (*ips, *macs),
+                )
+                for row in await cursor.fetchall():
+                    matched_on = []
+                    if row["ip_address"] in ips:
+                        matched_on.append("ip")
+                    if (row["mac_address"] or "").upper() in macs:
+                        matched_on.append("mac")
+                    known_devices.append({
+                        "device_id": row["id"],
+                        "display_name": row["custom_name"] or row["hostname"],
+                        "vendor": row["vendor"],
+                        "ip_address": row["ip_address"],
+                        "mac_address": row["mac_address"],
+                        "matched_on": matched_on,
+                    })
+            enriched.append({**conflict, "known_devices": known_devices})
+        return enriched
 
     async def analyze_all_devices(
         self,

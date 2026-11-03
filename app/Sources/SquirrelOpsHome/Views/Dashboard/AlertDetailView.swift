@@ -44,31 +44,177 @@ struct AlertDetailView: View {
     // MARK: - Content
 
     private func alertContent(_ alert: AlertDetail) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let presentation = AlertDetailPresentation(alert)
+        return VStack(alignment: .leading, spacing: 0) {
             headerSection(alert)
             Divider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
-                    if alert.alertType == "security.port_risk" {
-                        portRiskSection(alert)
-                    } else {
-                        sourceSection(alert)
-                        intrusionSection(alert)
-                        if !recentConnections(alert).isEmpty {
-                            connectionTimelineSection(alert)
-                        }
+                    if presentation.sections.isEmpty {
+                        Text("The sensor recorded no further detail for this alert.")
+                            .font(Typography.bodySmall)
+                            .foregroundStyle(Theme.textTertiary(colorScheme))
                     }
-                    if hasCredentialInfo(alert) {
-                        credentialSection(alert)
-                    }
-                    if alert.decoyId != nil || detailValue(alert, "decoy_name") != nil {
-                        decoySection(alert)
+                    ForEach(presentation.sections, id: \.self) { section in
+                        sectionView(section, presentation)
                     }
                 }
                 .padding(Spacing.lg)
             }
         }
+    }
+
+    @ViewBuilder
+    private func sectionView(
+        _ section: AlertDetailSection,
+        _ presentation: AlertDetailPresentation
+    ) -> some View {
+        switch section {
+        case .arpConflicts:
+            arpConflictSection(presentation)
+        case .portRisk:
+            portRiskSection(presentation)
+        case .connections:
+            connectionTimelineSection(presentation)
+        case .details:
+            detailsSection(presentation)
+        default:
+            rowSection(Self.title(for: section), presentation.rows(section))
+        }
+    }
+
+    private static func title(for section: AlertDetailSection) -> String {
+        switch section {
+        case .status: return "STATUS"
+        case .arpConflicts: return "CONFLICTS"
+        case .portRisk: return "AFFECTED DEVICES"
+        case .device: return "DEVICE"
+        case .macChange: return "MAC ADDRESS CHANGE"
+        case .source: return "SOURCE"
+        case .intrusion: return "INTRUSION DETAILS"
+        case .connections: return "RECENT CONNECTIONS"
+        case .credential: return "CREDENTIAL ACCESS"
+        case .decoy: return "DECOY"
+        case .details: return "DETAILS"
+        case .guidance: return "WHAT TO DO"
+        }
+    }
+
+    private func rowSection(_ title: String, _ rows: [AlertDetailRow]) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.s12) {
+            sectionHeader(title)
+
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                ForEach(rows, id: \.self) { row in
+                    detailRow(label: row.label, value: row.value, mono: row.mono)
+                }
+            }
+            .sectionCard(colorScheme: colorScheme)
+        }
+    }
+
+    private func detailsSection(_ presentation: AlertDetailPresentation) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.s12) {
+            sectionHeader(Self.title(for: .details))
+
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                if let text = presentation.detailsText {
+                    Text(text)
+                        .font(Typography.bodySmall)
+                        .foregroundStyle(Theme.textSecondary(colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                ForEach(presentation.rows(.details), id: \.self) { row in
+                    detailRow(label: row.label, value: row.value, mono: row.mono)
+                }
+            }
+            .sectionCard(colorScheme: colorScheme)
+        }
+    }
+
+    // MARK: - ARP Conflict Section
+
+    private func arpConflictSection(_ presentation: AlertDetailPresentation) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.s12) {
+            sectionHeader(
+                presentation.arpConflictsAreHistorical
+                    ? "CONFLICTS BEFORE RESOLUTION"
+                    : Self.title(for: .arpConflicts)
+            )
+
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                ForEach(presentation.rows(.arpConflicts), id: \.self) { row in
+                    detailRow(label: row.label, value: row.value, mono: row.mono)
+                }
+
+                ForEach(presentation.arpConflicts) { conflict in
+                    Divider()
+                    arpConflictEntry(conflict)
+                }
+            }
+            .sectionCard(colorScheme: colorScheme)
+        }
+    }
+
+    private func arpConflictEntry(_ conflict: ARPConflictPresentation) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text(conflict.headline)
+                .font(Typography.body)
+                .foregroundStyle(Theme.textPrimary(colorScheme))
+                .textSelection(.enabled)
+            Text(conflict.explanation)
+                .font(Typography.caption)
+                .foregroundStyle(Theme.textTertiary(colorScheme))
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                ForEach(conflict.addresses) { address in
+                    arpAddressRow(address)
+                }
+            }
+            .padding(.top, Spacing.xs)
+        }
+    }
+
+    private func arpAddressRow(_ address: ARPConflictPresentation.Address) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
+            Text(address.kind == .ip ? "IP" : "MAC")
+                .font(Typography.caption)
+                .tracking(Typography.captionTracking)
+                .foregroundStyle(Theme.textTertiary(colorScheme))
+                .frame(width: 32, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(address.value)
+                    .font(Typography.mono)
+                    .tracking(Typography.monoTracking)
+                    .foregroundStyle(Theme.textSecondary(colorScheme))
+                    .textSelection(.enabled)
+                if address.devices.isEmpty {
+                    Text("Not in device inventory")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.textTertiary(colorScheme))
+                } else {
+                    ForEach(address.devices) { device in
+                        Text("\(knownDeviceLabel(device)) · \(device.matchDescription)")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.textPrimary(colorScheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    private func knownDeviceLabel(_ device: ARPConflictPresentation.KnownDevice) -> String {
+        var parts = [device.name]
+        if let vendor = device.vendor, vendor != device.name {
+            parts.append(vendor)
+        }
+        parts.append("#\(device.deviceId)")
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Header
@@ -118,19 +264,16 @@ struct AlertDetailView: View {
 
     // MARK: - Port Risk Section
 
-    private func portRiskSection(_ alert: AlertDetail) -> some View {
+    private func portRiskSection(_ presentation: AlertDetailPresentation) -> some View {
         VStack(alignment: .leading, spacing: Spacing.s12) {
-            sectionHeader("AFFECTED DEVICES")
+            sectionHeader(Self.title(for: .portRisk))
 
             VStack(alignment: .leading, spacing: Spacing.s12) {
-                if let service = detailValue(alert, "service_name") {
-                    detailRow(label: "Service", value: service)
-                }
-                if let port = detailValue(alert, "port") {
-                    detailRow(label: "Port", value: port, mono: true)
+                ForEach(presentation.rows(.portRisk), id: \.self) { row in
+                    detailRow(label: row.label, value: row.value, mono: row.mono)
                 }
 
-                if let devices = alert.affectedDevices, !devices.isEmpty {
+                if let devices = presentation.alert.affectedDevices, !devices.isEmpty {
                     VStack(spacing: Spacing.xs) {
                         ForEach(devices) { device in
                             HStack(spacing: Spacing.sm) {
@@ -149,94 +292,17 @@ struct AlertDetailView: View {
                     }
                     .padding(.top, Spacing.xs)
                 }
-
-                if let risk = alert.riskDescription {
-                    detailRow(label: "Risk", value: risk)
-                }
-                if let remediation = alert.remediation {
-                    detailRow(label: "Fix", value: remediation)
-                }
             }
             .sectionCard(colorScheme: colorScheme)
         }
     }
 
-    // MARK: - Source Section
+    // MARK: - Connection Timeline Section
 
-
-    private func sourceSection(_ alert: AlertDetail) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.s12) {
-            sectionHeader("SOURCE")
-
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                if let ip = alert.sourceIp {
-                    detailRow(label: "IP Address", value: ip, mono: true)
-                }
-                if let mac = alert.sourceMac {
-                    detailRow(label: "MAC Address", value: mac, mono: true)
-                }
-                if let hostname = detailValue(alert, "hostname") {
-                    detailRow(label: "Hostname", value: hostname)
-                }
-                if let vendor = detailValue(alert, "vendor") {
-                    detailRow(label: "Vendor", value: vendor)
-                }
-                if let deviceId = alert.deviceId {
-                    detailRow(label: "Device ID", value: "#\(deviceId)")
-                }
-            }
-            .sectionCard(colorScheme: colorScheme)
-        }
-    }
-
-    // MARK: - Intrusion Section
-
-    private func intrusionSection(_ alert: AlertDetail) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.s12) {
-            sectionHeader("INTRUSION DETAILS")
-
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                if let count = detailValue(alert, "connection_count") {
-                    detailRow(label: "Connections", value: count, mono: true)
-                }
-                if let services = serviceCountsSummary(alert) {
-                    detailRow(label: "Services", value: services)
-                }
-                if let port = detailValue(alert, "dest_port") {
-                    detailRow(label: "Latest Port", value: port, mono: true)
-                }
-                if let proto = detailValue(alert, "protocol") {
-                    detailRow(label: "Protocol", value: proto.uppercased())
-                }
-                if let path = detailValue(alert, "request_path") {
-                    detailRow(label: "Request Path", value: path, mono: true)
-                }
-                if let method = detailValue(alert, "detection_method") {
-                    detailRow(label: "Detection", value: friendlyDetectionMethod(method))
-                }
-                if let firstSeen = detailValue(alert, "first_seen") {
-                    detailRow(
-                        label: "First Seen",
-                        value: TimestampPresentation.local(firstSeen),
-                        mono: true
-                    )
-                }
-                if let lastSeen = detailValue(alert, "last_seen") {
-                    detailRow(
-                        label: "Last Seen",
-                        value: TimestampPresentation.local(lastSeen),
-                        mono: true
-                    )
-                }
-            }
-            .sectionCard(colorScheme: colorScheme)
-        }
-    }
-
-    private func connectionTimelineSection(_ alert: AlertDetail) -> some View {
-        let connections = Array(recentConnections(alert).reversed())
+    private func connectionTimelineSection(_ presentation: AlertDetailPresentation) -> some View {
+        let connections = Array(presentation.recentConnections.reversed())
         return VStack(alignment: .leading, spacing: Spacing.s12) {
-            sectionHeader("RECENT CONNECTIONS")
+            sectionHeader(Self.title(for: .connections))
 
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 ForEach(Array(connections.enumerated()), id: \.offset) { index, item in
@@ -262,42 +328,6 @@ struct AlertDetailView: View {
                     if index < connections.count - 1 {
                         Divider()
                     }
-                }
-            }
-            .sectionCard(colorScheme: colorScheme)
-        }
-    }
-
-    // MARK: - Credential Section
-
-    private func credentialSection(_ alert: AlertDetail) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.s12) {
-            sectionHeader("CREDENTIAL ACCESS")
-
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                if let cred = detailValue(alert, "credential_used") {
-                    detailRow(label: "Credential", value: cred, mono: true)
-                }
-                if let path = detailValue(alert, "request_path") {
-                    detailRow(label: "Accessed Via", value: path, mono: true)
-                }
-            }
-            .sectionCard(colorScheme: colorScheme)
-        }
-    }
-
-    // MARK: - Decoy Section
-
-    private func decoySection(_ alert: AlertDetail) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.s12) {
-            sectionHeader("DECOY")
-
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                if let name = detailValue(alert, "decoy_name") {
-                    detailRow(label: "Name", value: name)
-                }
-                if let decoyId = alert.decoyId {
-                    detailRow(label: "Decoy ID", value: "#\(decoyId)")
                 }
             }
             .sectionCard(colorScheme: colorScheme)
@@ -335,63 +365,6 @@ struct AlertDetailView: View {
         }
     }
 
-    private func detailValue(_ alert: AlertDetail, _ key: String) -> String? {
-        guard case .object(let dict) = alert.detail,
-              let val = dict[key] else { return nil }
-        switch val {
-        case .string(let s): return s
-        case .int(let i): return String(i)
-        case .double(let d): return String(d)
-        case .bool(let b): return b ? "true" : "false"
-        default: return nil
-        }
-    }
-
-    private func serviceCountsSummary(_ alert: AlertDetail) -> String? {
-        guard case .object(let detail) = alert.detail,
-              case .object(let rawCounts) = detail["service_counts"] else {
-            return nil
-        }
-        let parts: [(port: Int, label: String)] = rawCounts.compactMap {
-            key, value in
-            guard let port = Int(key), case .int(let count) = value, count > 0 else {
-                return nil
-            }
-            return (port, "\(AlertSummary.decoyServiceName(port)) \(count)")
-        }
-        let labels = parts.sorted { $0.port < $1.port }.map(\.label)
-        return labels.isEmpty ? nil : labels.joined(separator: " · ")
-    }
-
-    private struct RecentConnection {
-        let port: Int
-        let timestamp: String
-        let outcome: String?
-    }
-
-    private func recentConnections(_ alert: AlertDetail) -> [RecentConnection] {
-        guard case .object(let detail) = alert.detail,
-              case .array(let rawConnections) = detail["recent_connections"] else {
-            return []
-        }
-        return rawConnections.compactMap { rawConnection in
-            guard case .object(let connection) = rawConnection,
-                  case .int(let port) = connection["dest_port"],
-                  case .string(let timestamp) = connection["timestamp"] else {
-                return nil
-            }
-            let interaction: String?
-            if case .string(let value) = connection["interaction_type"] { interaction = value }
-            else { interaction = nil }
-            return RecentConnection(port: port, timestamp: timestamp,
-                                    outcome: AlertSummary.relayOutcomeDescription(interaction))
-        }
-    }
-
-    private func hasCredentialInfo(_ alert: AlertDetail) -> Bool {
-        detailValue(alert, "credential_used") != nil
-    }
-
     private func friendlyAlertType(_ alert: AlertDetail) -> String {
         switch alert.alertType {
         case "decoy.trip":
@@ -410,15 +383,6 @@ struct AlertDetailView: View {
         case "system.sensor_offline": return "Sensor Offline"
         case "system.learning_complete": return "Learning Complete"
         default: return alert.alertType
-        }
-    }
-
-    private func friendlyDetectionMethod(_ method: String) -> String {
-        switch method {
-        case "decoy_http": return "HTTP Decoy"
-        case "mimic_decoy": return "Mimic Decoy"
-        case "dns_canary": return "DNS Canary"
-        default: return method
         }
     }
 

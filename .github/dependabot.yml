@@ -3,13 +3,17 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "09:00"
       timezone: America/Indiana/Indianapolis
     open-pull-requests-limit: 5
     groups:
       github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      github-actions-security:
+        applies-to: security-updates
         patterns:
           - "*"
     labels:
@@ -19,8 +23,7 @@ updates:
   - package-ecosystem: docker
     directory: /sensor
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "09:15"
       timezone: America/Indiana/Indianapolis
     open-pull-requests-limit: 5
@@ -34,6 +37,11 @@ updates:
           - version-update:semver-minor
     groups:
       sensor-docker:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      sensor-docker-security:
+        applies-to: security-updates
         patterns:
           - "*"
     labels:
@@ -43,13 +51,17 @@ updates:
   - package-ecosystem: uv
     directory: /sensor
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "09:30"
       timezone: America/Indiana/Indianapolis
     open-pull-requests-limit: 5
     groups:
       sensor-python:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      sensor-python-security:
+        applies-to: security-updates
         patterns:
           - "*"
     labels:

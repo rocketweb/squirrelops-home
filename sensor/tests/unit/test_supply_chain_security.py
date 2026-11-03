@@ -2270,7 +2270,30 @@ def test_dependabot_tracks_pinned_action_updates() -> None:
     assert "package-ecosystem: uv" in config
     assert "directory: /sensor" in config
     assert "directory: /" in config
-    assert "interval: weekly" in config
+
+    # Version updates batch monthly to keep pull requests and CI runs down.
+    # Vulnerability fixes do not wait for this schedule: they come from
+    # Dependabot security updates, which are enabled in repository settings.
+    updates = yaml.safe_load(config)["updates"]
+    assert {update["package-ecosystem"] for update in updates} == {
+        "github-actions",
+        "docker",
+        "uv",
+    }
+    for update in updates:
+        schedule = update["schedule"]
+        assert schedule["interval"] == "monthly", update["package-ecosystem"]
+        assert "day" not in schedule, update["package-ecosystem"]
+        # Security updates are grouped in this file so one advisory batch is
+        # one pull request per ecosystem, not one per package.
+        scopes = {
+            group.get("applies-to", "version-updates"): group["patterns"]
+            for group in update["groups"].values()
+        }
+        assert scopes == {
+            "version-updates": ["*"],
+            "security-updates": ["*"],
+        }, update["package-ecosystem"]
 
 
 def test_every_workflow_uses_the_release_uv_version() -> None:
