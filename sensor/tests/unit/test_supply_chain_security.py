@@ -2284,6 +2284,16 @@ def test_dependabot_tracks_pinned_action_updates() -> None:
         schedule = update["schedule"]
         assert schedule["interval"] == "monthly", update["package-ecosystem"]
         assert "day" not in schedule, update["package-ecosystem"]
+        # Security updates are grouped in this file so one advisory batch is
+        # one pull request per ecosystem, not one per package.
+        scopes = {
+            group.get("applies-to", "version-updates"): group["patterns"]
+            for group in update["groups"].values()
+        }
+        assert scopes == {
+            "version-updates": ["*"],
+            "security-updates": ["*"],
+        }, update["package-ecosystem"]
 
 
 def test_every_workflow_uses_the_release_uv_version() -> None:
