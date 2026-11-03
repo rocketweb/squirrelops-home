@@ -1069,3 +1069,194 @@ async def test_arp_conflict_alert_is_deduplicated_and_auto_resolved(
     assert resolved["read_at"] is not None
     assert resolved["actioned_at"] is not None
     assert mock_event_bus.publish.await_count == 2
+
+
+async def _arp_alert_detail(db: aiosqlite.Connection) -> dict:
+    row = await (await db.execute(
+        "SELECT detail FROM home_alerts "
+        "WHERE alert_type = 'security.arp_conflict'"
+    )).fetchone()
+    return json.loads(row["detail"])
+
+
+@pytest.mark.asyncio
+async def test_arp_conflict_names_the_known_devices_behind_each_address(
+    db,
+    mock_event_bus,
+):
+    """Each conflict says which inventory devices own its MACs and IPs."""
+    await _insert_test_device(
+        db, device_id=7, ip_address="192.0.2.10",
+        mac_address="02:00:00:00:00:0A", hostname="office-printer",
+    )
+    await db.execute(
+        "UPDATE devices SET vendor = 'Example Vendor', custom_name = 'Printer' "
+        "WHERE id = 7"
+    )
+    await _insert_test_device(
+        db, device_id=8, ip_address="192.0.2.44",
+        mac_address="02:00:00:00:00:0B", hostname="tablet",
+    )
+    await _insert_test_device(
+        db, device_id=9, ip_address="192.0.2.99",
+        mac_address="02:00:00:00:00:99", hostname="unrelated",
+    )
+    await db.commit()
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+
+    await analyzer.record_arp_conflicts([{
+        "kind": "ip_claimed_by_multiple_macs",
+        "ip_addresses": ["192.0.2.10"],
+        "mac_addresses": ["02:00:00:00:00:0A", "02:00:00:00:00:0B"],
+    }])
+
+    detail = await _arp_alert_detail(db)
+    assert detail["conflicts"] == [{
+        "kind": "ip_claimed_by_multiple_macs",
+        "ip_addresses": ["192.0.2.10"],
+        "mac_addresses": ["02:00:00:00:00:0A", "02:00:00:00:00:0B"],
+        "known_devices": [
+            {
+                "device_id": 7,
+                "display_name": "Printer",
+                "vendor": "Example Vendor",
+                "ip_address": "192.0.2.10",
+                "mac_address": "02:00:00:00:00:0A",
+                "matched_on": ["ip", "mac"],
+            },
+            {
+                "device_id": 8,
+                "display_name": "tablet",
+                "vendor": None,
+                "ip_address": "192.0.2.44",
+                "mac_address": "02:00:00:00:00:0B",
+                "matched_on": ["mac"],
+            },
+        ],
+    }]
+    event_type, payload = mock_event_bus.publish.await_args.args[:2]
+    assert event_type == "alert.new"
+    assert payload["detail"] == detail
+    # Outbound channels render ``summary``; it carries no device identity.
+    assert payload["summary"] == "192.0.2.10 answered from 2 MAC addresses"
+
+
+@pytest.mark.asyncio
+async def test_arp_conflict_summary_describes_a_mac_at_several_ips(
+    db,
+    mock_event_bus,
+):
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+
+    await analyzer.record_arp_conflicts([
+        {
+            "kind": "mac_observed_at_multiple_ips",
+            "ip_addresses": ["192.0.2.3", "192.0.2.50", "192.0.2.51"],
+            "mac_addresses": ["02:00:00:00:00:50"],
+        },
+        {
+            "kind": "ip_claimed_by_multiple_macs",
+            "ip_addresses": ["192.0.2.7"],
+            "mac_addresses": ["02:00:00:00:00:01", "02:00:00:00:00:02"],
+        },
+    ])
+
+    payload = mock_event_bus.publish.await_args.args[1]
+    assert payload["summary"] == (
+        "192.0.2.7 answered from 2 MAC addresses; "
+        "one MAC answered at 192.0.2.3, 192.0.2.50, 192.0.2.51"
+    )
+    detail = await _arp_alert_detail(db)
+    assert [conflict["known_devices"] for conflict in detail["conflicts"]] == [
+        [], [],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_arp_conflict_device_details_refresh_without_a_new_event(
+    db,
+    mock_event_bus,
+):
+    """A rename updates the stored names but is not a new notification."""
+    await _insert_test_device(
+        db, device_id=7, ip_address="192.0.2.10",
+        mac_address="02:00:00:00:00:0A", hostname="old-name",
+    )
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+    conflicts = [{
+        "kind": "mac_observed_at_multiple_ips",
+        "ip_addresses": ["192.0.2.10", "192.0.2.11"],
+        "mac_addresses": ["02:00:00:00:00:0A"],
+    }]
+    await analyzer.record_arp_conflicts(conflicts)
+    await db.execute("UPDATE devices SET custom_name = 'Renamed' WHERE id = 7")
+    await db.commit()
+
+    await analyzer.record_arp_conflicts(conflicts)
+
+    detail = await _arp_alert_detail(db)
+    assert detail["conflicts"][0]["known_devices"][0]["display_name"] == "Renamed"
+    assert mock_event_bus.publish.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_arp_alert_gains_device_details_without_a_new_event(
+    db,
+    mock_event_bus,
+):
+    """Rows written before enrichment are filled in by the next scan."""
+    await _insert_test_device(
+        db, device_id=7, ip_address="192.0.2.10",
+        mac_address="02:00:00:00:00:0A", hostname="printer",
+    )
+    conflict = {
+        "kind": "mac_observed_at_multiple_ips",
+        "ip_addresses": ["192.0.2.10", "192.0.2.11"],
+        "mac_addresses": ["02:00:00:00:00:0A"],
+    }
+    await db.execute(
+        """INSERT INTO home_alerts
+           (alert_type, severity, title, detail, issue_key, device_count,
+            created_at)
+           VALUES ('security.arp_conflict', 'high', ?, ?,
+                   'arp:identity-conflict', 1, ?)""",
+        (
+            "Conflicting ARP identity claims detected",
+            json.dumps({
+                "issue_key": "arp:identity-conflict",
+                "conflict_count": 1,
+                "conflicts": [conflict],
+            }),
+            _now_iso(),
+        ),
+    )
+    await db.commit()
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+
+    await analyzer.record_arp_conflicts([conflict])
+
+    detail = await _arp_alert_detail(db)
+    assert detail["conflicts"][0]["known_devices"][0]["device_id"] == 7
+    assert mock_event_bus.publish.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_resolved_arp_alert_keeps_the_conflicts_it_resolved(
+    db,
+    mock_event_bus,
+):
+    analyzer = SecurityInsightAnalyzer(db=db, event_bus=mock_event_bus)
+    await analyzer.record_arp_conflicts([{
+        "kind": "mac_observed_at_multiple_ips",
+        "ip_addresses": ["192.0.2.10", "192.0.2.11"],
+        "mac_addresses": ["02:00:00:00:00:0A"],
+    }])
+    open_detail = await _arp_alert_detail(db)
+
+    await analyzer.record_arp_conflicts([])
+
+    resolved = await _arp_alert_detail(db)
+    assert resolved["conflicts"] == []
+    assert resolved["conflict_count"] == 0
+    assert resolved["resolved_at"]
+    assert resolved["resolved_conflicts"] == open_detail["conflicts"]
