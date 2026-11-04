@@ -8,7 +8,7 @@ Homebrew tap.
 Do not prepare or dispatch a Home or Sensor release until the applicable
 security review and remote controls are complete.
 
-Home 2.1 is a **macOS-only distribution release**. It includes the native
+Home 2.x is a **macOS-only distribution release**. It includes the native
 sensor inside the Apple Silicon installer. It does not publish a Linux
 installer or container. Building the embedded decoy guest on Linux, or creating
 a signed `sensor-v*` component tag, does not change that scope.
@@ -53,13 +53,13 @@ path fails closed.
 ## macOS release support
 
 The macOS app and native sensor support Apple Silicon (ARM64) on macOS 14
-(Sonoma) or later. Intel Macs are not supported. Home 2.1 has no supported
+(Sonoma) or later. Intel Macs are not supported. Home 2.x has no supported
 Intel or universal macOS installer.
 
 Validate the final macOS installer, app, native runtime, and embedded guest as
 ARM64. Installed upgrade, restart, LAN/PF, containment, and signed/notarized
 artifact acceptance apply to this supported architecture. Intel execution is
-not a Home 2.1 release gate. Source builders retain x86_64 options and the
+not a Home 2.x release gate. Source builders retain x86_64 options and the
 workflow builds both guest architectures for build coverage; neither establishes
 Intel Mac support. Linux architecture support and its publication block are
 separate.
@@ -68,7 +68,7 @@ separate.
 
 Keep these settings in place for every release:
 
-The Home 2.1 package also has an indivisible guest-artifact boundary. Release
+The Home 2.x package also has an indivisible guest-artifact boundary. Release
 automation builds ARM64 and x86_64 Studio Mini guests from the reviewed Alpine
 image digest. `guest/studio-mini/package-inputs.lock.json` additionally pins
 retained APK archives and each package's size and SHA-256. Archive validation
@@ -91,11 +91,9 @@ release asset.
 
 The failed Home 2.1.0 build showed why an inventory lock alone is insufficient:
 the pinned base image still resolved newer dependencies from a live repository.
-Its mismatch check correctly stopped publication. Home 2.1.1 adds retained
-package bytes rather than bypassing that check. Existing 2.1.0 tags remain
-unchanged. The app remains 2.1.0. The sensor advances to 2.1.1 for the macOS
-dependency marker and license metadata correction; its new component tag needs
-independent review before the Home workflow can run.
+Its mismatch check correctly stopped publication. Home 2.1.1 added retained
+package bytes rather than bypassing that check. Existing 2.1.0 tags were left
+unchanged.
 
 Home packaging also verifies source coverage against the actual guest and
 Python payload inventories. The final Home release must include
@@ -108,7 +106,7 @@ Linux publication, alter the product license or change the immutable APK archive
 Package refresh is a separate maintainer action, never part of a normal release
 build. Review inventory changes and deception behavior, run both offline builds
 and current ARM64 guest acceptance, then approve archive retention/publication.
-The 2.1.1 candidate now uses the approved, immutable
+Home 2.1.1 through 2.2.1 use the approved, immutable
 [guest-inputs-20261003-v1 prerelease](https://github.com/rocketweb/squirrelops-home/releases/tag/guest-inputs-20261003-v1).
 The signed archive-only tag points to source baseline
 `300569ba15c375a77201cccfe7c27dc2d0da888e` and binds the asset checksum manifest;
@@ -118,10 +116,11 @@ is claimed for these locally retained inputs. Normal CI and release builds must
 use the reviewed public URLs and verify the locked bytes. Local archive overrides
 are useful for review, not evidence of public availability.
 
-The source companion and notices cover the retained APKs. Complete base-image
-and Home installer third-party source/notice coverage still needs review before
-Home publication; this archive release does not close that broader gate. It does
-not change the latest Home installer or authorize a Linux sensor publication.
+The source companion and notices cover the retained APKs. Each Home release
+attaches the full third-party source companion, which adds the base-image
+supplement and the installer's Python runtime and dependencies (see
+[third-party distribution notes](THIRD_PARTY.md)). The archive release does not
+change the latest Home installer or authorize a Linux sensor publication.
 See the [guest input report](testing/2026-10-03-reproducible-guest-build.md) and
 [archive publication evidence](testing/2026-10-03-guest-input-publication.md).
 
@@ -171,7 +170,12 @@ See the [guest input report](testing/2026-10-03-reproducible-guest-build.md) and
    scripts, `VERSION`, `APP_VERSION`, and the dependency lockfile. Keep the supply-chain
    check required so its pull-request dependency review blocks newly
    introduced moderate-or-higher vulnerabilities, and keep Dependabot enabled
-   for GitHub Actions, container bases, and the `uv` lock.
+   for GitHub Actions, the sensor container base in `/sensor`, and the `uv`
+   lock. Version updates arrive monthly as one grouped pull request per
+   ecosystem. Security updates arrive when an advisory is published, grouped
+   per ecosystem. Python minor and major updates to the sensor image are
+   ignored; digest refreshes are not. The guest's Alpine digest is outside
+   Dependabot and changes only through the package refresh procedure.
 
 Only the pinned tag-bypass User can dispatch a release. The workflow queries
 its own run record and the environment review history, then requires at least
@@ -287,6 +291,14 @@ work around verification. Do not dispatch the release until GitHub verifies
 the existing signatures. Other verification failures require their own diagnosis.
 
 ## Home release procedure
+
+Before the version bump, bring the documentation up to date with everything
+the release contains. Review `git log home-v<previous>..HEAD` against
+`README.md`, `docs/USER_GUIDE.md`, `docs/SECURITY_MODEL.md`,
+`docs/ALERT_WEBHOOK.md`, `docs/DEVELOPMENT.md`, this document, and the release
+notes, and land the corrections in the release pull request. The tag fixes
+the documentation in the release's source snapshot; documentation on `main`
+can still be corrected afterwards without a new version.
 
 After the release changes pass review, CI and the applicable live security
 acceptance gates:
@@ -415,7 +427,7 @@ publish a GHCR tag, or promote a Linux installer.
 
 ## Separate Sensor release procedure (blocked)
 
-Do not dispatch `.github/workflows/release-sensor.yml` for Home 2.1. A Linux
+Do not dispatch `.github/workflows/release-sensor.yml` for Home 2.x. A Linux
 release needs the independently reviewed boundary decision described above
 and its own release authorization.
 

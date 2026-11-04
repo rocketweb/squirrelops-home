@@ -1141,7 +1141,7 @@ credentials.
 When Slack is enabled, additional options appear:
 - **Webhook URL** — Your Slack incoming webhook URL
 - **Minimum Severity** — Which alerts trigger a Slack message
-- **Include Device Identifiers** — When enabled, MAC addresses and device IDs are included in Slack messages. A warning reminds you that this data will leave your local network.
+- **Include Device Identifiers** — When enabled, MAC addresses and device IDs are included in Slack messages. A warning reminds you that this data will leave your local network. In this release, device alert summaries (New Device, Device Needs Verification, MAC Address Changed) still include the device's MAC address when this is off ([#113](https://github.com/rocketweb/squirrelops-home/issues/113)).
 
 ### Device Matching (Fingerprint Threshold)
 
@@ -1563,7 +1563,7 @@ After pairing, app management traffic uses mutual TLS over your local network.
 |---------|-----------|-------------|----------------|
 | **Manually configured APNs relay** | Device token, alert title/body, type, and severity | Your configured relay and Apple Push Notification Service | Disable the sensor's `alert_methods.push` or `alert_methods.apns` configuration; token registration is not implemented in the app |
 | **Cloud AI Classification and Decoy Naming** | Classification: OUI prefix, sanitized DNS and mDNS names, open port numbers, detected services, mDNS service types, and available UPnP metadata. DHCP option codes are supported if supplied, but are not collected by the current scanner. Naming: a bounded, sanitized hostname sample. No fingerprint hashes, connection destinations, device IPs, full MAC addresses, packet contents, alerts, or credentials. | Your selected cloud or custom AI provider, using your own API key | Choose **None** or switch to Lite |
-| **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers." | Your Slack workspace | Toggle off in Settings > Alert Methods |
+| **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers," except that device alert summaries currently include the MAC address ([#113](https://github.com/rocketweb/squirrelops-home/issues/113)). | Your Slack workspace | Toggle off in Settings > Alert Methods |
 | **Automation Webhook** | The `squirrelops.alert/1` event: alert id, type, severity, title, summary, timestamps, source IP, decoy name and port, campaign intent and stage, sensor id and version. Source MAC and device id unless you turn off "Include Device Identifiers" (on by default for this method). | The endpoint URL you configured | Toggle off in Settings > Alert Methods |
 | **Home Assistant Events** | The same `squirrelops.alert/1` event, always including source MAC and device id (this method has no toggle) | Your Home Assistant instance, LAN addresses only | Toggle off in Settings > Alert Methods |
 | **Update Checks** | Standard request metadata, such as your public IP address and HTTP headers | GitHub Releases API | Don't click "Check for Updates" |
