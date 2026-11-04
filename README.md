@@ -2,22 +2,26 @@
 
 **Local-first home network security with high-signal deception.**
 
-This README describes the Home 2.1 feature set. The Home package, macOS app,
+This README describes the Home 2.2 feature set. The Home package, macOS app,
 and sensor have independent versions. For published packages and their exact
 component versions, use [Home releases](https://github.com/rocketweb/squirrelops-home/releases)
 and the attested `RELEASE-VERIFICATION.md` attached to the selected release.
 
 - **Network-aware honeypots:** automatically selects HTTP file-directory, development-server, and Home Assistant-style decoys from discovered service ports, with a file-directory fallback
 - **Squirrel Scouts:** probes discovered services and builds fake hosts with one service decoy per observed port, sharing a virtual IP and hostname. HTTP samples and protocol banners provide partial service emulation.
-- **Studio Build Mac:** a macOS-shaped target with real OpenSSH and Samba in a disposable Linux guest with no network adapter or host file access, plus synthetic Ollama, OpenAI-compatible, and MCP endpoints
-- **Decoy alerts:** unexpected decoy activity produces High alerts; recognized planted-credential use produces Critical alerts. Automatic printer discovery is retained as evidence without an intrusion alert.
+- **Studio Build Mac:** a macOS-shaped target with real OpenSSH and Samba in a disposable Linux guest with no network adapter or host file access, plus synthetic Ollama, OpenAI-compatible, and MCP endpoints. An SSH or SMB login with its planted password is a credential trip, attributed to the exact LAN peer.
+- **Decoy alerts:** unexpected decoy activity produces High alerts, titled and graded by what the visitor did; write activity or ransomware intent on the Studio Build Mac is Critical. Recognized planted-credential use, by HTTP submission or Studio login, produces Critical alerts. Automatic printer discovery is retained as evidence without an intrusion alert.
+- **Device alerts:** a new or unverified device raises a Medium alert until you approve it, and a MAC address change on a known device raises a High alert
+- **Trusted scanners:** mark your own scanning device so its decoy connections are kept as evidence without raising Decoy Trip alerts. Credential trips stay Critical for every device.
+- **Per-install decoy presentation:** classic decoy server versions, directory listings, and login page details, and the Studio Build Mac's project story, are drawn per install from the encrypted deployment secret, so the public source does not reveal what any install presents
 - **Device fingerprinting:** discovers reachable devices on the selected IPv4 LAN using ARP, MAC OUI, TCP port probes, and mDNS/SSDP or optional Home Assistant enrichment, with optional AI classification for unresolved devices
 - **Believable decoy naming:** fake hosts use ordinary home and business names by default, with optional AI suggestions informed by observed hostname patterns
-- **Security insights:** flags risky exposed services and ambiguous ARP ownership, with affected devices grouped by issue
+- **Security insights:** flags risky exposed services and ARP identity conflicts (an IP answering from several MAC addresses, or a MAC answering at several IPs), naming the known device behind each address, with affected devices grouped by issue
 - **Credential bait:** plants synthetic passwords, SSH keys, tokens, and .env files that may contain AWS keys, database URIs, and GitHub PATs. Supported requests that submit recognized bait trigger Critical alerts; downloading a bait file alone produces ordinary decoy activity.
 - **Local by default:** inventory and alerts stay in local SQLite; configuration stays in local YAML and an encrypted secret store. Cloud AI and external alert delivery require explicit configuration.
-- **macOS notifications:** native Notification Center alerts, menu-bar status, and High/Critical prompts in the paired Mac app, with optional Slack delivery from the sensor
-- **Home Assistant integration:** matches HA registry devices by MAC address to enrich names, areas, manufacturers, and models
+- **macOS notifications:** native Notification Center alerts, menu-bar status, and High/Critical prompts in the paired Mac app, with optional Slack delivery from the sensor. If the sensor stops answering for five minutes, the app raises a Sensor Disconnected alert and sends it to Slack itself.
+- **Response contract:** optional Automation Webhook (JSON, HMAC-SHA256 signed when a signing secret is set) and Home Assistant Events methods deliver one documented event per alert, `squirrelops.alert/1`, for your own router or Home Assistant automation. The sensor itself never blocks a device. See the [alert webhook reference](docs/ALERT_WEBHOOK.md).
+- **Home Assistant integration:** matches HA registry devices by MAC address to enrich names, areas, manufacturers, and models, and can fire `squirrelops_alert` events for automations
 
 Passive DHCP capture and automatic connection-baseline learning are not active in
 this runtime. APNs sender and relay code exists, but app token registration and an
@@ -69,13 +73,23 @@ The documented trust boundaries and intentional exceptions are in the
 | Dev Server | Static React-style page, `/api/health` JSON, and `/.env`, with Express-style headers | A synthetic `.env` file |
 | Home Assistant | Static login form, `/api/` authentication error, and `/auth/token` rejection; no running HA instance | A generated HA-style token recognized if submitted |
 | Mimic | Observed HTTP samples, banners, local TLS identity, and mDNS records grouped by source device; partial protocol emulation | Generated bait files on one supported HTTP service per host |
-| Studio Build Mac | Real SSH/SFTP and Samba shares in a disposable Linux guest with macOS-shaped content; synthetic model/MCP APIs run in the sensor | Install-specific guest login, API, and source tokens |
+| Studio Build Mac | Real SSH/SFTP and Samba shares in a disposable Linux guest with macOS-shaped content; synthetic model/MCP APIs run in the sensor | Install-specific guest login, API, and source tokens; an SSH or SMB login with the planted password is a credential trip |
 
 The classic decoys do not run nginx, Express, Next.js, or Home Assistant.
 Mimic SSH banners do not provide SSH negotiation or a shell. Studio's SSH and
 SMB services implement those real protocols. Its Time Machine share advertises
 Samba's Apple extensions; a complete Time Machine backup/restore is unverified.
 Studio's model and MCP APIs return synthetic data and do not run inference or execute tools.
+Studio's guest reports SSH and SMB logins to the host over a fixed log channel,
+so a login maps to one LAN peer; shell commands and file operations inside the
+guest are not observed.
+
+Each install draws its classic decoys' server versions, directory listings, and
+login page details, and the Studio Build Mac's project, repository, model, and
+tool names, from its encrypted deployment secret. A restart presents the same
+values, and the repository contains no install's drawn values. The guest image
+still fixes the Studio Build Mac's hostname, user name, organization, and share
+names.
 
 ### Credential Types
 
@@ -141,8 +155,7 @@ The Home workflow publishes macOS artifacts only. See
 ### macOS App and Sensor
 
 Requires macOS 14 (Sonoma) or later on Apple Silicon (ARM64). Intel Macs are
-not supported. This applies to both the macOS app and the native sensor,
-including the Home 2.1 release.
+not supported. This applies to both the macOS app and the native sensor.
 
 Use the signed and notarized `.pkg`. It contains the app, sensor, locked Python
 dependencies, and privileged helper. Do not use the old standalone
@@ -232,14 +245,15 @@ docs/         User guide and documentation
 
 ```
 sensor/src/squirrelops_home_sensor/
-├── alerts/        Alert dispatch, decoy/device handlers, incident grouping, retention
+├── alerts/        Alert dispatch (Slack, webhook, HA events), decoy/device handlers, incident grouping, retention
 ├── api/           FastAPI HTTP routers, WebSocket, dependency injection
 ├── config/        YAML config with env var overrides
-├── db/            SQLite schema (v12), migrations
+├── db/            SQLite schema (v13), migrations
 ├── decoys/        Classic, mimic, and isolated deep-decoy orchestration
 ├── devices/       Device manager, classifier, signatures, OUI
 ├── events/        Pub/sub event bus with audit log
 ├── fingerprint/   Multi-signal compositor and matcher
+├── integrations/  Home Assistant registry client
 ├── network/       Virtual IP allocation, port forwarding
 ├── privileged/    macOS helper RPC and constrained Linux sidecar RPC
 ├── scanner/       ARP/port/mDNS/SSDP scanning
@@ -250,7 +264,7 @@ sensor/src/squirrelops_home_sensor/
 
 ## Design Principles
 
-- **Detection:** scans and decoys help investigate activity without blocking real devices
+- **Detection:** scans and decoys help investigate activity without blocking real devices. The sensor never blocks a device or changes a router; the optional response contract hands that decision to your own automation.
 - **Bounded observation:** no passive inspection of unrelated traffic; Scout probes read service samples and decoys inspect requests sent to them
 - **Local storage:** SQLite inventory and evidence, YAML configuration, and encrypted configuration secrets
 - **Scoped listeners:** classic decoys use available host ports; fake hosts publish mDNS services on isolated virtual addresses
