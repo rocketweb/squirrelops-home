@@ -11,11 +11,14 @@ Local development setup for working on the sensor, macOS app, and privileged hel
 | macOS | 14 (Sonoma)+ | — |
 | Xcode | 16+ | Mac App Store or `xcode-select --install` |
 | Python | 3.11+ | `brew install python@3.11` |
-| uv | latest | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| uv | 0.10.2 (required) | `curl -LsSf https://astral.sh/uv/0.10.2/install.sh \| sh` |
 
 The supported macOS app and native sensor require Apple Silicon (ARM64).
-Intel Macs are not supported. This includes the Home 2.1 release; the source
+Intel Macs are not supported. This includes the Home 2.2 releases; the source
 builders' architecture options are not a broader hardware-support commitment.
+
+Sensor CI, release builds, and the macOS installer require uv 0.10.2 exactly.
+The Linux container build pins its own uv image.
 
 ---
 
@@ -295,7 +298,7 @@ sudo bash scripts/dev-install-helper.sh
 ### Test helper connectivity manually
 
 ```bash
-echo '{"jsonrpc":"2.0","method":"runARPScan","params":{"subnet":"192.168.1.0/24"},"id":1}' \
+echo '{"jsonrpc":"2.0","method":"runARPScan","params":{"subnet":"192.0.2.0/24"},"id":1}' \
   | sudo nc -U /var/run/squirrelops-helper.sock
 ```
 
@@ -311,7 +314,7 @@ The helper isn't running or isn't reachable. Check the socket and helper logs as
 ### Sensor warnings about virtual IP alias failures
 
 ```
-Failed to add IP alias 192.168.1.200 on en0
+Failed to add IP alias 192.0.2.200 on en0
 ```
 
 The helper isn't running or can't execute `ifconfig`. Reinstall and check logs.
@@ -367,8 +370,8 @@ running it: `build-pkg.sh` cleans `build/pkg`.
 The local release app bundle was built successfully with these options. That
 does not establish signed-installer or upgrade acceptance. Do not substitute a
 stale app from another directory or disable package checks. See the
-[2.1 publication readiness](testing/2026-10-01-publication-readiness.md) for current
-test evidence and remaining acceptance gates. Xcode license acceptance is a
+[2.1 publication readiness](testing/2026-10-01-publication-readiness.md) for the
+2.1 test evidence and acceptance gates. Xcode license acceptance is a
 separate operator action; these tests did not accept it.
 
 ### Studio Mini guest
@@ -445,7 +448,7 @@ disabled. `packages.lock` checks the complete installed inventory;
 `packages.world` preserves the original top-level package requests. There is
 no fallback to live package repositories. Missing unpublished archives stop
 the build; use `SQUIRRELOPS_GUEST_PACKAGE_ARCHIVE` for an explicit local archive
-subject to the same checks. The 2.1.1 candidate's lock uses the immutable
+subject to the same checks. The current lock, used from Home 2.1.1 through 2.2.1, uses the immutable
 [guest-inputs-20261003-v1 prerelease](https://github.com/rocketweb/squirrelops-home/releases/tag/guest-inputs-20261003-v1).
 That separate build-input publication includes both APK archives, a source
 companion, notices, an inventory, and a checksum manifest bound by its signed
@@ -462,7 +465,7 @@ into the macOS job, selects the package architecture, and validates the copied
 app resource before signing.
 
 The x86_64 guest build is build coverage, not Intel Mac release support.
-The supported Home 2.1 macOS package contains the ARM64 app, native runtime,
+The supported Home 2.2 macOS package contains the ARM64 app, native runtime,
 and guest. Perform macOS runtime and installed-package acceptance on Apple
 Silicon; Intel execution is not a release gate for this ARM64-only release.
 
@@ -502,7 +505,9 @@ login, runs the macOS persona commands, exercises SFTP read and write behavior,
 and uses a real SMB client to list shares and read, write, and delete a bounded
 file through Samba. It also verifies that a host-only canary is absent, the
 guest exposes no network interface beyond loopback, and both relayed protocols
-emit connection telemetry. The SMB client is a development-only dependency and
+emit connection telemetry. It also reads the guest's authentication log
+channel and checks that every accepted SSH and SMB login maps back to exactly
+one client connection. The SMB client is a development-only dependency and
 does not enter the sensor distribution.
 
 The same test checks SMB responses after a client write-side half-close,
@@ -555,11 +560,12 @@ the boundary without sleeping. The view must retain the remote-sensor path
 while local recovery is in progress.
 
 The source Linux Compose file deliberately has no guessed LAN. Set the directly
-connected private CIDR explicitly before using it:
+connected private CIDR explicitly before using it. Replace the documentation
+range below with your LAN:
 
 ```bash
 cd sensor
-SQUIRRELOPS_SUBNET=192.168.1.0/24 docker compose up
+SQUIRRELOPS_SUBNET=192.0.2.0/24 docker compose up
 ```
 
 ### Release workflow

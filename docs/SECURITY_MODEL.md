@@ -127,9 +127,11 @@ be learnable from it. Every attacker-visible value a classic decoy serves (its
 claimed server version, the names, dates and sizes in a directory listing, the
 hostname and version on a login page, an application's version and uptime) is
 compiled per decoy from the install's deployment secret with HKDF, drawing from
-version-frequency and naming corpora shipped as data. Two installs share no
-such value, two decoys on one install share none, and a restart reproduces the
-same presentation. Two tests enforce this in CI: one compiles the decoys under
+version-frequency and naming corpora shipped as data. Each value is drawn
+independently per install and per decoy, so reading the source tells an
+attacker the possible values but not which ones a given install presents. Any
+single value can coincide with another install's, as it would between real
+devices, and a restart reproduces the same presentation. Two tests enforce this in CI: one compiles the decoys under
 many seeds and fails if any observable is constant that the imitated software
 does not itself hold constant, and one scans the decoy modules for version,
 server, or date-shaped string literals. Draws stay inside their corpora; a
@@ -142,6 +144,16 @@ digests, the ticket and branch labels, and the password's word are drawn per
 install from the persona corpus. The hostname, username, organization, and
 share names are baked into the guest image and stay fixed until the guest is
 built per install.
+
+### Trusted scanners
+
+An operator can mark a device as a trusted scanner from its detail view, through
+the paired-client API. The mark is read at event time and matched against the
+most recently seen device holding a connection's source IP. That device's decoy
+connections are recorded and counted but do not create or update Decoy Trip
+alerts. Credential trips always alert. A host that takes over a trusted
+scanner's IP address is suppressed the same way, so mark only devices with
+stable addresses. The mark never changes a decoy's responses.
 
 SSDP and Scout probes may connect to self-signed HTTPS services. Certificate
 verification is intentionally disabled only for these credential-free
@@ -178,7 +190,7 @@ release gates. See the [PF safety development record](testing/2026-09-26-pf-safe
 
 ### Disposable guest
 
-The 2.1 Studio Build Mac runs real OpenSSH and Samba inside a disposable Linux
+The Studio Build Mac runs real OpenSSH and Samba inside a disposable Linux
 Virtualization.framework guest, with macOS-shaped files and command responses.
 The separately signed guest runtime is unprivileged. Its virtual machine has
 no network device, persistent disk, shared directory, clipboard, USB, camera,
@@ -268,7 +280,10 @@ a signing secret is configured, so a receiver can refuse unsigned or replayed
 events before it blocks anything. The webhook URL and signing secret are stored
 in the encrypted secret store and redacted from configuration responses. The
 Home Assistant variant sends only to a LAN-resolved address, the same rule as
-the device-enrichment calls.
+the device-enrichment calls. The Automation Webhook can post to any http or
+https URL the operator enters, on or off the LAN, and by default the event
+includes the source MAC. Plain http is accepted, so only the signature protects
+such an event in transit.
 
 TLS keys and configuration credentials are stored in the encrypted secret
 store. Runtime YAML contains non-secret configuration only. Legacy plaintext
@@ -286,8 +301,9 @@ The sensor redacts the URL in every configuration response, so the copy is
 written only when the operator enters the URL in Settings and is deleted when
 the field is cleared. The app uses it for the single alert the sensor cannot
 send, Sensor Disconnected, and posts through an ephemeral URLSession so neither
-the URL nor the message is cached on disk. APNs relay credentials are never
-held by the app.
+the URL nor the message is cached on disk. The app posts only to an https URL.
+Its enabled flag and minimum severity are kept in app preferences; only the URL
+is in Keychain. APNs relay credentials are never held by the app.
 
 Python components resolve operating-system tools through an absolute path
 allowlist, never the service `PATH`. An allow-listed path is accepted only if

@@ -15,7 +15,9 @@ Two delivery methods carry the contract:
   Home Assistant integration you have already configured for device enrichment.
 
 Both are configured in the app under Settings > Alert Methods, each with its own
-minimum severity. Both are off by default.
+minimum severity. Both are off by default. The app sets each method's minimum
+severity to High until you change it; a hand-edited configuration with no
+`min_severity` delivers every alert.
 
 ## When an event is sent
 
@@ -26,7 +28,7 @@ minimum severity. Both are off by default.
   do not produce an event. Re-notifications are rate limited to one per five
   minutes per alert.
 
-Delivery is best effort with exponential backoff per method. A failing endpoint
+Delivery is best effort. A failing method is paused with exponential backoff and
 never blocks other methods or the sensor itself.
 
 ## Event shape, `squirrelops.alert/1`
@@ -36,16 +38,16 @@ never blocks other methods or the sensor itself.
   "schema": "squirrelops.alert/1",
   "event": "alert.updated",
   "sent_at": "2026-10-19T03:00:04Z",
-  "sensor": {"id": "6b1f3c2e-...", "version": "2.1.3"},
+  "sensor": {"id": "6b1f3c2e-...", "version": "2.2.1"},
   "alert": {
     "id": 42,
     "type": "decoy.trip",
     "severity": "critical",
-    "title": "Write activity on Studio Build Mac from 192.168.1.77",
-    "summary": "ransomware intent, write activity; 9 connections across 2 ports",
+    "title": "Write activity on Studio Build Mac from 192.0.2.77",
+    "summary": "ransomware intent, write activity stage, 9 connections",
     "created_at": "2026-10-19T03:00:00.000000Z"
   },
-  "source": {"ip": "192.168.1.77", "mac": "AA:BB:CC:DD:EE:77", "device_id": 12},
+  "source": {"ip": "192.0.2.77", "mac": "00:00:5E:00:53:77", "device_id": 12},
   "decoy": {"id": 7, "name": "Studio Build Mac", "port": 445, "protocol": "tcp"},
   "campaign": {"intent": "ransomware", "stage": 4, "stage_label": "write activity"}
 }
@@ -57,12 +59,17 @@ Field notes:
   optional fields may appear under the same schema; ignore keys you do not know.
 - `alert.severity` is one of `low`, `medium`, `high`, `critical`.
 - `alert.type` values include `decoy.trip`, `decoy.credential_trip`,
-  `device.new`, `device.mac_changed`, `device.verification_needed`, and
-  `security.insight`. Automate blocks only on the types you mean to.
-- `source.mac` and `source.device_id` are present only when **Include Device
-  Identifiers** is on for that method. It is on by default for these two
-  methods because the MAC address is what a controller blocks on; turn it off if
-  the endpoint is outside your network.
+  `device.new`, `device.verification_needed`, `device.mac_changed`,
+  `security.arp_conflict`, `security.port_risk`, and
+  `security.vendor_advisory`. Automate blocks only on the types you mean to.
+- `source.mac` and `source.device_id` are present only when device identifiers
+  are included. The Automation Webhook has an **Include Device Identifiers**
+  toggle, on by default because the MAC address is what a controller blocks on;
+  turn it off if the endpoint is outside your network. Home Assistant Events
+  always includes them, since the event stays on your LAN.
+- For a Studio Build Mac login the runtime could not attribute to a LAN peer,
+  `source.ip` is the string `unknown` and `source.mac` is absent. Never pass it
+  to a block action.
 - `decoy` is `null` for alerts that did not come from a decoy. `campaign` is
   `null` unless the deep decoy supplied intent and stage. `stage_label` is
   `null` for a stage number this version does not name.
@@ -75,14 +82,17 @@ Field notes:
 ```
 POST <your endpoint>
 Content-Type: application/json
-User-Agent: squirrelops-home-sensor/2.1.3
+User-Agent: squirrelops-home-sensor/2.2.1
 X-SquirrelOps-Schema: squirrelops.alert/1
 X-SquirrelOps-Event: alert.updated
 X-SquirrelOps-Signature: t=1760000000,v1=<hex>
 ```
 
 The body is the event as compact JSON with sorted keys. Any 2xx response is
-success; anything else is a delivery failure and is retried with backoff.
+success. Anything else is a delivery failure, and the event is not retried.
+Instead the method pauses, starting at 30 seconds and doubling to at most 15
+minutes, and alerts raised during the pause are not sent to that method. Treat
+the app or the sensor API as the record of truth, not the endpoint.
 `http://` and `https://` endpoints are both accepted; a LAN endpoint over
 `http://` is fine when combined with a signing secret.
 

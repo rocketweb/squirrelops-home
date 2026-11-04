@@ -183,3 +183,34 @@ independent review, CI, and publication remain separate gates in the
 
 No decoy behavior, attacker-visible response, signing policy, release control,
 commit, push, deployment, tag, or publication changed during this audit.
+
+## Changed in Home 2.2.1
+
+Added 2026-11-03. The tables above are the dated 2026-10-02 audit and are left
+as recorded. These rows changed with Home 2.2.1:
+
+- **High-confidence decoy alerts.** Write activity or ransomware intent on the
+  Studio Build Mac is Critical. Devices the operator marks as trusted scanners
+  no longer raise or feed Decoy Trip alerts; credential trips still do.
+  [Handler](../../sensor/src/squirrelops_home_sensor/alerts/decoy_handler.py).
+- **Credential canaries and the Studio Build Mac.** The SSH/SMB relays still
+  carry opaque bytes, but the guest's own sshd and smbd report each login to
+  the host. An accepted login as the planted account is a Critical credential
+  trip, attributed to one LAN peer.
+  [Guest relay](../../sensor/src/squirrelops_home_sensor/decoys/deep/orchestrator.py).
+  Shell commands and individual file reads and writes are still not observed.
+- **Classic decoy presentation.** Server version strings, directory listings,
+  login page details, and application versions are drawn per install from the
+  deployment secret, inside version and naming corpora. [Profile](../../sensor/src/squirrelops_home_sensor/decoys/profile.py).
+- **Device alerts.** New-device, verification-needed, and MAC-change alerts are
+  produced, gated on trust except for MAC changes.
+  [Device handler](../../sensor/src/squirrelops_home_sensor/alerts/device_handler.py).
+  Vendor-advisory, learning-complete, review-reminder, and rejected-device
+  reappearance alerts still have no producer.
+- **Sensor Disconnected.** The app's alert is High when the sensor had been
+  reachable in this app session and Medium otherwise, and the app sends it to
+  the configured Slack webhook itself.
+  [Offline delivery](../../app/Sources/SquirrelOpsHome/Desktop/OfflineAlertDelivery.swift).
+- **External delivery.** The Automation Webhook and Home Assistant Events
+  methods deliver the `squirrelops.alert/1` event. See
+  [alert webhook](../ALERT_WEBHOOK.md).
