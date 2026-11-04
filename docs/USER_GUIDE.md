@@ -11,16 +11,17 @@ for unexpected activity, recognized credential use, and scan-derived security fi
 1. A lightweight **sensor** scans your network and builds a device inventory
 2. The sensor selects **classic HTTP decoys** from discovered ports: file-directory, dev-server, and Home Assistant-style presentations
 3. **Squirrel Scouts** probe real devices to build fake hosts with one service decoy per observed port, a shared virtual IP, and an editable hostname. Their HTTP samples and banners provide partial service emulation.
-4. Unexpected decoy activity raises a High alert and is retained as forensic evidence. Protocol-defined automatic printer discovery is logged without an intrusion alert. Operator tests and legitimate scanners can also trip a decoy.
-5. Scans refresh the device inventory and flag risky services and ambiguous ARP ownership. Passive DHCP collection and automatic connection-baseline learning are not active in this runtime.
+4. Unexpected decoy activity raises a High alert and is retained as forensic evidence. Write activity or ransomware intent on the Studio Build Mac raises a Critical alert. Protocol-defined automatic printer discovery is logged without an intrusion alert. Operator tests can also trip a decoy; activity from a device you mark as a trusted scanner is kept as evidence without an alert.
+5. Scans refresh the device inventory and flag risky services and ARP identity conflicts. New, unverified, and re-addressed devices raise device alerts. Passive DHCP collection and automatic connection-baseline learning are not active in this runtime.
 
 **What stays local:** Inventory, alerts, and decoy evidence use local SQLite.
 Configuration uses local YAML and an encrypted secret store; the app keeps
 pairing keys in macOS Keychain. Core operation requires no cloud service.
-Cloud AI, Slack, and manually configured APNs relay delivery are optional;
+Cloud AI, Slack, the Automation Webhook, Home Assistant Events, and manually
+configured APNs relay delivery are optional;
 update checks contact GitHub when requested.
 
-This guide describes the Home 2.1 feature set. Home, app, and sensor versions
+This guide describes the Home 2.2 feature set. Home, app, and sensor versions
 are independent. Use the attested release document from the selected
 [Home release](https://github.com/rocketweb/squirrelops-home/releases) for exact
 component versions, package verification, and installation. The
@@ -56,7 +57,7 @@ their dated evidence and test limits; they are not current publication status.
 - Download from [GitHub Releases](https://github.com/rocketweb/squirrelops-home/releases)
 
 Intel Macs are not supported. This applies to both the app and the native
-sensor, including Home 2.1. Linux x86_64 requirements above are separate from
+sensor. Linux x86_64 requirements above are separate from
 macOS support; Linux publication remains on hold.
 
 ---
@@ -366,8 +367,8 @@ Every device has a trust status:
 
 | Status | Meaning |
 |--------|---------|
-| **Approved** | Recorded as a recognized device; decoy and security findings can still generate alerts |
-| **Rejected** | Recorded as unauthorized for operator review; automatic reappearance alerts are not connected to this runtime |
+| **Approved** | Recorded as a recognized device. New-device and verification alerts stop for it; MAC changes, decoy activity, and security findings still alert |
+| **Rejected** | Recorded as unauthorized for operator review. New-device and verification alerts still fire for it; there is no separate reappearance alert |
 | **Unknown** | No explicit trust decision has been recorded; this differs from an unknown device classification |
 
 ### Device Detail View
@@ -381,7 +382,7 @@ Click any device to open its detail sheet, which shows:
   - **Approve Device** — Add to known devices list
   - **Reject Device** — Flag as unauthorized
   - **Reset to Unknown** — Remove approval or rejection
-  - **Request Verification** — Trigger a fingerprint re-check
+  - **Request Verification**: Record that you asked for re-verification. The next scan's fingerprint match decides the result
   - **Mark as Trusted Scanner**: Declare this device your own scanner (a media server, a monitoring box, your laptop running a port scan). Decoy connections from it are still recorded in the decoy's forensic log and still count toward its connection total, but they no longer raise or feed Decoy Trip alerts. Credential use from a trusted scanner is still a Critical alert. The flag is independent of trust status, takes effect on the next connection, and changes nothing about how the decoy answers that device. A **Trusted Scanner** badge appears in the header while it is set; the same button unmarks it.
 
 ### Editing a Device
@@ -445,12 +446,18 @@ sensor avoids duplicate classic decoy types and respects stopped rows; it
 can emulate a category that already exists on a real device. Mimics and the Studio Build Mac
 appear alongside classic listeners in the Decoys grid.
 
+Classic decoy server versions, directory listings, login page details, and
+application versions are drawn per install from the encrypted deployment
+secret, within realistic ranges. They stay the same across restarts and are
+drawn independently on each install.
+
 ### Studio Build Mac
 
-With the required macOS 2.1 runtime, guest artifacts, profile, and helper,
-SquirrelOps can deploy one deep decoy named `studio-mini.local`. Its Linux
-guest presents macOS-shaped files and commands for a synthetic FieldKit iOS
-build environment. Detailed OS fingerprinting can reveal the underlying Linux guest.
+With the macOS runtime, guest artifacts, profile, and helper shipped with this
+release, SquirrelOps can deploy one deep decoy named `studio-mini.local`. Its
+Linux guest presents macOS-shaped files and commands for a synthetic iOS build
+environment whose project, repository, deployment lane, model names, MCP tool
+names, and ticket IDs are drawn per install from the deployment secret. Detailed OS fingerprinting can reveal the underlying Linux guest.
 
 - OpenSSH provides the `buildbot` shell and SFTP access.
 - Samba provides writable `Builds`, `Engineering`, and `Time Machine Backups`
@@ -463,9 +470,11 @@ build environment. Detailed OS fingerprinting can reveal the underlying Linux gu
 The model endpoints do not run inference, and MCP tools return synthetic
 results without executing commands or contacting real infrastructure.
 Samba advertises Apple's Time Machine extensions, but a complete Time Machine
-backup and restore has not been verified. Opaque SSH/SMB relays record
-connections and relay outcomes; they do not detect login success, credential
-use, shell commands, or individual SMB reads and writes.
+backup and restore has not been verified. The SSH/SMB relays carry opaque
+bytes and record connections and relay outcomes. The guest's own sshd and smbd
+report every login to the host, so a login with the planted password is a
+Critical Credential Trip. Shell commands and individual SMB reads and writes
+are not observed.
 
 SSH and SMB run inside a fresh memory-only guest. It has no network adapter,
 host folders, clipboard, disk image, Keychain access, camera, microphone, or
@@ -473,7 +482,8 @@ graphics device. The guest disappears when the deep decoy stops. Files a
 visitor writes stay in guest memory and are lost with that guest.
 
 The five service cards are grouped under one host and share one lifecycle
-control. The hostname and persona are release-managed so the surfaces cannot
+control. The hostname, user name, organization, and share names are fixed by
+the release, and the project story is drawn per install, so the surfaces cannot
 drift apart. If the signed runtime, architecture-matched guest, packet-filter
 isolation, virtual address, or Bonjour records cannot be established, the host
 is shown as **Degraded** and its public ports remain closed.
@@ -486,8 +496,9 @@ deployment.
 
 ### Safely test the Studio Build Mac
 
-If the Studio Build Mac has no service cards, a **Studio Build Mac** notice at the top of
-Decoys shows startup progress or an actionable diagnostic reason. Normal stopped
+While the Studio Build Mac is starting, Degraded, or unavailable, a **Studio
+Build Mac** notice at the top of Decoys shows progress or the reason, including
+the claimant's MAC after an evacuation. Normal stopped
 and disabled states stay quiet. Pull down on the list or press **Command-R** to
 reload that evidence; refreshing does not bypass startup checks or restart the guest. An enabled
 host whose startup failed is retried on a later network scan, no more often
@@ -496,7 +507,7 @@ sensor startup log says so: "Studio Mini deep decoy is stopped by the operator;
 enable it from the Decoys tab to publish it". A stopped host stays listed on
 Decoys with its host toggle off; turn the toggle on to publish it again, since
 the Decoys tab is the only place the Studio Build Mac is enabled. A startup failure is
-logged as a warning that carries the reason shown on the Degraded badge.
+logged as a warning that carries the reason shown in that notice.
 
 A Restart that stops the host but fails to bring it back saves the host as
 Degraded with the failure recorded, not as stopped. It is retried like any
@@ -540,7 +551,7 @@ The examples below use an environment variable so the target remains visible
 in every command:
 
 ```bash
-DECOY_IP=192.168.1.203
+DECOY_IP=192.0.2.203
 ```
 
 Replace the example address with the address shown in the app.
@@ -620,7 +631,14 @@ id
 hostname
 ls -la /Users/buildbot
 find /Users/buildbot -maxdepth 3 -type f | sort | head -50
-cat /Users/buildbot/Projects/fieldkit-ios/README.md
+ls /Users/buildbot/Projects
+```
+
+The project name is drawn per install. Note the name shown under `Projects`
+and use it in place of `PROJECT` in the steps below:
+
+```bash
+cat /Users/buildbot/Projects/PROJECT/README.md
 ```
 
 The guest has no network device or access to the sensor Mac's files. Everything
@@ -642,7 +660,7 @@ sftp -o UserKnownHostsFile="$TEST_KNOWN_HOSTS" \
 At the `sftp>` prompt:
 
 ```text
-get /Users/buildbot/Projects/fieldkit-ios/README.md /tmp/fieldkit-readme.md
+get /Users/buildbot/Projects/PROJECT/README.md /tmp/studio-readme.md
 put /tmp/squirrelops-acceptance.txt /Users/buildbot/Builds/squirrelops-acceptance.txt
 get /Users/buildbot/Builds/squirrelops-acceptance.txt /tmp/squirrelops-roundtrip.txt
 rm /Users/buildbot/Builds/squirrelops-acceptance.txt
@@ -669,8 +687,8 @@ At the `smb: \\>` prompt:
 
 ```text
 ls
-cd fieldkit-ios
-get README.md /tmp/fieldkit-smb-readme.md
+cd PROJECT
+get README.md /tmp/studio-smb-readme.md
 put /tmp/squirrelops-acceptance.txt squirrelops-acceptance.txt
 get squirrelops-acceptance.txt /tmp/squirrelops-smb-roundtrip.txt
 del squirrelops-acceptance.txt
@@ -693,7 +711,18 @@ curl --max-time 5 --fail-with-body \
 
 curl --max-time 5 --fail-with-body \
   -H 'Content-Type: application/json' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_secrets","arguments":{"query":"OPENAI_API_KEY"}}}' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  "http://$DECOY_IP:8765/mcp" | python3 -m json.tool
+```
+
+Tool names are drawn per install. Find the tool described as "Search indexed
+project configuration for a key name", set `TOOL` to its name, and call it:
+
+```bash
+TOOL=name_from_tools_list
+curl --max-time 5 --fail-with-body \
+  -H 'Content-Type: application/json' \
+  --data '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"'"$TOOL"'","arguments":{"query":"OPENAI_API_KEY"}}}' \
   "http://$DECOY_IP:8765/mcp" | python3 -m json.tool
 ```
 
@@ -723,10 +752,13 @@ Expected results:
 4. Opening the alert shows first and last seen times plus the 50 most recent
    connection records. Every connection remains in the per-decoy forensic log,
    even when the active alert is folded.
-5. Touching two or more decoy services promotes the alert to Port Scan
-   Detected.
+5. Touching two or more decoy services sets the alert's badge to Port Scan
+   Detected. The title names what was seen: Credential hunting, AI agent
+   probing, or Write activity. Write activity is Critical.
 6. Submitting the synthetic API key produces a separate Critical Credential
-   Trip and increments the credential trip counter.
+   Trip and increments the credential trip counter. The authenticated SSH and
+   SMB logins in steps 2 and 4 each produce a Critical Credential Trip naming
+   `buildbot`, the method, and the source.
 7. **Clear** acknowledges the current active alert. The next connection then
    creates a new alert. **History** shows previously acknowledged alerts.
 
@@ -739,7 +771,8 @@ password produces a Critical Credential Trip naming the account, the method
 decoy activity. The relay chooses each connection's guest-side source port, so
 the attribution is exact rather than inferred from timing; in the rare case the
 runtime cannot resolve it, the alert still fires with the source shown as
-unknown and `attribution: unresolved`.
+unknown and `attribution: unresolved` recorded in the alert's detail (visible
+in a JSON export).
 
 New SSH/SMB records in **Recent Connections** also show whether the guest was
 connected, was at capacity, failed to connect, or timed out. A rejected attempt
@@ -766,19 +799,20 @@ an alert pipeline failure.
 | Status | Meaning |
 |--------|---------|
 | **Active** | Running and listening for connections |
-| **Degraded** | The intended decoy is not fully operational. For Studio Build Mac this also covers a missing or rejected guest/runtime or incomplete Bonjour publication. |
-| **Stopped** | Disabled by user |
+| **Degraded** | The intended decoy is not fully operational. For Studio Build Mac this also covers a missing or rejected guest/runtime, incomplete Bonjour publication, a failed Restart, or an address evacuation; it is retried on later scans. |
+| **Stopped** | Turned off by the operator, or a fake host whose restart failed (its failure count rises). The Studio Build Mac is stopped only by the operator. |
 
-For degraded decoys, a **Restart** button appears on the card. Restart, stop,
-remove, and hostname changes apply to the whole fake host rather than one
-service row.
+For degraded classic listeners, a **Restart** button appears on the card. Fake
+hosts restart from Squirrel Scouts, and the Studio Build Mac uses its host
+toggle. Restart, stop, remove, and hostname changes apply to the whole fake host
+rather than one service row.
 
 ### Decoy Detail Sheet
 
 Click a decoy card to open its detail sheet:
 
 - **Decoy Info** — Type, address, connection count, credential trip count, failure count, creation date
-- **Configuration:** View and edit ordinary decoy-specific configuration values. The Studio Build Mac persona is release-managed and read-only.
+- **Configuration:** View and edit ordinary decoy-specific configuration values. The Studio Build Mac persona is read-only.
 - **Connection Log** — Chronological list of all connections to this decoy, showing source IP, request path, timestamp, and whether a credential was used (highlighted with a "CREDENTIAL" label)
 
 ---
@@ -804,7 +838,9 @@ Squirrel Scouts is an advanced reconnaissance and deception subsystem that makes
 The result is a set of grouped fake hosts whose advertised service samples
 resemble systems already present on the network. Supported HTTP bait routes
 record decoy trips when requested. Critical alerts require recognized credential
-submission in a supported request, not merely downloading a bait file.
+submission in a supported request, not merely downloading a bait file. Write
+activity on the Studio Build Mac and its accepted guest logins with the planted
+password are also Critical.
 
 On macOS, proxy-ARP virtual IPs share the Mac's physical-interface MAC address.
 The macOS helper selects a physical Ethernet or Wi-Fi LAN. If a VPN owns the
@@ -850,9 +886,9 @@ Shows all deployed fake hosts in a card grid. Each card displays:
 - **Category** — Device type being mimicked (Smart Home, Camera, NAS, Media, Printer, Router, Dev Server)
 - **Hostname** — The persistent, editable hostname used by all services in the group
 
-Each card has host-level **Remove** and, for stopped hosts, **Restart** buttons.
-A scheduled restart can fail partway, for example when the privileged helper
-times out while loading forwarding rules. The host is then saved as stopped
+Each card has host-level **Remove** and, for stopped or degraded hosts,
+**Restart** buttons. A scheduled restart can fail partway, for example when a
+listener check fails. The host is then saved as stopped
 with the failure recorded on its rows, every connected dashboard is told at
 once, and the next scout cycle may deploy a replacement host for the same
 device. Restart it here before that cycle to keep its identity.
@@ -933,7 +969,7 @@ Every individual connection is still retained in the decoy's forensic log.
 | Type | Severity | Meaning |
 |------|----------|---------|
 | Credential Trip | Critical | A supported HTTP decoy recognized submitted planted credentials, or the Studio Build Mac guest's `sshd`/`smbd` accepted a login with the planted password |
-| Decoy Trip | High, Critical on write activity | Unexpected decoy activity. On the Studio Build Mac the title names what the campaign has shown so far (credential hunting, AI agent probing, write activity), the alert escalates to Critical when write activity is reached and never steps back down, and Slack and push messages carry the intent and stage. Automatic printer discovery and activity from devices you marked as trusted scanners are retained as evidence without an alert |
+| Decoy Trip | High, Critical on write activity | Unexpected decoy activity. On the Studio Build Mac the title names what the campaign has shown so far (credential hunting, AI agent probing, write activity), the alert escalates to Critical when write activity or ransomware intent is reached and never steps back down, and Slack and push messages carry the intent and stage. Automatic printer discovery and activity from devices you marked as trusted scanners are retained as evidence without an alert |
 | Security Insight | Medium–High | A risky port or service is open on one or more devices (e.g., SSH, VNC, unencrypted admin interfaces) |
 | ARP Identity Conflict | High | The scan cannot establish a unique IP/MAC owner: one IP answered from several MAC addresses, or one MAC answered at several IPs. Those addresses stay out of inventory and port scanning until a clean scan resolves the alert. Opening the alert lists each conflict with its addresses and the known device behind each one, along with common benign causes (Wi-Fi extenders or mesh nodes answering for their clients, DHCP reassignment, private Wi-Fi address rotation) and spoofing |
 | New Device | Medium | A device not already approved joined the LAN; one alert per device |
@@ -941,8 +977,13 @@ Every individual connection is still retained in the decoy's forensic log.
 | MAC Address Changed | High | A known device answered from a different hardware address; raised regardless of trust, folded per device, and reactivated on every further change |
 | Sensor Disconnected | Medium or High | The Mac app has not reached the sensor for five minutes. High when the sensor was connected earlier in this app session, Medium when it never was. Raised by the app, not the sensor, and delivered by the app to Notification Center and to your Slack webhook (see Alert Methods) |
 
+When a folded alert's title or severity changes, it is delivered again as a
+new message to every alert method, macOS notifications included, at most once
+per five minutes per alert. Connection-count changes alone are not redelivered.
+
 Device alerts are gated on trust: approving a device in its detail view stops
-new-device and verification alerts for it. MAC changes still alert for approved
+new-device and verification alerts for it. Approving does not dismiss an alert
+already raised; dismiss it in Alerts. MAC changes still alert for approved
 devices, because an approved identity moving to new hardware is the signal that
 matters. Device alerts are not grouped into incidents. Behavioral anomaly,
 learning-complete, vendor-advisory, and review-reminder types are present
@@ -967,7 +1008,7 @@ Click any grouped alert to open its **Alert Detail View**, which shows the full 
 The toolbar provides multiple filtering dimensions:
 
 - **Severity menu**: All, Critical, High, Medium, Low
-- **Type menu**: All Types, Decoy Trip (including credential trips), New Device, MAC Changed, Security, System
+- **Type menu**: All Types, Decoy Trip (including credential trips), New Device (including verification alerts), MAC Changed, Security (port risks and ARP identity conflicts), System (Sensor Disconnected)
 - **Dates**: Click the calendar button to filter by date range (From/To)
 - **Search**: Free-text search across alert titles, source IPs, and alert types
 - **Actions → Show History**: Show or hide previously dismissed alerts
@@ -976,14 +1017,26 @@ All filters combine (AND logic). The menus display the selected filters; a note 
 
 ### Alert Detail View
 
-Click any alert in the feed to open a detail sheet showing the full context of the alert:
+Click any alert in the feed to open a detail sheet showing the full context of
+the alert. The header shows the severity indicator, title, alert type badge
+(e.g., "Decoy Activity", "Port Scan Detected", "Credential Accessed"), severity
+label, and timestamp. Below it, each alert type shows the cards that match what
+it records, and a card with nothing recorded is hidden:
 
-- **Header** — Severity indicator, title, alert type badge (e.g., "Decoy Activity", "Port Scan Detected", "Credential Accessed"), severity label, and timestamp
-- **Source** — IP address, MAC address (if the device was identified), hostname, vendor, and device ID
-- **Intrusion Details** — Folded connection count, per-service totals, latest destination port, protocol, first and last seen times, request path (for HTTP-based detections), and detection method
-- **Recent Connections** — Up to 50 timestamped service and port entries represented by a folded decoy alert
-- **Credential Use** (only for credential trip alerts): Which planted value was recognized in the submitted request and the request path
-- **Decoy** — Which decoy was tripped, with name and ID
+- **Decoy alerts:** **Source** (IP address, MAC address if the device was
+  identified, hostname, vendor, device ID), **Intrusion Details** (folded
+  connection count, per-service totals, latest destination port, protocol,
+  first and last seen times, request path for HTTP detections, detection
+  method), **Recent Connections** (up to 50 timestamped service and port
+  entries), **Credential Access** for credential trips (the recognized
+  credential, username, auth method, and request path), and **Decoy** (name
+  and ID)
+- **New device and verification alerts:** **Device** and **Details**
+- **MAC address changes:** **Device** and **MAC Address Change**
+- **ARP identity conflicts:** **Conflicts**, listing each address pair and the
+  known device behind each address
+- **Port risk alerts:** **Affected Devices**
+- Every type ends with **What To Do** guidance
 
 Click **Done** to close the detail sheet.
 
@@ -1068,9 +1121,10 @@ reports, your automation acts. The full contract, request format, signature
 recipe, and a Home Assistant example are in [ALERT_WEBHOOK.md](ALERT_WEBHOOK.md).
 
 **Home Assistant Events:** Fires the same event as a native Home Assistant event
-named `squirrelops_alert`, through the Home Assistant integration configured
-further down this page. Nothing is sent until that integration is enabled with a
-URL and token.
+named `squirrelops_alert`, through the Home Assistant integration (see
+[Home Assistant](#home-assistant) below). Nothing is sent until that integration
+is enabled with a URL and token. This method always includes the source MAC and
+device id, since the event stays on your LAN.
 
 **Where deliveries come from.** The sensor sends every alert it raises (decoy
 trips, credential trips, security insights, device alerts) through the methods
@@ -1101,8 +1155,8 @@ Controls how strictly devices must match their composite fingerprint to be auto-
 
 When a returning device's fingerprint confidence falls between 0.50 and the
 threshold, the device manager publishes a verification-needed event instead of
-auto-approval. This runtime does not convert that event into an alert-feed row;
-review device identity and trust in Devices.
+auto-approval. That event raises a Device Needs Verification alert unless the
+device is approved; review device identity and trust in Devices.
 
 ### Credential Decoys
 
@@ -1126,8 +1180,22 @@ Critical alert.
 DNS canaries are not available in this release. The sensor does not plant or
 monitor DNS canary hostnames. Legacy `decoys.dns_canaries` settings are ignored
 at startup with a warning, and runtime attempts to configure them are rejected.
-Credential alerts fire when a planted file or credential endpoint on a decoy is
-accessed.
+
+### Home Assistant
+
+Connect a local Home Assistant instance for richer device data (names,
+manufacturers, models, and areas from its device registry):
+
+- **Enable Home Assistant**: turns the integration on.
+- **URL**: your Home Assistant address, for example
+  `http://homeassistant.local:8123`. The sensor connects only after the address
+  resolves to a LAN address.
+- **Long-Lived Access Token**: created in your Home Assistant profile. It is
+  stored in the sensor's encrypted secret store and redacted from configuration
+  responses.
+
+The same connection carries **Home Assistant Events** (see Alert Methods) when
+that method is turned on.
 
 ### Optional AI Device Classification and Decoy Naming
 
@@ -1300,6 +1368,14 @@ If it is not running, restart it:
 sudo launchctl kickstart -k system/com.squirrelops.sensor
 ```
 
+If `launchctl print` shows the service disabled, clear the override first:
+```bash
+sudo launchctl enable system/com.squirrelops.sensor
+```
+
+Upgrades clear this override automatically and record launchctl's own error in
+the install log.
+
 If the service is running immediately after an upgrade, allow restoration to
 finish. Standard and Full profiles can take several minutes because every
 persisted virtual IP is quarantined, checked for a physical-network conflict,
@@ -1323,7 +1399,8 @@ been stopped.
 **Symptoms:** Sensor is connected but no alerts show up.
 
 **Possible causes:**
-- **Unsupported alert expectation:** Automatic behavioral, new-device, and rejected-device-reappearance alerts are not connected to the runtime. Check Devices for inventory changes.
+- **Filtered by design:** Device alerts do not fire for approved devices, and decoy activity from trusted scanners is kept as evidence without an alert. Behavioral and rejected-device-reappearance alerts are not connected to the runtime.
+- **Minimum severity:** Check each alert method's minimum severity in Settings > Alert Methods. The app sets new methods to High.
 - **Decoys haven't been deployed** — Check the Decoys tab. If no decoys are deployed, the sensor may not have found suitable ports or addresses.
 
 ### Decoy Shows "Degraded"
@@ -1342,6 +1419,11 @@ not establish that a decoy crashed three times.
    startup failures have their separate scan-driven retry. Classic periodic
    crash checks and the standalone 30-minute recovery method are not scheduled
    by this runtime.
+4. For a fake host, the helper log names the failing listener endpoint and
+   condition (no listening socket, a foreign owner, a wrong bind, or more than
+   one process). A port-forward load that times out is treated as unknown and
+   reconciled; a critical log entry follows only after six reconcile attempts
+   fail.
 
 ### Sensor Shows 0 Devices (macOS)
 
@@ -1426,7 +1508,7 @@ For each IP that you have independently confirmed is a stale SquirrelOps
 virtual IP, run the following with its exact recorded interface:
 
 ```bash
-IP=192.168.1.200
+IP=192.0.2.200
 INTERFACE=en0
 sudo /usr/sbin/arp -d "$IP" pub ifscope "$INTERFACE"
 sudo /sbin/ifconfig lo0 inet "$IP" -alias
@@ -1445,7 +1527,7 @@ sudo /sbin/pfctl -a com.apple/squirrelops -sn
 
 The two PF queries should print no rules, the stale `/32` alias should be gone
 from `lo0`, and no stale SquirrelOps entry should be marked `published`. Then
-run the 2.0 package again.
+run the current package again.
 
 ### Uninstalling
 
@@ -1483,7 +1565,7 @@ After pairing, app management traffic uses mutual TLS over your local network.
 | **Cloud AI Classification and Decoy Naming** | Classification: OUI prefix, sanitized DNS and mDNS names, open port numbers, detected services, mDNS service types, and available UPnP metadata. DHCP option codes are supported if supplied, but are not collected by the current scanner. Naming: a bounded, sanitized hostname sample. No fingerprint hashes, connection destinations, device IPs, full MAC addresses, packet contents, alerts, or credentials. | Your selected cloud or custom AI provider, using your own API key | Choose **None** or switch to Lite |
 | **Slack Webhooks** | Alert severity, type, summary, timestamp. Device identifiers only if you enable "Include Device Identifiers." | Your Slack workspace | Toggle off in Settings > Alert Methods |
 | **Automation Webhook** | The `squirrelops.alert/1` event: alert id, type, severity, title, summary, timestamps, source IP, decoy name and port, campaign intent and stage, sensor id and version. Source MAC and device id unless you turn off "Include Device Identifiers" (on by default for this method). | The endpoint URL you configured | Toggle off in Settings > Alert Methods |
-| **Home Assistant Events** | The same `squirrelops.alert/1` event | Your Home Assistant instance, LAN addresses only | Toggle off in Settings > Alert Methods |
+| **Home Assistant Events** | The same `squirrelops.alert/1` event, always including source MAC and device id (this method has no toggle) | Your Home Assistant instance, LAN addresses only | Toggle off in Settings > Alert Methods |
 | **Update Checks** | Standard request metadata, such as your public IP address and HTTP headers | GitHub Releases API | Don't click "Check for Updates" |
 
 With LM Studio or Ollama on the local network, classification and naming data
@@ -1497,7 +1579,7 @@ also requires each peer to prove possession of its corresponding private key.
 
 ### What the Sensor Does NOT Do
 
-- **No passive packet inspection:** The sensor does not capture unrelated devices' traffic. Scout probes read bounded service samples; decoys inspect HTTP requests sent to them. Studio Build Mac SSH/SMB relays observe connection metadata without parsing those protocols.
+- **No passive packet inspection:** The sensor does not capture unrelated devices' traffic. Scout probes read bounded service samples; decoys inspect HTTP requests sent to them. Studio Build Mac SSH/SMB relays observe connection metadata without parsing those protocols, and the runtime reads the guest daemons' login log lines.
 - **Decoy forwarding:** Packet-filter rules publish and isolate owned virtual
   decoy addresses. The product does not implement a general device-blocking
   policy. Reserve its address pool and investigate reported IP conflicts.
@@ -1529,12 +1611,16 @@ On macOS, the sensor uses pfctl packet filter rules (loaded into a dedicated `co
 - Only affect traffic destined for virtual IPs (never your real devices)
 - Are removed during orderly sensor shutdown when cleanup succeeds; failed alias removal retains isolation rules for safety
 - Do not modify the system's `pf.conf` or interfere with existing firewall rules
+- Are loaded under a name the helper remembers. A load that times out is treated
+  as unknown and reconciled against the load the helper reports as applied
 
 ### Credential Safety
 
 The `planted_credentials` table contains generated deception bait. Separately,
-operator-supplied Home Assistant tokens, AI keys, Slack webhook URLs, and APNs
-delivery secrets are stored in the encrypted secret store and redacted from
+operator-supplied Home Assistant tokens, AI keys, and every alert-method field
+other than `enabled`, `min_severity`, `include_device_info`, and `relay_url`
+(including Slack and Automation Webhook URLs, the signing secret, and APNs
+delivery secrets) are stored in the encrypted secret store and redacted from
 configuration responses. The Mac app additionally keeps the Slack webhook URL
 in its own Keychain entry so it can report a sensor outage to Slack; that copy
 is written only when you enter the URL in Settings and is removed when you
