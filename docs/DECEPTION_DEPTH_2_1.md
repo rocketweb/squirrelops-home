@@ -1,5 +1,7 @@
 # Deception Depth 2.1
 
+Written for Home 2.1. Changes in Home 2.2 are noted inline.
+
 ## Product outcome
 
 SquirrelOps Home 2.1 adds one coherent synthetic Mac environment whose SSH,
@@ -9,7 +11,10 @@ the same recent work. The flagship identity is a forgotten build Mac named
 
 The deep decoy is not a collection of independent banners. Real OpenSSH and
 Samba processes run inside a disposable Linux guest. The sensor and the host
-runtime only relay opaque bytes and record bounded connection metadata. The
+runtime only relay opaque bytes and record bounded connection metadata. Since
+Home 2.2 the guest's own sshd and smbd also report each login to the host over a
+fixed log channel, so a login with the planted password is a Critical
+credential trip attributed to one LAN peer. The
 guest has no network device, host mount, shared clipboard, Keychain access,
 or path to the operator's files.
 
@@ -66,7 +71,7 @@ visitor-created files remain inside the synthetic environment.
 | Web | Internal build status, artifact index, and deployment notes |
 | OpenAI-style API | Synthetic `/v1/models` and `/v1/chat/completions` responses; no inference |
 | Ollama-style API | Synthetic `/api/tags`, `/api/show`, and `/api/chat` responses; no inference |
-| MCP | Synthetic results for `list_projects`, `read_runbook`, `get_deployment`, and `search_secrets`; no real tool execution |
+| MCP | Synthetic project, runbook, deployment, and secret-search tools whose names are drawn per install; no real tool execution |
 | Agent files | Synthetic `.codex`, `.claude`, `.cursor`, tool logs, and runbooks |
 
 The Time Machine share advertises Samba's Apple extensions. A complete macOS
@@ -74,7 +79,10 @@ backup and restore has not been verified.
 
 Every hostname, username, project, build number, timestamp, credential,
 share, and deployment name must come from one persona document. The API and
-guest seed tests reject cross-surface drift.
+guest seed tests reject cross-surface drift. Since Home 2.2 the project,
+models, MCP tool names, ticket labels, and planted password are drawn from the
+install's deployment secret. The hostname, username, organization, and share
+names are fixed in the guest image.
 
 ## Adaptive narrative
 
